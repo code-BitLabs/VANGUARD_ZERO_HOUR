@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.pnpm-store/
+
+# Production & build outputs
+build/
+dist/
+dist-ssr/
+out/
+*.tsbuildinfo
+
+# Test & coverage outputs
+coverage/
+.vitest/
+test-results/
+playwright-report/
+
+# Environment variables & secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Google AI Studio & uploaded temporary diagnostic/attachment files
+.aistudio/
+public/assets/aistudio/
+**/assets/aistudio/
+artifacts/
+vanguard_diag_*.json
+vanguard_report_*.md
+vanguard_resources_*.csv
+vanguard_warnings_*.csv
+Paste_*
+
+# Temporary screenshots, captures & scratch files
+screenshots/
+tmp/
+temp/
+.tmp/
+.cache/
+.vite/
+*.tmp
+*.bak
+*.orig
+screenshot-*.png
+*.screenshot.png
+debug-*.png
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      window.addEventListener(
+        'error',
+        function (event) {
+          if (
+            event &&
+            typeof event.filename === 'string' &&
+            /^(chrome|moz|safari)-extension:\/\//.test(event.filename)
+          ) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        },
+        true
+      );
+    </script>
+    <title>VANGUARD: ZERO HOUR — Tactical 3D FPS</title>
+    <meta
+      name="description"
+      content="Single-player AAA-inspired 3D browser FPS action game featuring 10 weapons, threat-tiered squad AI, driveable vehicles, aerial combat, and a 5-mission campaign across 4 warzones."
+    />
+    <meta property="og:title" content="VANGUARD: ZERO HOUR — Tactical 3D FPS" />
+    <meta
+      property="og:description"
+      content="Single-player AAA-inspired 3D browser FPS action game featuring 10 weapons, threat-tiered squad AI, driveable vehicles, aerial combat, and a 5-mission campaign across 4 warzones."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-[#0B0E11] text-[#F3F4F6] antialiased selection:bg-[#F59E0B]/30 selection:text-white overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

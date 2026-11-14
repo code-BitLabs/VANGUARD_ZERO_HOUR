@@ -1,0 +1,6 @@
+{
+  "name": "VANGUARD: ZERO HOUR",
+  "description": "Single-player AAA-inspired 3D browser FPS action game featuring 10 weapons, threat-tiered squad AI, driveable vehicles, aerial combat, and a 5-mission campaign across 4 warzones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
