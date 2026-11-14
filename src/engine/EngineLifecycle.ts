@@ -25,6 +25,7 @@ export type LifecycleEvent =
   | { type: 'LOAD_FAILED'; message: string }
   | { type: 'PAUSE' }
   | { type: 'RESUME' }
+  | { type: 'RESTART_MISSION' }
   | { type: 'MISSION_ENDED' }
   | { type: 'UNLOAD' }
   | { type: 'UNLOADED' }
@@ -57,12 +58,14 @@ export const engineLifecycleMachine = setup({
             errorMessage: null,
           }),
         },
+        UNLOAD: 'unloading',
       },
     },
     preloading: {
       on: {
         ASSETS_LOADED: 'initializingWorld',
         CANCEL_LOAD: 'unloading',
+        UNLOAD: 'unloading',
         LOAD_FAILED: {
           target: 'error',
           actions: assign({
@@ -75,6 +78,7 @@ export const engineLifecycleMachine = setup({
       on: {
         WORLD_READY: 'playing',
         CANCEL_LOAD: 'unloading',
+        UNLOAD: 'unloading',
         LOAD_FAILED: {
           target: 'error',
           actions: assign({
@@ -86,23 +90,41 @@ export const engineLifecycleMachine = setup({
     playing: {
       on: {
         PAUSE: 'paused',
+        RESTART_MISSION: 'playing',
         MISSION_ENDED: 'debrief',
         UNLOAD: 'unloading',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
       },
     },
     paused: {
       on: {
         RESUME: 'playing',
+        RESTART_MISSION: 'playing',
+        MISSION_ENDED: 'debrief',
         UNLOAD: 'unloading',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
       },
     },
     debrief: {
       on: {
         UNLOAD: 'unloading',
         SELECT_MISSION: {
-          target: 'unloading',
+          target: 'preloading',
           actions: assign({
             missionId: ({ event }) => event.missionId,
+            errorMessage: null,
           }),
         },
       },
@@ -116,12 +138,21 @@ export const engineLifecycleMachine = setup({
             errorMessage: null,
           }),
         },
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
       },
     },
     error: {
       on: {
         RECOVER: 'unloading',
+        UNLOAD: 'unloading',
       },
     },
   },
 });
+

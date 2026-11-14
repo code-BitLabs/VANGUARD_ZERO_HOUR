@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
-import { Award, Play, RotateCcw, Settings, ShieldAlert, XCircle } from 'lucide-react';
+import { Award, BookOpen, Play, RotateCcw, Settings, ShieldAlert, XCircle } from 'lucide-react';
 import { ACHIEVEMENT_DEFINITIONS, getRankForXp } from '@/src/data/ranks';
 import { getMissionById } from '@/src/data/missions';
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
+import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { Button } from '@/src/ui/primitives/Button';
@@ -11,15 +12,35 @@ import { ProgressBar } from '@/src/ui/primitives/Controls';
 
 export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
   const progress = useGameSessionStore((s) => s.loadProgress);
+  const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
+  const mission = getMissionById(selectedMissionId);
+
   return (
     <div className="fixed inset-0 z-30 bg-[#0B0E11] flex items-center justify-center p-6">
-      <div className="max-w-lg w-full bg-[#141920] border border-zinc-800 p-7 rounded-sm shadow-2xl">
+      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-7 rounded-sm shadow-2xl">
         <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-amber-500">
-          Deploying Operation
+          Deploying Operation // {mission.codeName}
         </p>
         <h2 className="font-display text-2xl font-bold uppercase text-white mt-1">
-          Initializing Combat Sector
+          {mission.title}
         </h2>
+        <p className="text-xs text-zinc-300 mt-2 leading-relaxed">{mission.briefing}</p>
+
+        <div className="mt-4 bg-[#0B0E11] border border-zinc-800/90 p-3 rounded-sm space-y-1.5">
+          <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
+            Primary Tactical Objectives
+          </div>
+          {mission.objectives.map((obj) => (
+            <div key={obj.id} className="text-xs text-zinc-200 flex items-start justify-between gap-3">
+              <div>
+                <span className="font-medium text-white">{obj.title}</span>
+                <span className="block text-[11px] text-zinc-400">{obj.description}</span>
+              </div>
+              <span className="font-mono text-[10px] text-amber-400 shrink-0">0/{obj.targetCount}</span>
+            </div>
+          ))}
+        </div>
+
         <div className="mt-5">
           <div className="flex justify-between font-mono text-xs text-zinc-300 mb-2">
             <span>{progress.currentAsset}</span>
@@ -61,7 +82,14 @@ export function PauseOverlay({
             <Play className="w-4 h-4 fill-current" /> Resume Combat
           </Button>
           <Button className="w-full" variant="secondary" onClick={onRestartCheckpoint}>
-            <RotateCcw className="w-4 h-4" /> Restart Checkpoint
+            <RotateCcw className="w-4 h-4" /> Restart Mission
+          </Button>
+          <Button
+            className="w-full"
+            variant="outline"
+            onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
+          >
+            <BookOpen className="w-4 h-4" /> Controls Guide
           </Button>
           <Button
             className="w-full"

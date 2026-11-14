@@ -285,11 +285,21 @@ export class BallisticSolver {
       }
       this.telemetry.recordRaycastTiming(rayMs, blockerCategory);
 
-      // Test ray against player's 3-part stance-aware hitbox (only if closer than envDist!)
+      // Test ray against player's 3-part stance-aware hitbox (only if on foot and closer than envDist!)
       let playerHitDist = envDist;
       let hitZone: PlayerHitZone | null = null;
+      const hitOccupiedVehicleHull =
+        worldHit &&
+        player.alive &&
+        !params.isSuppressionFire &&
+        player.isOccupyingVehicle() &&
+        envBlockerId !== null &&
+        envBlockerId === player.getOccupiedVehicleColliderId();
 
-      if (player.alive && !params.isSuppressionFire) {
+      if (hitOccupiedVehicleHull) {
+        playerHitDist = envDist;
+        hitZone = 'upper_torso';
+      } else if (player.alive && !player.isOccupyingVehicle() && !params.isSuppressionFire) {
         const dHead = this.intersectRaySphere(
           params.muzzleOrigin,
           this._shotDir,
@@ -329,6 +339,7 @@ export class BallisticSolver {
 
       const finalDist = hitZone ? playerHitDist : envDist;
       this._endPoint.copy(params.muzzleOrigin).addScaledVector(this._shotDir, finalDist);
+
 
       if (p === 0 || p % 2 === 0) {
         this.vfx?.spawnTracer(

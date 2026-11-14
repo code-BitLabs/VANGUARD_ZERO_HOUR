@@ -689,4 +689,79 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     expect(snap2.enemies[0].invalidTransitionCount).toBe(1);
     expect(snap2.enemies[0].lastTransition).toBe('UNAWARE->ENGAGING');
   });
+
+  it('Test M: covers full enemy height with 3 prioritized hitbox zones (head, upper_torso, lower_body/legs) and tracks zone hits', async () => {
+    const { WeaponSystem } = await import('@/src/gameplay/WeaponSystem');
+    const localScene = new THREE.Scene();
+    const vmScene = new THREE.Scene();
+    const localRes = new ResourceManager();
+    const localVfx = new VFXPool(localScene, localRes);
+    const localProj = new ProjectileManager(localScene, localRes, localVfx, audio, telemetry);
+    const localEn = new EnemyManager(localScene, localRes, localVfx, audio, localProj, coordinator, ballistics, telemetry);
+    const weapons = new WeaponSystem(vmScene, audio, localVfx, localProj);
+
+    weapons.resetLoadout('sniper_rifle'); // 0 ADS spread so rays are deterministic
+    weapons.isAds = true;
+
+    localEn.spawnWave('heavy_armor', 1, { x: 0, y: 0, z: -12 }, 0.01, collision, 'mission:test');
+    const unit = localEn.getUnits()[0];
+    unit.position.set(0, 0, -12);
+
+    const targets = localEn.getHitscanTargets(() => {});
+    expect(targets).toHaveLength(1);
+    expect(targets[0].lowerBodyBoxMin).toBeDefined();
+    expect(targets[0].torsoBoxMin).toBeDefined();
+
+    const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 300);
+
+    // 1. Aim at legs (y = 0.38m at z = -12) -> hits lower_body
+    cam.position.set(0, 0.38, 0);
+    cam.lookAt(0, 0.38, -12);
+    cam.updateMatrixWorld(true);
+    const hp0 = unit.health;
+    (
+      weapons as unknown as {
+        fireShot: (
+          s: ReturnType<typeof weapons.getActiveState>,
+          p: PlayerController,
+          c: THREE.PerspectiveCamera,
+          w: CollisionWorld,
+          t: typeof targets,
+          cb: () => void
+        ) => void;
+      }
+    ).fireShot(weapons.getActiveState(), player, cam, collision, targets, () => {});
+    expect(unit.health).toBeLessThan(hp0);
+    expect(weapons.enemyZoneHits.lower_body).toBe(1);
+
+    // 2. Aim at chest (y = 1.10m at z = -12) -> hits upper_torso
+    const hp1 = unit.health;
+    cam.position.set(0, 1.1, 0);
+    cam.lookAt(0, 1.1, -12);
+    cam.updateMatrixWorld(true);
+    (
+      weapons as unknown as {
+        fireShot: (
+          s: ReturnType<typeof weapons.getActiveState>,
+          p: PlayerController,
+          c: THREE.PerspectiveCamera,
+          w: CollisionWorld,
+          t: typeof targets,
+          cb: () => void
+        ) => void;
+      }
+    ).fireShot(
+      weapons.getActiveState(),
+      player,
+      cam,
+      collision,
+      localEn.getHitscanTargets(() => {}),
+      () => {}
+    );
+    expect(unit.health).toBeLessThan(hp1);
+    expect(weapons.enemyZoneHits.upper_torso).toBe(1);
+
+    weapons.dispose();
+    localRes.disposeAll();
+  });
 });

@@ -18,10 +18,12 @@ export class MissionDirector {
   private objectives: Array<{
     id: string;
     title: string;
+    description: string;
     type: MissionConfig['objectives'][number]['type'];
     current: number;
     target: number;
     completed: boolean;
+    completedAtSec: number | null;
     markerPos: { x: number; y: number; z: number };
   }> = [];
 
@@ -34,6 +36,7 @@ export class MissionDirector {
   public subtitleText: string | null = null;
   private alertTimer = 0;
   private subtitleTimer = 0;
+  private extractionWarnCooldown = 0;
   private checkpointHealth = 100;
   private checkpointArmor = 100;
   private missionEnded = false;
@@ -42,17 +45,32 @@ export class MissionDirector {
     private readonly config: MissionConfig,
     private readonly difficulty: Difficulty
   ) {
-    this.objectives = config.objectives.map((o) => ({
+    this.reset();
+  }
+
+  reset(): void {
+    this.objectives = this.config.objectives.map((o) => ({
       id: o.id,
       title: o.title,
+      description: o.description,
       type: o.type,
       current: 0,
       target: o.targetCount,
       completed: false,
-      markerPos: o.markerPos,
+      completedAtSec: null,
+      markerPos: { ...o.markerPos },
     }));
-    this.showAlert(`${config.codeName}: ${config.title.toUpperCase()}`, 4.2);
-    this.showSubtitle(`COMMAND: ${config.subtitle}. All squads weapons free.`, 5.0);
+    this.score = 0;
+    this.kills = 0;
+    this.headshots = 0;
+    this.airKills = 0;
+    this.elapsedSec = 0;
+    this.extractionWarnCooldown = 0;
+    this.checkpointHealth = 100;
+    this.checkpointArmor = 100;
+    this.missionEnded = false;
+    this.showAlert(`${this.config.codeName}: ${this.config.title.toUpperCase()}`, 4.2);
+    this.showSubtitle(`COMMAND: ${this.config.subtitle}. All squads weapons free.`, 5.0);
   }
 
   showAlert(text: string, duration = 3.2): void {
@@ -79,9 +97,29 @@ export class MissionDirector {
     this.advanceObjectiveType('air_defense', 1);
   }
 
-  onDestructibleTargetDestroyed(points: number): void {
+  onDestructibleTargetDestroyed(points: number, targetKind?: string): void {
     this.score += points;
-    this.advanceObjectiveType('destroy_targets', 1);
+    if (targetKind === 'weapons_cache') {
+      this.advanceObjectiveType('plant_charge', 1);
+      return;
+    }
+    if (targetKind) {
+      this.advanceObjectiveType('destroy_targets', 1);
+      return;
+    }
+    // Fallback when called without explicit targetKind: advance destroy_targets if active, otherwise plant_charge
+    const hasActiveDestroy = this.objectives.some(
+      (o) => o.type === 'destroy_targets' && !o.completed
+    );
+    if (hasActiveDestroy) {
+      this.advanceObjectiveType('destroy_targets', 1);
+    } else {
+      this.advanceObjectiveType('plant_charge', 1);
+    }
+  }
+
+  onChargePlanted(points: number): void {
+    this.score += points;
     this.advanceObjectiveType('plant_charge', 1);
   }
 
@@ -90,13 +128,21 @@ export class MissionDirector {
     this.advanceObjectiveType('convoy_intercept', 1);
   }
 
-  onExtractionReached(): void {
-    // Require other objectives to be complete or nearly complete before final extraction
+  onExtractionReached(): boolean {
     const nonExtract = this.objectives.filter((o) => o.type !== 'vehicle_extract');
-    const allPreDone = nonExtract.every((o) => o.completed);
-    if (allPreDone) {
+    const incomplete = nonExtract.filter((o) => !o.completed);
+    if (incomplete.length === 0) {
       this.advanceObjectiveType('vehicle_extract', 1);
+      return true;
     }
+    if (this.extractionWarnCooldown <= 0) {
+      this.extractionWarnCooldown = 3.5;
+      this.showAlert(
+        `EXTRACTION LOCKED: COMPLETE ${incomplete.length} PRIMARY OBJECTIVE${incomplete.length > 1 ? 'S' : ''} FIRST (${incomplete[0].title.toUpperCase()})`,
+        3.2
+      );
+    }
+    return false;
   }
 
   private advanceObjectiveType(type: MissionConfig['objectives'][number]['type'], delta: number): void {
@@ -105,6 +151,7 @@ export class MissionDirector {
         o.current = Math.min(o.target, o.current + delta);
         if (o.current >= o.target) {
           o.completed = true;
+          o.completedAtSec = Number(this.elapsedSec.toFixed(2));
           this.score += 350;
           this.showAlert(`OBJECTIVE COMPLETE: ${o.title.toUpperCase()}`, 3.4);
         }
@@ -122,6 +169,9 @@ export class MissionDirector {
     if (this.subtitleTimer > 0) {
       this.subtitleTimer -= dt;
       if (this.subtitleTimer <= 0) this.subtitleText = null;
+    }
+    if (this.extractionWarnCooldown > 0) {
+      this.extractionWarnCooldown = Math.max(0, this.extractionWarnCooldown - dt);
     }
 
     if (playerHealth > 40) {
@@ -153,10 +203,21 @@ export class MissionDirector {
     return this.objectives.map((o) => ({
       id: o.id,
       title: o.title,
+      description: o.description,
+      type: o.type,
       current: o.current,
       target: o.target,
       completed: o.completed,
+      markerPos: { ...o.markerPos },
     }));
+  }
+
+  getObjectiveCompletionTimestamps(): Record<string, number | null> {
+    const out: Record<string, number | null> = {};
+    for (const o of this.objectives) {
+      out[o.id] = o.completedAtSec;
+    }
+    return out;
   }
 
   getObjectiveBlips(): MiniMapBlip[] {
@@ -169,6 +230,7 @@ export class MissionDirector {
         kind: 'objective',
       }));
   }
+
 
   buildSummary(victory: boolean): MissionRuntimeSummary {
     const diffBonus: Record<Difficulty, number> = {

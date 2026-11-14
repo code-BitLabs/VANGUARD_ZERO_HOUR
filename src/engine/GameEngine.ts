@@ -116,8 +116,8 @@ export class GameEngine {
     onConvoyDestroyed: () => {
       this.missionDirector?.onConvoyVehicleDestroyed(400);
     },
-    onDestructibleDestroyed: () => {
-      this.missionDirector?.onDestructibleTargetDestroyed(300);
+    onDestructibleDestroyed: (_id, kind) => {
+      this.missionDirector?.onDestructibleTargetDestroyed(300, kind);
     },
     onAlert: (msg, dur) => {
       this.missionDirector?.showAlert(msg, dur);
@@ -410,68 +410,7 @@ export class GameEngine {
       this.lifecycle.send({ type: 'ASSETS_LOADED' });
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
-      const profile = this.governor.getProfile();
-      this.lights = setupLightingRig(
-        this.renderer.scene,
-        mission.lighting,
-        profile.shadowMapSize,
-        profile.shadowDistance,
-        this.resourceManager
-      );
-
-      this.worldData = buildWorldMap(
-        mission.mapId,
-        mission.id,
-        this.renderer.scene,
-        this.assetManager,
-        this.resourceManager,
-        this.collisionWorld,
-        this.chunkManager,
-        this.destruction
-      );
-
-      this.workerBridge = new WorkerBridge(this.resourceManager, scope);
-      this.workerBridge.uploadCollisionGrid(this.collisionWorld.spatialHash);
-
-      this.player.spawn(
-        mission.playerSpawn.x,
-        mission.playerSpawn.y,
-        mission.playerSpawn.z,
-        mission.playerYaw
-      );
-      const startWeapon =
-        preferredWeapon ?? ((mission.recommendedLoadout[0] as WeaponId) || 'assault_rifle');
-      this.weapons.resetLoadout(startWeapon);
-
-      this.telemetry.reset();
-      this.telemetry.setMissionId(mission.id);
-      this.monitor.reset();
-      this.rulesEngine.reset();
-      this.explosives.reset();
-      this.coordinator.reset();
-      this.coordinator.setDifficulty(difficulty);
-      this.enemies.setDifficulty(difficulty);
-      this.vehicles.setDifficulty(difficulty);
-      this.airCombat.setDifficulty(difficulty);
-
-      for (const w of mission.initialWaves) {
-        this.enemies.spawnWave(w.archetype, w.count, w.spawnArea, w.radius, this.collisionWorld, scope);
-      }
-
-      for (const v of mission.vehicles) {
-        this.vehicles.spawnVehicle(v.type, v.position, v.yaw, v.hostile, v.isConvoyTarget, this.collisionWorld, scope);
-      }
-
-      for (const a of mission.airUnits) {
-        for (let k = 0; k < a.count; k++) {
-          const angle = (k / Math.max(1, a.count)) * Math.PI * 2 + Math.random() * 0.4;
-          this.airCombat.spawnUnit(a.type, a.altitude, a.orbitRadius, angle, scope);
-        }
-      }
-
-      this.missionDirector = new MissionDirector(mission, difficulty);
-      this.reinforcementTimer = 28;
-      this.dioramaLoaded = false;
+      this.populateMissionWorld(mission, difficulty, scope, preferredWeapon);
 
       this.lifecycle.send({ type: 'WORLD_READY' });
       this.audio.startMissionAmbienceAndMusic();
@@ -495,6 +434,80 @@ export class GameEngine {
       this.unloadToMenu();
       uiStore.getState().showToast('Deployment Failed', 'Returned safely to tactical HQ.', 'error');
     }
+  }
+
+  private populateMissionWorld(
+    mission: MissionConfig,
+    difficulty: Difficulty,
+    scope: ResourceScope,
+    preferredWeapon?: WeaponId
+  ): void {
+    const profile = this.governor.getProfile();
+    this.lights = setupLightingRig(
+      this.renderer.scene,
+      mission.lighting,
+      profile.shadowMapSize,
+      profile.shadowDistance,
+      this.resourceManager
+    );
+
+    this.worldData = buildWorldMap(
+      mission.mapId,
+      mission.id,
+      this.renderer.scene,
+      this.assetManager,
+      this.resourceManager,
+      this.collisionWorld,
+      this.chunkManager,
+      this.destruction
+    );
+
+    this.workerBridge = new WorkerBridge(this.resourceManager, scope);
+    this.workerBridge.uploadCollisionGrid(this.collisionWorld.spatialHash);
+
+    this.player.spawn(
+      mission.playerSpawn.x,
+      mission.playerSpawn.y,
+      mission.playerSpawn.z,
+      mission.playerYaw
+    );
+    const startWeapon =
+      preferredWeapon ?? ((mission.recommendedLoadout[0] as WeaponId) || 'assault_rifle');
+    this.weapons.resetLoadout(startWeapon);
+
+    this.telemetry.reset();
+    this.telemetry.setMissionId(mission.id);
+    this.monitor.reset();
+    this.rulesEngine.reset();
+    this.explosives.reset();
+    this.coordinator.reset();
+    this.coordinator.setDifficulty(difficulty);
+    this.enemies.setDifficulty(difficulty);
+    this.vehicles.setDifficulty(difficulty);
+    this.airCombat.setDifficulty(difficulty);
+
+    for (const w of mission.initialWaves) {
+      this.enemies.spawnWave(w.archetype, w.count, w.spawnArea, w.radius, this.collisionWorld, scope);
+    }
+
+    for (const v of mission.vehicles) {
+      this.vehicles.spawnVehicle(v.type, v.position, v.yaw, v.hostile, v.isConvoyTarget, this.collisionWorld, scope);
+    }
+
+    for (const a of mission.airUnits) {
+      for (let k = 0; k < a.count; k++) {
+        const angle = (k / Math.max(1, a.count)) * Math.PI * 2 + Math.random() * 0.4;
+        this.airCombat.spawnUnit(a.type, a.altitude, a.orbitRadius, angle, scope);
+      }
+    }
+
+    this.missionDirector = new MissionDirector(mission, difficulty);
+    this.reinforcementTimer = 28;
+    this.dioramaLoaded = false;
+  }
+
+  getLifecycleState(): string {
+    return String(this.lifecycle.getSnapshot().value);
   }
 
   cancelLoad(): void {
@@ -528,19 +541,36 @@ export class GameEngine {
   }
 
   restartCheckpoint(): void {
-    if (!this.activeMission || !this.missionDirector) return;
-    const stats = this.missionDirector.getCheckpointStats();
-    this.player.spawn(
-      this.activeMission.playerSpawn.x,
-      this.activeMission.playerSpawn.y,
-      this.activeMission.playerSpawn.z,
-      this.activeMission.playerYaw
-    );
-    this.player.health = stats.health;
-    this.player.armor = stats.armor;
-    this.weapons.resupplyAll();
-    this.missionDirector.showAlert('CHECKPOINT RESTORED — REDEPLOYING', 2.6);
-    this.resumeMission();
+    if (!this.activeMission) return;
+    const mission = this.activeMission;
+    const difficulty = missionSelectionStore.getState().difficulty;
+    const currentWeaponId = this.weapons.getActiveState().config.id;
+    const scope: ResourceScope = `mission:${mission.id}`;
+
+    this.audio.unlock();
+    this.audio.stopMissionLoops();
+    this.workerBridge?.dispose();
+    this.workerBridge = null;
+    this.clearWorldState();
+    this.telemetry.recordMissionRestart();
+
+    this.activeScope = scope;
+    this.activeMission = mission;
+    gameSessionStore.getState().resetSession();
+
+    this.populateMissionWorld(mission, difficulty, scope, currentWeaponId);
+    this.missionDirector?.showAlert('MISSION RESTARTED — FULL BASELINE RESTORED', 2.8);
+
+    this.lifecycle.send({ type: 'RESTART_MISSION' });
+    this.audio.startMissionAmbienceAndMusic();
+    this.suppressAutoPauseOnUnlock = false;
+    uiStore.getState().setDebugSimPaused(false);
+    this.loop.setPaused(false);
+    uiStore.getState().setScreen('playing');
+    if (!(uiStore.getState().combatDebugOpen && !uiStore.getState().combatDebugCollapsed)) {
+      this.requestPointerLock();
+    }
+    this.publishHudSnapshot();
   }
 
   abortToMenu(targetScreen: 'title' | 'campaign' = 'campaign'): void {
@@ -573,7 +603,12 @@ export class GameEngine {
 
   private unloadToMenu(targetScreen: 'title' | 'campaign' = 'title'): void {
     this.unloadCurrentWorld();
-    this.lifecycle.send({ type: 'UNLOAD' });
+    const curState = this.lifecycle.getSnapshot().value;
+    if (curState === 'error') {
+      this.lifecycle.send({ type: 'RECOVER' });
+    } else if (curState !== 'menu') {
+      this.lifecycle.send({ type: 'UNLOAD' });
+    }
     this.lifecycle.send({ type: 'UNLOADED' });
     this.loop.setPaused(false);
     this.setupMenuDiorama();
@@ -717,7 +752,7 @@ export class GameEngine {
           d.id,
           9999,
           this.handleExplosion,
-          () => this.missionDirector?.onDestructibleTargetDestroyed(300)
+          (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
         );
         return true;
       }
@@ -837,7 +872,7 @@ export class GameEngine {
           colliderId,
           dmg,
           this.handleExplosion,
-          () => this.missionDirector?.onDestructibleTargetDestroyed(300)
+          (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
         );
       },
       inVehicle
@@ -880,28 +915,45 @@ export class GameEngine {
 
         let bestDist = hitWall ? wallHit.distance : 110;
         let hitTarget: HitscanTarget | null = null;
+        let hitZone = 'upper_torso' as 'head' | 'upper_torso' | 'lower_body';
         for (const t of allHitscan) {
           if (!t.alive) continue;
-          const toX = t.position.x - origin.x;
-          const toY = t.position.y - origin.y;
-          const toZ = t.position.z - origin.z;
-          const proj = toX * dir.x + toY * dir.y + toZ * dir.z;
-          if (proj < 0 || proj > bestDist) continue;
-          const perpSq = toX * toX + toY * toY + toZ * toZ - proj * proj;
-          if (perpSq <= (t.hitRadius + 0.5) * (t.hitRadius + 0.5)) {
-            bestDist = proj;
-            hitTarget = t;
+          const checkZone = (
+            center: THREE.Vector3,
+            radius: number,
+            zone: 'head' | 'upper_torso' | 'lower_body'
+          ) => {
+            const toX = center.x - origin.x;
+            const toY = center.y - origin.y;
+            const toZ = center.z - origin.z;
+            const proj = toX * dir.x + toY * dir.y + toZ * dir.z;
+            if (proj < 0 || proj > bestDist) return;
+            const perpSq = toX * toX + toY * toY + toZ * toZ - proj * proj;
+            if (perpSq <= (radius + 0.45) * (radius + 0.45)) {
+              bestDist = proj;
+              hitTarget = t;
+              hitZone = zone;
+            }
+          };
+          checkZone(t.position, t.hitRadius, 'upper_torso');
+          if (t.lowerBodyPosition && t.lowerBodyRadius) {
+            checkZone(t.lowerBodyPosition, t.lowerBodyRadius, 'lower_body');
+          }
+          if (t.headPosition && t.headRadius) {
+            checkZone(t.headPosition, t.headRadius, 'head');
           }
         }
         if (hitTarget) {
-          hitTarget.onHit(26, false, hitTarget.position);
+          const isHead = hitZone === 'head';
+          const zoneMult = hitZone === 'head' ? 1.5 : hitZone === 'lower_body' ? 0.85 : 1.0;
+          (hitTarget as HitscanTarget).onHit(Math.round(26 * zoneMult), isHead, (hitTarget as HitscanTarget).position, hitZone);
         } else if (hitWall && wallHit.collider) {
           if (wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) {
             this.destruction.applyDamage(
               wallHit.collider.id,
               26,
               this.handleExplosion,
-              () => this.missionDirector?.onDestructibleTargetDestroyed(300)
+              (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
             );
             this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
           } else {
@@ -968,6 +1020,18 @@ export class GameEngine {
       );
       this.missionDirector.showSubtitle('INTEL: Enemy reinforcement squad spotted moving in.', 3.8);
     }
+
+    if (!this.player.alive) {
+      this.telemetry.recordPlayerDeath();
+    }
+    this.telemetry.setPlayerWeaponTelemetry(
+      this.weapons.shotsFired,
+      this.weapons.shotsHit,
+      this.weapons.enemyZoneHits
+    );
+    this.telemetry.setObjectiveCompletionTelemetry(
+      this.missionDirector.getObjectiveCompletionTimestamps()
+    );
 
     const missionTick = this.missionDirector.update(dt, this.player.health, this.player.armor);
     if (missionTick.finished) {

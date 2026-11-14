@@ -22,11 +22,30 @@ export type HitFeedback = z.infer<typeof HitFeedbackSchema>;
 export const ObjectiveStatusSchema = z.object({
   id: z.string(),
   title: z.string(),
+  description: z.string().optional(),
+  type: z
+    .enum([
+      'eliminate_wave',
+      'destroy_targets',
+      'convoy_intercept',
+      'air_defense',
+      'plant_charge',
+      'vehicle_extract',
+    ])
+    .optional(),
   current: z.number().int().nonnegative(),
   target: z.number().int().positive(),
   completed: z.boolean(),
+  markerPos: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      z: z.number(),
+    })
+    .optional(),
 });
 export type ObjectiveStatus = z.infer<typeof ObjectiveStatusSchema>;
+
 
 export const MiniMapBlipSchema = z.object({
   id: z.string(),

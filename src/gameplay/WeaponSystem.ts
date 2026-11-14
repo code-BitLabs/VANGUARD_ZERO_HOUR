@@ -26,6 +26,8 @@ export interface WeaponRuntimeState {
   fireModeIndex: number;
 }
 
+export type EnemyHitboxZone = 'head' | 'upper_torso' | 'lower_body';
+
 export interface HitscanTarget {
   id: string;
   kind: 'enemy' | 'air' | 'vehicle';
@@ -35,7 +37,18 @@ export interface HitscanTarget {
   hitRadius: number;
   headPosition?: THREE.Vector3;
   headRadius?: number;
-  onHit: (damage: number, isHeadshot: boolean, hitPoint: THREE.Vector3) => void;
+  lowerBodyPosition?: THREE.Vector3;
+  lowerBodyRadius?: number;
+  torsoBoxMin?: THREE.Vector3;
+  torsoBoxMax?: THREE.Vector3;
+  lowerBodyBoxMin?: THREE.Vector3;
+  lowerBodyBoxMax?: THREE.Vector3;
+  onHit: (
+    damage: number,
+    isHeadshot: boolean,
+    hitPoint: THREE.Vector3,
+    hitZone?: EnemyHitboxZone
+  ) => void;
 }
 
 export class WeaponSystem {
@@ -62,6 +75,12 @@ export class WeaponSystem {
   public isScoped = false;
   public shotsFired = 0;
   public shotsHit = 0;
+  public readonly enemyZoneHits: Record<EnemyHitboxZone, number> = {
+    head: 0,
+    upper_torso: 0,
+    lower_body: 0,
+  };
+
 
   private lockTarget: (HomingTarget & { label: string }) | null = null;
   private lockProgress = 0;
@@ -122,8 +141,12 @@ export class WeaponSystem {
     this.burstRemaining = 0;
     this.shotsFired = 0;
     this.shotsHit = 0;
+    this.enemyZoneHits.head = 0;
+    this.enemyZoneHits.upper_torso = 0;
+    this.enemyZoneHits.lower_body = 0;
     this.selectWeapon(preferredId, true);
   }
+
 
   resupplyAll(): void {
     for (const state of this.weapons.values()) {
@@ -482,8 +505,9 @@ export class WeaponSystem {
       let bestDist = worldHit ? this._worldHit.distance : cfg.rangeMeters;
       let hitTarget: HitscanTarget | null = null;
       let hitHead = false;
+      let hitZone: EnemyHitboxZone = 'upper_torso';
 
-      // Test ray against enemy/air/vehicle spheres (headshot sphere checked first!)
+      // Test ray against enemy 3-zone anatomical volumes (head -> upper_torso -> lower_body) & air/vehicle spheres
       for (let i = 0; i < hitscanTargets.length; i++) {
         const t = hitscanTargets[i];
         if (!t.alive) continue;
@@ -494,15 +518,48 @@ export class WeaponSystem {
             bestDist = dHead;
             hitTarget = t;
             hitHead = true;
+            hitZone = 'head';
             continue;
           }
         }
 
-        const dBody = this.intersectRaySphere(this._rayOrigin, dir, t.position, t.hitRadius, bestDist);
-        if (dBody !== null && dBody < bestDist) {
-          bestDist = dBody;
+        let dTorso: number | null = null;
+        if (t.torsoBoxMin && t.torsoBoxMax) {
+          dTorso = this.intersectRayBox(this._rayOrigin, dir, t.torsoBoxMin, t.torsoBoxMax, bestDist);
+        }
+        const dBodySphere = this.intersectRaySphere(this._rayOrigin, dir, t.position, t.hitRadius, bestDist);
+        if (dBodySphere !== null && (dTorso === null || dBodySphere < dTorso)) {
+          dTorso = dBodySphere;
+        }
+        if (dTorso !== null && dTorso < bestDist) {
+          bestDist = dTorso;
           hitTarget = t;
           hitHead = false;
+          hitZone = 'upper_torso';
+          continue;
+        }
+
+        let dLower: number | null = null;
+        if (t.lowerBodyBoxMin && t.lowerBodyBoxMax) {
+          dLower = this.intersectRayBox(this._rayOrigin, dir, t.lowerBodyBoxMin, t.lowerBodyBoxMax, bestDist);
+        }
+        if (t.lowerBodyPosition && t.lowerBodyRadius) {
+          const dLowerSphere = this.intersectRaySphere(
+            this._rayOrigin,
+            dir,
+            t.lowerBodyPosition,
+            t.lowerBodyRadius,
+            bestDist
+          );
+          if (dLowerSphere !== null && (dLower === null || dLowerSphere < dLower)) {
+            dLower = dLowerSphere;
+          }
+        }
+        if (dLower !== null && dLower < bestDist) {
+          bestDist = dLower;
+          hitTarget = t;
+          hitHead = false;
+          hitZone = 'lower_body';
         }
       }
 
@@ -513,8 +570,16 @@ export class WeaponSystem {
 
       if (hitTarget) {
         this.shotsHit++;
-        const finalDmg = hitHead ? effectiveDamage * cfg.headshotMultiplier : effectiveDamage;
-        hitTarget.onHit(finalDmg, hitHead, endPoint);
+        if (hitTarget.kind === 'enemy') {
+          this.enemyZoneHits[hitZone]++;
+        }
+        const zoneMult = hitHead
+          ? cfg.headshotMultiplier
+          : hitZone === 'lower_body'
+            ? 0.85
+            : 1.0;
+        const finalDmg = effectiveDamage * zoneMult;
+        hitTarget.onHit(finalDmg, hitHead, endPoint, hitZone);
         this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, hitTarget.kind === 'enemy' ? 'blood' : 'metal');
       } else if (worldHit) {
         if (this._worldHit.collider && (this._worldHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) !== 0) {
@@ -544,6 +609,75 @@ export class WeaponSystem {
     if (t >= 0 && t < maxDist) return t;
     return null;
   }
+
+  private intersectRayBox(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    boxMin: THREE.Vector3,
+    boxMax: THREE.Vector3,
+    maxDist: number
+  ): number | null {
+    let tmin = 0;
+    let tmax = maxDist;
+
+    const ox = origin.x;
+    const oy = origin.y;
+    const oz = origin.z;
+    const dx = dir.x;
+    const dy = dir.y;
+    const dz = dir.z;
+
+    if (Math.abs(dx) < 1e-7) {
+      if (ox < boxMin.x || ox > boxMax.x) return null;
+    } else {
+      const inv = 1 / dx;
+      let t1 = (boxMin.x - ox) * inv;
+      let t2 = (boxMax.x - ox) * inv;
+      if (t1 > t2) {
+        const tmp = t1;
+        t1 = t2;
+        t2 = tmp;
+      }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return null;
+    }
+
+    if (Math.abs(dy) < 1e-7) {
+      if (oy < boxMin.y || oy > boxMax.y) return null;
+    } else {
+      const inv = 1 / dy;
+      let t1 = (boxMin.y - oy) * inv;
+      let t2 = (boxMax.y - oy) * inv;
+      if (t1 > t2) {
+        const tmp = t1;
+        t1 = t2;
+        t2 = tmp;
+      }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return null;
+    }
+
+    if (Math.abs(dz) < 1e-7) {
+      if (oz < boxMin.z || oz > boxMax.z) return null;
+    } else {
+      const inv = 1 / dz;
+      let t1 = (boxMin.z - oz) * inv;
+      let t2 = (boxMax.z - oz) * inv;
+      if (t1 > t2) {
+        const tmp = t1;
+        t1 = t2;
+        t2 = tmp;
+      }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return null;
+    }
+
+    return tmin >= 0 && tmin < maxDist ? tmin : null;
+  }
+
 
   private updateViewModelTransform(dt: number, player: PlayerController): void {
     const rig = this.rigs.get(this.activeWeaponId);

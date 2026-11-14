@@ -53,6 +53,7 @@ export interface VehicleEntity {
   detectedPlayer: boolean;
   lastKnownPosition: THREE.Vector3 | null;
   lkpTimestampSec: number;
+  initialGraceTimerSec: number;
   reactionTimerSec: number;
   turretFireCooldown: number;
   burstShotsRemaining: number;
@@ -201,6 +202,7 @@ export class VehicleManager {
     collision.physicsWorld.registerStaticCollider(collider);
 
     const weaponProf = ENEMY_WEAPON_PROFILES[type === 'enemy_apc' ? 'enemy_autocannon' : 'enemy_lmg'];
+    const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
 
     this.vehicles.push({
       id,
@@ -232,6 +234,7 @@ export class VehicleManager {
       detectedPlayer: false,
       lastKnownPosition: null,
       lkpTimestampSec: -999,
+      initialGraceTimerSec: hostile ? diffProf.airInitialGraceSec * 0.55 + (this.seq % 3) * 0.35 : 0,
       reactionTimerSec: 0,
       turretFireCooldown: 1.0 + (this.seq % 3) * 0.4,
       burstShotsRemaining: 0,
@@ -297,65 +300,74 @@ export class VehicleManager {
     return best;
   }
 
+  private ejectPlayerFromVehicle(
+    veh: VehicleEntity,
+    player: PlayerController,
+    collision?: CollisionWorld
+  ): void {
+    veh.occupiedByPlayer = false;
+    veh.speed *= 0.25;
+    player.setOccupiedVehicleShield(null, null);
+    this.cameraRig.onVehicleExit(veh);
+
+    // Test exit candidates (left door, right door, rear, front-left) so player never exits into/through a solid wall
+    const sideDist = veh.halfWidth + 1.35;
+    const rearDist = veh.halfLength + 1.45;
+    const candidates = [
+      [-Math.cos(veh.yaw) * sideDist, Math.sin(veh.yaw) * sideDist],
+      [Math.cos(veh.yaw) * sideDist, -Math.sin(veh.yaw) * sideDist],
+      [Math.sin(veh.yaw) * rearDist, Math.cos(veh.yaw) * rearDist],
+      [-Math.sin(veh.yaw) * rearDist, -Math.cos(veh.yaw) * rearDist],
+    ];
+    let chosenX = veh.position.x + candidates[0][0];
+    let chosenZ = veh.position.z + candidates[0][1];
+    let chosenY = veh.position.y;
+
+    if (collision) {
+      const testPos = new THREE.Vector3();
+      const bound = collision.physicsWorld.getWorldBoundLimit() - 1;
+      for (const [ox, oz] of candidates) {
+        const tx = THREE.MathUtils.clamp(veh.position.x + ox, -bound, bound);
+        const tz = THREE.MathUtils.clamp(veh.position.z + oz, -bound, bound);
+        const ty = collision.getGroundHeightAt(tx, tz);
+        testPos.set(tx, ty, tz);
+
+        const dx = tx - veh.position.x;
+        const dz = tz - veh.position.z;
+        const dist = Math.hypot(dx, dz);
+        const pathBlocked =
+          dist > 0.1 &&
+          collision.sweptSegmentTest(
+            veh.position.x,
+            veh.position.y + 1.1,
+            veh.position.z,
+            dx / dist,
+            0,
+            dz / dist,
+            dist + 0.35,
+            PHYSICS_MASKS.CHARACTER_SOLID,
+            this._exitRayHit,
+            veh.collider.id
+          );
+
+        if (!pathBlocked && collision.canStandUp(testPos, 0.45, 1.8, 'player')) {
+          chosenX = tx;
+          chosenY = ty;
+          chosenZ = tz;
+          break;
+        }
+      }
+    }
+
+    player.position.set(chosenX, chosenY, chosenZ);
+    player.velocity.set(0, 0, 0);
+    player.pitch = THREE.MathUtils.clamp(player.pitch, -0.45, 0.45);
+  }
+
   togglePlayerVehicle(player: PlayerController, collision?: CollisionWorld): boolean {
     const current = this.getPlayerVehicle();
     if (current) {
-      current.occupiedByPlayer = false;
-      current.speed *= 0.25;
-      this.cameraRig.onVehicleExit(current);
-
-      // Test exit candidates (left door, right door, rear, front-left) so player never exits into/through a solid wall
-      const sideDist = current.halfWidth + 1.35;
-      const rearDist = current.halfLength + 1.45;
-      const candidates = [
-        [-Math.cos(current.yaw) * sideDist, Math.sin(current.yaw) * sideDist],
-        [Math.cos(current.yaw) * sideDist, -Math.sin(current.yaw) * sideDist],
-        [Math.sin(current.yaw) * rearDist, Math.cos(current.yaw) * rearDist],
-        [-Math.sin(current.yaw) * rearDist, -Math.cos(current.yaw) * rearDist],
-      ];
-      let chosenX = current.position.x + candidates[0][0];
-      let chosenZ = current.position.z + candidates[0][1];
-      let chosenY = current.position.y;
-
-      if (collision) {
-        const testPos = new THREE.Vector3();
-        const bound = collision.physicsWorld.getWorldBoundLimit() - 1;
-        for (const [ox, oz] of candidates) {
-          const tx = THREE.MathUtils.clamp(current.position.x + ox, -bound, bound);
-          const tz = THREE.MathUtils.clamp(current.position.z + oz, -bound, bound);
-          const ty = collision.getGroundHeightAt(tx, tz);
-          testPos.set(tx, ty, tz);
-
-          const dx = tx - current.position.x;
-          const dz = tz - current.position.z;
-          const dist = Math.hypot(dx, dz);
-          const pathBlocked =
-            dist > 0.1 &&
-            collision.sweptSegmentTest(
-              current.position.x,
-              current.position.y + 1.1,
-              current.position.z,
-              dx / dist,
-              0,
-              dz / dist,
-              dist + 0.35,
-              PHYSICS_MASKS.CHARACTER_SOLID,
-              this._exitRayHit,
-              current.collider.id
-            );
-
-          if (!pathBlocked && collision.canStandUp(testPos, 0.45, 1.8, 'player')) {
-            chosenX = tx;
-            chosenY = ty;
-            chosenZ = tz;
-            break;
-          }
-        }
-      }
-
-      player.position.set(chosenX, chosenY, chosenZ);
-      player.velocity.set(0, 0, 0);
-      player.pitch = THREE.MathUtils.clamp(player.pitch, -0.45, 0.45);
+      this.ejectPlayerFromVehicle(current, player, collision);
       this.audio.play2D('ui_click', 4, 0.45);
       return false;
     }
@@ -363,6 +375,13 @@ export class VehicleManager {
     const near = this.getNearestInteractableVehicle(player.position);
     if (near) {
       near.occupiedByPlayer = true;
+      player.setOccupiedVehicleShield(near.collider.id, (amount) => {
+        const destroyed = this.damageVehicle(near, amount, undefined, player, collision);
+        return {
+          hullDestroyed: destroyed,
+          residualPlayerDamage: destroyed ? Math.min(24, amount * 0.35) : 0,
+        };
+      });
       this.cameraRig.resetForVehicleEntry(near, player);
       this.audio.play2D('engine', 5, 0.55);
       return true;
@@ -373,7 +392,9 @@ export class VehicleManager {
   damageVehicle(
     veh: VehicleEntity,
     damage: number,
-    onConvoyDestroyed?: (v: VehicleEntity) => void
+    onConvoyDestroyed?: (v: VehicleEntity) => void,
+    player?: PlayerController,
+    collision?: CollisionWorld
   ): boolean {
     if (!veh.alive) return false;
     veh.health -= damage;
@@ -385,7 +406,11 @@ export class VehicleManager {
       veh.occupiedByPlayer = false;
       veh.state = 'DEAD';
       if (wasOccupied) {
-        this.cameraRig.onVehicleExit(veh);
+        if (player) {
+          this.ejectPlayerFromVehicle(veh, player, collision);
+        } else {
+          this.cameraRig.onVehicleExit(veh);
+        }
       }
       if (veh.hostile) {
         this.telemetry?.recordStateTransition(veh.id, veh.squadId, 'vehicle', prevState, 'DEAD');
@@ -424,14 +449,16 @@ export class VehicleManager {
     z: number,
     radius: number,
     damage: number,
-    onConvoyDestroyed?: (v: VehicleEntity) => void
+    onConvoyDestroyed?: (v: VehicleEntity) => void,
+    player?: PlayerController,
+    collision?: CollisionWorld
   ): void {
     for (const v of this.vehicles) {
       if (!v.alive) continue;
       const dist = Math.hypot(v.position.x - x, v.position.y + 1 - y, v.position.z - z);
       if (dist <= radius + 1.8) {
         const falloff = Math.max(0.25, 1 - dist / (radius + 2));
-        this.damageVehicle(v, damage * falloff, onConvoyDestroyed);
+        this.damageVehicle(v, damage * falloff, onConvoyDestroyed, player, collision);
       }
     }
   }
@@ -521,8 +548,15 @@ export class VehicleManager {
             'metal'
           );
           if (moveRes.hullDamageApplied > 0) {
-            this.damageVehicle(v, moveRes.hullDamageApplied, onConvoyDestroyed);
+            const destroyedByImpact = this.damageVehicle(
+              v,
+              moveRes.hullDamageApplied,
+              onConvoyDestroyed,
+              player,
+              collision
+            );
             player.addCameraShake(Math.min(0.45, moveRes.impactSpeed * 0.02));
+            if (destroyedByImpact) continue;
           }
           // If rammed another vehicle, apply momentum transfer & hull damage to the struck vehicle
           if (moveRes.blockerCollider?.layer === COLLISION_LAYER.VEHICLE) {
@@ -531,7 +565,7 @@ export class VehicleManager {
             );
             if (otherVeh) {
               const ramDmg = Math.max(18, moveRes.impactSpeed * 5.2);
-              this.damageVehicle(otherVeh, ramDmg, onConvoyDestroyed);
+              this.damageVehicle(otherVeh, ramDmg, onConvoyDestroyed, player, collision);
             }
           }
         }
@@ -546,21 +580,18 @@ export class VehicleManager {
         v.chassisPitch = THREE.MathUtils.lerp(v.chassisPitch, targetPitch, Math.min(1, dt * 8));
         v.meshRoot.rotation.set(v.chassisPitch, v.yaw, v.chassisRoll, 'YXZ');
 
-        // Multi-mode VehicleCameraRig (Chase, Driver FPV, Gunner Turret, Tactical Orbit)
-        this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov);
-
+        // Synchronize turret orientation and world matrix BEFORE camera rig update and muzzle calculation
         v.turret.rotation.y = player.yaw - v.yaw;
         v.turretGun.rotation.x = THREE.MathUtils.clamp(player.pitch, -0.35, 0.65);
         v.meshRoot.updateMatrixWorld(true);
 
+        // Multi-mode VehicleCameraRig (Chase, Driver FPV, Gunner Turret, Tactical Orbit)
+        this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov);
+
         if (input.isMouseHeld(0) && v.turretFireCooldown <= 0) {
           v.turretFireCooldown = 0.12;
           camera.getWorldDirection(this._turretDir);
-          if (this.cameraRig.getMode() === 'driver_fpv') {
-            this._muzzlePos.set(v.position.x, v.position.y + 2.45, v.position.z);
-          } else {
-            this._muzzlePos.set(0, 0.12, -1.55).applyMatrix4(v.turretGun.matrixWorld);
-          }
+          this._muzzlePos.set(0, 0.12, -1.55).applyMatrix4(v.turretGun.matrixWorld);
           this.audio.play2D('shot_lmg', 7, 0.55);
           this.vfx.spawnMuzzleLight(this._muzzlePos.x, this._muzzlePos.y, this._muzzlePos.z);
           this.vfx.spawnTracer(
@@ -574,6 +605,9 @@ export class VehicleManager {
           onTurretHitEnemyCheck(this._muzzlePos, this._turretDir);
         }
       } else if (v.hostile) {
+        if (v.initialGraceTimerSec > 0) {
+          v.initialGraceTimerSec = Math.max(0, v.initialGraceTimerSec - dt);
+        }
         if (roadWaypoints.length > 0) {
           const wp = roadWaypoints[v.waypointIndex % roadWaypoints.length];
           const dx = wp.x - v.position.x;
@@ -613,10 +647,15 @@ export class VehicleManager {
           }
         }
 
+        if (v.initialGraceTimerSec > 0) {
+          continue;
+        }
+
         // Hostile turret perception, global lease check & physical spread raycast
         const dPlayer = v.position.distanceTo(player.position);
         const weaponClass = v.type === 'enemy_apc' ? 'enemy_autocannon' : 'enemy_lmg';
         const weaponProf = ENEMY_WEAPON_PROFILES[weaponClass];
+
 
         let rawLos = false;
         let exposedTargetPoint = player.position;

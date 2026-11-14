@@ -9,19 +9,21 @@ const SECTIONS = [
     items: [
       ['W / A / S / D', 'Move & Strafe'],
       ['Shift', 'Tactical Sprint'],
-      ['C', 'Crouch / Sprint-Slide (while sprinting)'],
+      ['Ctrl / Alt', 'Crouch / Sprint-Slide (while sprinting)'],
       ['Space', 'Jump / Vault Low Cover'],
-      ['Mouse', 'Free Look (Pointer Lock)'],
+      ['Mouse / Tab', 'Free Look (Pointer Lock) / Toggle Cursor Lock'],
     ],
   },
   {
-    title: 'Weapons & Ballistics',
+    title: 'Weapons, Ballistics & Ordnance',
     items: [
       ['Left Click', 'Fire Active Weapon / Vehicle Turret'],
       ['Right Click', 'Aim Down Sights / 6x Sniper Optical Scope'],
       ['1 – 9 / Scroll', 'Switch Across All 9 Weapons'],
-      ['R / B', 'Reload Magazine / Cycle Fire Mode'],
-      ['G', 'Throw M67 Fragmentation Grenade'],
+      ['R / B / G', 'Reload Magazine / Cycle Fire Mode / Throw Frag'],
+      ['C / Shift+C', 'Place C4 Satchel Charge / Remotely Detonate C4'],
+      ['V / Shift+V', 'Call Tactical Bomb Strike / Cycle Bomb Type'],
+      ['N + Enter', 'Request & Authorize TRIDENT-X Strategic Strike'],
     ],
   },
   {
@@ -31,7 +33,7 @@ const SECTIONS = [
       ['F', 'Cycle Vehicle Camera (Chase / Driver FPV / Turret / Orbit)'],
       ['Slot 8 (FIM-92X)', 'Hold aim on Helicopters, Drones, Jets or APCs to Lock On'],
       ['Esc', 'Pause Operation / Unlock Cursor'],
-      ['F3', 'Toggle Engine Diagnostics Telemetry'],
+      ['F3 / F4', 'Toggle Engine & Combat AI Diagnostics (Dev Mode)'],
     ],
   },
 ];

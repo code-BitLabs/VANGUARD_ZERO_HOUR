@@ -41,6 +41,11 @@ export interface EnemyUnit {
   velocity: THREE.Vector3;
   bodyCenter: THREE.Vector3;
   headPosition: THREE.Vector3;
+  lowerBodyCenter: THREE.Vector3;
+  torsoBoxMin: THREE.Vector3;
+  torsoBoxMax: THREE.Vector3;
+  lowerBodyBoxMin: THREE.Vector3;
+  lowerBodyBoxMax: THREE.Vector3;
   yaw: number;
   patrolOrigin: THREE.Vector3;
   patrolYaw: number;
@@ -56,6 +61,7 @@ export interface EnemyUnit {
   detectedPlayer: boolean;
   lastKnownPosition: THREE.Vector3 | null;
   lkpTimestampSec: number;
+  initialGraceTimerSec: number;
   stateTimerSec: number;
   reactionTimerSec: number;
   aimDurationSec: number;
@@ -138,6 +144,25 @@ export class EnemyManager {
     return this.enemies;
   }
 
+  private syncUnitHitboxes(u: EnemyUnit): void {
+    const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
+    const px = u.position.x;
+    const py = u.position.y;
+    const pz = u.position.z;
+
+    u.headPosition.set(px, py + 1.65 * scale, pz);
+    u.bodyCenter.set(px, py + 1.08 * scale, pz);
+    u.lowerBodyCenter.set(px, py + 0.4 * scale, pz);
+
+    const torsoHalfW = 0.38 * scale;
+    u.torsoBoxMin.set(px - torsoHalfW, py + 0.75 * scale, pz - torsoHalfW);
+    u.torsoBoxMax.set(px + torsoHalfW, py + 1.44 * scale, pz + torsoHalfW);
+
+    const lowerHalfW = 0.34 * scale;
+    u.lowerBodyBoxMin.set(px - lowerHalfW, py, pz - lowerHalfW);
+    u.lowerBodyBoxMax.set(px + lowerHalfW, py + 0.75 * scale, pz + lowerHalfW);
+  }
+
   spawnWave(
     archetype: EnemyArchetype,
     count: number,
@@ -150,6 +175,7 @@ export class EnemyManager {
     const cfg = ENEMY_BY_ARCHETYPE[archetype];
     const squadId = customSquadId ?? `squad_${++this.waveSeq}_${archetype}`;
     const rng = this.ballistics?.rng;
+    const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
 
     for (let i = 0; i < count; i++) {
       const randA = rng ? rng.next() : Math.random();
@@ -181,7 +207,7 @@ export class EnemyManager {
 
       this.coordinator?.registerUnit(unitId, squadId);
 
-      this.enemies.push({
+      const unit: EnemyUnit = {
         id: unitId,
         squadId,
         archetype,
@@ -195,8 +221,13 @@ export class EnemyManager {
         state: 'UNAWARE',
         position: spawnPos,
         velocity: spawnVel,
-        bodyCenter: new THREE.Vector3(spawnPos.x, spawnPos.y + 1.0, spawnPos.z),
-        headPosition: new THREE.Vector3(spawnPos.x, spawnPos.y + 1.65, spawnPos.z),
+        bodyCenter: new THREE.Vector3(),
+        headPosition: new THREE.Vector3(),
+        lowerBodyCenter: new THREE.Vector3(),
+        torsoBoxMin: new THREE.Vector3(),
+        torsoBoxMax: new THREE.Vector3(),
+        lowerBodyBoxMin: new THREE.Vector3(),
+        lowerBodyBoxMax: new THREE.Vector3(),
         yaw: patrolYaw,
         patrolOrigin: spawnPos.clone(),
         patrolYaw,
@@ -212,6 +243,7 @@ export class EnemyManager {
         detectedPlayer: false,
         lastKnownPosition: null,
         lkpTimestampSec: -999,
+        initialGraceTimerSec: diffProf.reactionDelayBaseSec * 1.4 + (i % 3) * 0.25,
         stateTimerSec: 0,
         reactionTimerSec: 0,
         aimDurationSec: 0,
@@ -240,7 +272,9 @@ export class EnemyManager {
         weaponArm: rig.weaponArm,
         headMesh: rig.headMesh,
         hasSpawnedDrone: false,
-      });
+      };
+      this.syncUnitHitboxes(unit);
+      this.enemies.push(unit);
     }
   }
 
@@ -251,15 +285,22 @@ export class EnemyManager {
     for (let i = 0; i < this.enemies.length; i++) {
       const u = this.enemies[i];
       if (!u.alive) continue;
+      const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
       out.push({
         id: u.id,
         kind: 'enemy',
         name: u.displayName,
         alive: u.alive,
         position: u.bodyCenter,
-        hitRadius: u.archetype === 'heavy_armor' ? 0.72 : 0.56,
+        hitRadius: 0.56 * scale,
         headPosition: u.headPosition,
-        headRadius: 0.3,
+        headRadius: 0.3 * scale,
+        lowerBodyPosition: u.lowerBodyCenter,
+        lowerBodyRadius: 0.42 * scale,
+        torsoBoxMin: u.torsoBoxMin,
+        torsoBoxMax: u.torsoBoxMax,
+        lowerBodyBoxMin: u.lowerBodyBoxMin,
+        lowerBodyBoxMax: u.lowerBodyBoxMax,
         onHit: (damage, isHeadshot, hitPoint) => {
           const killed = this.damageUnit(u, damage, isHeadshot, hitPoint);
           onEnemyHit(u, damage, isHeadshot, killed);
@@ -276,6 +317,7 @@ export class EnemyManager {
     stimulusOrigin?: THREE.Vector3
   ): boolean {
     if (!unit.alive) return false;
+    unit.initialGraceTimerSec = 0;
     let remaining = damage;
     if (unit.armor > 0 && !isHeadshot) {
       const absorb = Math.min(unit.armor, damage * 0.45);
@@ -283,6 +325,7 @@ export class EnemyManager {
       remaining -= absorb;
     }
     unit.health -= remaining;
+
     unit.hitReactTimer = 0.22;
 
     // Release active shooting token while staggered by incoming hit
@@ -444,8 +487,7 @@ export class EnemyManager {
               : 0.25;
       u.headMesh.rotation.x = u.hitReactTimer > 0 ? -0.35 : 0;
 
-      u.bodyCenter.set(u.position.x, u.position.y + 1.0, u.position.z);
-      u.headPosition.set(u.position.x, u.position.y + 1.66, u.position.z);
+      this.syncUnitHitboxes(u);
     }
   }
 
@@ -472,6 +514,14 @@ export class EnemyManager {
         u.ammoInMag = u.magSize;
       }
     }
+
+    if (u.initialGraceTimerSec > 0) {
+      u.initialGraceTimerSec = Math.max(0, u.initialGraceTimerSec - dt);
+      if (u.initialGraceTimerSec > 0 && u.state === 'UNAWARE') {
+        return;
+      }
+    }
+
 
     // 2. Vision Cone & 5-Point Physical LOS Check
     const toPlayerX = player.position.x - u.position.x;

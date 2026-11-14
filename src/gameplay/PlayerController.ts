@@ -70,6 +70,10 @@ export class PlayerController {
   private lastArmorAbsorbed = 0;
   private lastHealthLost = 0;
   private lastMoveResult: CharacterMoveResult | null = null;
+  private occupiedVehicleColliderId: string | null = null;
+  private occupiedVehicleDamageHandler:
+    | ((amount: number) => { hullDestroyed: boolean; residualPlayerDamage: number })
+    | null = null;
 
   private readonly standingEyeHeight = 1.66;
   private readonly crouchEyeHeight = 1.05;
@@ -102,6 +106,22 @@ export class PlayerController {
 
   constructor(private readonly audio: AudioManager) {}
 
+  setOccupiedVehicleShield(
+    colliderId: string | null,
+    handler: ((amount: number) => { hullDestroyed: boolean; residualPlayerDamage: number }) | null
+  ): void {
+    this.occupiedVehicleColliderId = colliderId;
+    this.occupiedVehicleDamageHandler = handler;
+  }
+
+  isOccupyingVehicle(): boolean {
+    return this.occupiedVehicleColliderId !== null && this.occupiedVehicleDamageHandler !== null;
+  }
+
+  getOccupiedVehicleColliderId(): string | null {
+    return this.occupiedVehicleColliderId;
+  }
+
   spawn(x: number, y: number, z: number, yaw = 0): void {
     this.position.set(x, Math.max(0, y - 1.65), z);
     this.velocity.set(0, 0, 0);
@@ -127,7 +147,11 @@ export class PlayerController {
     this.lastLandImpulse = 0;
     this.landCompressionOffset = 0;
     this.accelState = 'IDLE';
+    this.lastArmorAbsorbed = 0;
+    this.lastHealthLost = 0;
     this.lastMoveResult = null;
+    this.occupiedVehicleColliderId = null;
+    this.occupiedVehicleDamageHandler = null;
   }
 
   addRecoilKick(pitchKick: number, yawKick: number): void {
@@ -211,6 +235,32 @@ export class PlayerController {
 
   applyDamage(amount: number, sourceX: number, sourceZ: number): void {
     if (!this.alive || amount <= 0) return;
+
+    // Directional damage indicator angle relative to player facing yaw
+    const dx = sourceX - this.position.x;
+    const dz = sourceZ - this.position.z;
+    const worldAngle = Math.atan2(dx, -dz);
+    const relAngle = worldAngle + this.yaw;
+
+    // If occupying an intact vehicle, route damage to vehicle hull first
+    if (this.occupiedVehicleDamageHandler) {
+      const shieldHandler = this.occupiedVehicleDamageHandler;
+      const hullOutcome = shieldHandler(amount);
+      if (!hullOutcome.hullDestroyed) {
+        this.lastArmorAbsorbed = 0;
+        this.lastHealthLost = 0;
+        this.addCameraShake(Math.min(0.28, amount * 0.008));
+        gameSessionStore.getState().pushDamageArc(relAngle, Math.min(0.65, amount / 40));
+        return;
+      }
+      amount = hullOutcome.residualPlayerDamage;
+      if (amount <= 0) {
+        this.lastArmorAbsorbed = 0;
+        this.lastHealthLost = 0;
+        return;
+      }
+    }
+
     this.timeSinceDamage = 0;
     this.damageFlash = 1;
     this.addCameraShake(Math.min(0.6, amount * 0.015));
@@ -228,17 +278,13 @@ export class PlayerController {
     this.lastArmorAbsorbed = Number(absorbed.toFixed(2));
     this.lastHealthLost = Number((beforeHealth - this.health).toFixed(2));
 
-    // Directional damage indicator angle relative to player facing yaw
-    const dx = sourceX - this.position.x;
-    const dz = sourceZ - this.position.z;
-    const worldAngle = Math.atan2(dx, -dz);
-    const relAngle = worldAngle + this.yaw;
     gameSessionStore.getState().pushDamageArc(relAngle, Math.min(1, amount / 25));
 
     if (this.health <= 0) {
       this.alive = false;
     }
   }
+
 
   /**
    * Returns stance-aware 3D hitbox volumes (Head sphere, Upper Torso box, Lower Body box).

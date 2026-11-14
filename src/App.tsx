@@ -156,7 +156,7 @@ export default function App() {
               <HowToPlayModal
                 onBack={() => {
                   handleUiClick();
-                  uiStore.getState().setScreen('title');
+                  uiStore.getState().setScreen(previousMenuScreen);
                 }}
               />
             )}

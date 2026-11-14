@@ -238,4 +238,134 @@ describe('Vehicle Camera System, Rig Integrity, Grenade CCD & Destruction Parity
     expect(collision.spatialHash.getBoxCount()).toBe(0);
     expect(collision.physicsWorld.getStaticColliderIds()).not.toContain('sync_barrier_1');
   });
+
+  it('prevents Strike Jeep Chase Camera from plunging behind the green rear hull wall when pitching upward (+0.32 rad)', () => {
+    vehicles.spawnVehicle('military_jeep', { x: 0, y: 0, z: 0 }, 0, false, false, collision, 'mission:1');
+    const jeep = vehicles.getVehicles()[0];
+    vehicles.togglePlayerVehicle(player, collision);
+
+    // Pitch upward as when aiming at an attack helicopter
+    player.pitch = 0.32;
+    for (let i = 0; i < 15; i++) {
+      vehicles.update(1 / 60, input, player, camera, collision, [], () => {});
+    }
+    jeep.meshRoot.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+
+    // Camera must stay elevated above the rear cabin wall (y >= 2.58m) with zero near-lens mesh occlusion
+    expect(camera.position.y).toBeGreaterThanOrEqual(2.58);
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    const opaqueMeshes: THREE.Object3D[] = [];
+    jeep.meshRoot.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj.visible) {
+        const mat = obj.material as THREE.Material;
+        if (!mat.transparent) opaqueMeshes.push(obj);
+      }
+    });
+    const nearHits = new THREE.Raycaster(camera.position, dir, 0.05, 3.0).intersectObjects(opaqueMeshes, false);
+    expect(nearHits).toHaveLength(0);
+  });
+
+  it('absorbs explosion and weapon damage into the occupied vehicle hull first and safely ejects the player on vehicle destruction', async () => {
+    const { ExplosiveManager } = await import('@/src/gameplay/ExplosiveManager');
+    const { EnemyManager } = await import('@/src/gameplay/EnemyManager');
+    const { AirCombatManager } = await import('@/src/gameplay/AirCombatManager');
+    const projectiles = new ProjectileManager(scene, resources, vfx, audio, telemetry);
+    const explosives = new ExplosiveManager(scene, resources, vfx, audio, projectiles, telemetry);
+    const enemies = new EnemyManager(scene, resources, vfx, audio, projectiles, coordinator, undefined, telemetry);
+    const airCombat = new AirCombatManager(scene, resources, vfx, audio, coordinator, undefined, telemetry);
+    const destruction = new DestructionSystem(collision.physicsWorld, vfx, audio);
+
+    vehicles.spawnVehicle('military_jeep', { x: 0, y: 0, z: 0 }, 0, false, false, collision, 'mission:1');
+    const jeep = vehicles.getVehicles()[0];
+    vehicles.togglePlayerVehicle(player, collision);
+    expect(player.isOccupyingVehicle()).toBe(true);
+
+    const startHealth = player.health;
+    const startArmor = player.armor;
+    const startHull = jeep.health;
+
+    // Non-lethal explosion near occupied jeep damages the jeep hull, NOT the player's personal HP/armor
+    explosives.resolveExplosion(
+      {
+        explosiveId: 'grenade_shell',
+        category: 'grenade',
+        x: 0,
+        y: 1.0,
+        z: -2.0,
+        innerRadius: 2.5,
+        radius: 8,
+        damage: 90,
+        falloffExponent: 1.2,
+        vehicleDamageMultiplier: 1.0,
+        destructionPower: 1.0,
+        fromPlayer: false,
+        sourceUnitId: 'enemy_1',
+        sourceSquadId: 'sq_1',
+        sourceDomain: 'ground',
+      },
+      player,
+      collision,
+      enemies,
+      vehicles,
+      airCombat,
+      destruction,
+      true,
+      {
+        onEnemyKilled: () => {},
+        onAirKilled: () => {},
+        onConvoyDestroyed: () => {},
+        onDestructibleDestroyed: () => {},
+        onAlert: () => {},
+      }
+    );
+
+    expect(jeep.health).toBeLessThan(startHull);
+    expect(jeep.alive).toBe(true);
+    expect(player.health).toBe(startHealth);
+    expect(player.armor).toBe(startArmor);
+    expect(jeep.occupiedByPlayer).toBe(true);
+
+    // Lethal blast destroys the jeep, automatically ejects the player outside the wreck, and clears vehicle shield
+    explosives.resolveExplosion(
+      {
+        explosiveId: 'c4_charge',
+        category: 'c4',
+        x: 0,
+        y: 1.0,
+        z: 0,
+        innerRadius: 4,
+        radius: 12,
+        damage: 450,
+        falloffExponent: 1.1,
+        vehicleDamageMultiplier: 1.2,
+        destructionPower: 1.5,
+        fromPlayer: false,
+        sourceUnitId: 'enemy_1',
+        sourceSquadId: 'sq_1',
+        sourceDomain: 'ground',
+      },
+      player,
+      collision,
+      enemies,
+      vehicles,
+      airCombat,
+      destruction,
+      true,
+      {
+        onEnemyKilled: () => {},
+        onAirKilled: () => {},
+        onConvoyDestroyed: () => {},
+        onDestructibleDestroyed: () => {},
+        onAlert: () => {},
+      }
+    );
+
+    expect(jeep.alive).toBe(false);
+    expect(jeep.occupiedByPlayer).toBe(false);
+    expect(vehicles.getPlayerVehicle()).toBeNull();
+    expect(player.isOccupyingVehicle()).toBe(false);
+    expect(player.alive).toBe(true);
+  });
 });

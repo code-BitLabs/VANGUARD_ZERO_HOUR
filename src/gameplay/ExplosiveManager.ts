@@ -769,6 +769,20 @@ export class ExplosiveManager {
           const dp = Math.hypot(player.position.x - zone.center.x, player.position.z - zone.center.z);
           if (dp <= zone.radius) {
             player.applyDamage(stepDmg, zone.center.x, zone.center.z);
+            const { armorAbsorbed, healthLost } = player.getLastDamageBreakdown();
+            if (armorAbsorbed + healthLost > 0 && this.telemetry) {
+              this.telemetry.recordPlayerDamage(
+                this.telemetry.nextShotId(),
+                'fallout_hazard',
+                'ordnance',
+                'ground',
+                'enemy_rocket',
+                'splash',
+                armorAbsorbed + healthLost,
+                armorAbsorbed,
+                healthLost
+              );
+            }
           }
         }
         for (const u of enemies.getUnits()) {
@@ -890,8 +904,10 @@ export class ExplosiveManager {
       player.addCameraShake(Math.max(0.15, (isStrategic ? 1.0 : 0.78) * (1 - distToPlayer / shakeRange)));
     }
 
-    // 1. Player radial splash & physical blast impulse (guarded by explosionId)
-    if (distToPlayer <= ev.radius && player.alive) {
+    const occupiedVeh = vehicles.getPlayerVehicle();
+
+    // 1. Player radial splash & physical blast impulse (only when on foot; occupied vehicle hull is evaluated in section 3)
+    if (!occupiedVeh && distToPlayer <= ev.radius && player.alive) {
       if (damagedIds.has('player')) {
         this.telemetry?.recordDuplicateDamageBlocked();
       } else {
@@ -953,7 +969,7 @@ export class ExplosiveManager {
       }
     }
 
-    // 3. Vehicles
+    // 3. Vehicles (including player-occupied vehicle hull protection & breach handling)
     for (const v of vehicles.getVehicles()) {
       if (!v.alive) continue;
       const dist = Math.hypot(v.position.x - ev.x, v.position.y + 1 - ev.y, v.position.z - ev.z);
@@ -969,7 +985,29 @@ export class ExplosiveManager {
       if (dmg > 0.5) {
         entitiesHit++;
         totalDamageDealt += dmg;
-        vehicles.damageVehicle(v, dmg, callbacks.onConvoyDestroyed);
+        const wasPlayerOccupied = v.occupiedByPlayer;
+        const destroyed = vehicles.damageVehicle(v, dmg, callbacks.onConvoyDestroyed, player, collision);
+        if (wasPlayerOccupied && destroyed && player.alive && !damagedIds.has('player')) {
+          damagedIds.add('player');
+          const breachDmg = Math.min(28, dmg * 0.25);
+          const applied = player.applyValidatedExplosionDamage(explosionId, breachDmg, ev.x, ev.z);
+          if (applied > 0) {
+            totalDamageDealt += applied;
+            const { armorAbsorbed, healthLost } = player.getLastDamageBreakdown();
+            const shotId = this.telemetry?.nextShotId() ?? explosionId;
+            this.telemetry?.recordPlayerDamage(
+              shotId,
+              ev.sourceUnitId,
+              ev.sourceSquadId,
+              ev.sourceDomain,
+              'enemy_rocket',
+              'splash',
+              applied,
+              armorAbsorbed,
+              healthLost
+            );
+          }
+        }
       }
     }
 
@@ -1013,6 +1051,7 @@ export class ExplosiveManager {
         d.id,
         dmg,
         (cx, cy, cz, cr, cd) => {
+
           this.resolveExplosion(
             {
               explosiveId: 'grenade_shell',

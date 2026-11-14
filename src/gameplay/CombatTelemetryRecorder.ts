@@ -350,6 +350,21 @@ export interface CombatAggregateMetrics {
   invalidAttackAttempts: number;
   tunnelingBlockedCount: number;
   speedOutliersCount: number;
+  timePlayerDeathSec?: number | null;
+  fatalDamageSource?: {
+    unitId: string;
+    squadId: string;
+    domain: CombatDomain;
+    weaponClass: EnemyWeaponClass;
+    hitZone: PlayerHitZone;
+    timestampSec: number;
+  } | null;
+  playerShotsFired?: number;
+  playerShotsHit?: number;
+  playerAccuracyPct?: number;
+  playerEnemyZoneHits?: { head: number; upper_torso: number; lower_body: number };
+  objectiveCompletedAtSec?: Record<string, number | null>;
+  missionRestartCount?: number;
 }
 
 export interface CombatDebugSnapshot {
@@ -484,6 +499,20 @@ export class CombatTelemetryRecorder {
 
   private timeFirstDetectionSec: number | null = null;
   private timeFirstDamageSec: number | null = null;
+  private timePlayerDeathSec: number | null = null;
+  private fatalDamageSource: {
+    unitId: string;
+    squadId: string;
+    domain: CombatDomain;
+    weaponClass: EnemyWeaponClass;
+    hitZone: PlayerHitZone;
+    timestampSec: number;
+  } | null = null;
+  private playerShotsFired = 0;
+  private playerShotsHit = 0;
+  private playerEnemyZoneHits = { head: 0, upper_torso: 0, lower_body: 0 };
+  private objectiveCompletedAtSec: Record<string, number | null> = {};
+  private missionRestartCount = 0;
   private timeSpentExposedSec = 0;
   private timeSpentInCoverSec = 0;
   private currentlyExposed = false;
@@ -624,7 +653,14 @@ export class CombatTelemetryRecorder {
   };
 
   setMissionId(missionId: number): void {
+    if (this.missionId !== missionId) {
+      this.missionRestartCount = 0;
+    }
     this.missionId = missionId;
+  }
+
+  recordMissionRestart(): void {
+    this.missionRestartCount++;
   }
 
   reset(): void {
@@ -662,6 +698,12 @@ export class CombatTelemetryRecorder {
     this.firedSet.clear();
     this.timeFirstDetectionSec = null;
     this.timeFirstDamageSec = null;
+    this.timePlayerDeathSec = null;
+    this.fatalDamageSource = null;
+    this.playerShotsFired = 0;
+    this.playerShotsHit = 0;
+    this.playerEnemyZoneHits = { head: 0, upper_torso: 0, lower_body: 0 };
+    this.objectiveCompletedAtSec = {};
     this.timeSpentExposedSec = 0;
     this.timeSpentInCoverSec = 0;
     this.currentlyExposed = false;
@@ -801,6 +843,36 @@ export class CombatTelemetryRecorder {
     if (physics.tunnelingPreventedTotal > this.tunnelingBlockedCount) {
       this.tunnelingBlockedCount = physics.tunnelingPreventedTotal;
     }
+  }
+
+  recordPlayerDeath(): void {
+    if (this.timePlayerDeathSec !== null) return;
+    this.timePlayerDeathSec = Number(this.elapsedSec.toFixed(2));
+    const lastDmg = this.damageRing[this.damageRing.length - 1];
+    if (lastDmg) {
+      this.fatalDamageSource = {
+        unitId: lastDmg.unitId,
+        squadId: lastDmg.squadId,
+        domain: lastDmg.domain,
+        weaponClass: lastDmg.weaponClass,
+        hitZone: lastDmg.hitZone,
+        timestampSec: lastDmg.timestampSec,
+      };
+    }
+  }
+
+  setPlayerWeaponTelemetry(
+    shotsFired: number,
+    shotsHit: number,
+    zoneHits: { head: number; upper_torso: number; lower_body: number }
+  ): void {
+    this.playerShotsFired = shotsFired;
+    this.playerShotsHit = shotsHit;
+    this.playerEnemyZoneHits = { ...zoneHits };
+  }
+
+  setObjectiveCompletionTelemetry(timestamps: Record<string, number | null>): void {
+    this.objectiveCompletedAtSec = { ...timestamps };
   }
 
   recordEvent(
@@ -1095,6 +1167,17 @@ export class CombatTelemetryRecorder {
         invalidAttackAttempts: this.invalidAttackAttempts,
         tunnelingBlockedCount: this.tunnelingBlockedCount,
         speedOutliersCount: this.speedOutliersCount,
+        timePlayerDeathSec: this.timePlayerDeathSec,
+        fatalDamageSource: this.fatalDamageSource ? { ...this.fatalDamageSource } : null,
+        playerShotsFired: this.playerShotsFired,
+        playerShotsHit: this.playerShotsHit,
+        playerAccuracyPct:
+          this.playerShotsFired > 0
+            ? Number(((this.playerShotsHit / this.playerShotsFired) * 100).toFixed(1))
+            : 0,
+        playerEnemyZoneHits: { ...this.playerEnemyZoneHits },
+        objectiveCompletedAtSec: { ...this.objectiveCompletedAtSec },
+        missionRestartCount: this.missionRestartCount,
       },
       ballisticsStats: {
         raycastsExecuted: this.raycastsExecuted,

@@ -34,6 +34,7 @@ export interface UIStoreState {
   toast: ToastNotice | null;
   setScreen: (screen: ScreenState) => void;
   openSettingsFrom: (from: 'title' | 'campaign' | 'paused') => void;
+  openHowToPlayFrom: (from: 'title' | 'campaign' | 'paused') => void;
   setPointerLocked: (locked: boolean) => void;
   toggleDiagnostics: () => void;
   setCombatDebugOpen: (open: boolean) => void;
@@ -69,6 +70,7 @@ export const uiStore = createStore<UIStoreState>()(
     toast: null,
     setScreen: (screen) => set({ screen }),
     openSettingsFrom: (from) => set({ previousMenuScreen: from, screen: 'settings' }),
+    openHowToPlayFrom: (from) => set({ previousMenuScreen: from, screen: 'howToPlay' }),
     setPointerLocked: (pointerLocked) => set({ pointerLocked }),
     toggleDiagnostics: () => {
       if (!isDeveloperModeActive()) {

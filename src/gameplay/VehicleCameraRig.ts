@@ -168,37 +168,32 @@ export class VehicleCameraRig {
       camera.quaternion.setFromEuler(this._euler);
       camera.updateMatrixWorld(true);
     } else if (this.mode === 'turret') {
-      this.setFpvHiddenVisibility(vehicle, true);
       this.debugRay.active = false;
 
       player.pitch = THREE.MathUtils.clamp(player.pitch, -0.68, 0.58);
+      // Hide cabin/roof if looking steeply down so turret base never clips lower frustum
+      this.setFpvHiddenVisibility(vehicle, player.pitch > -0.35);
       targetFov = Math.max(54, baseFov * 0.84);
 
       this._opticWorld.copy(vehicle.turretOpticLocal).applyMatrix4(vehicle.meshRoot.matrixWorld);
-      const cosP = Math.cos(player.pitch);
-      this._fwdDir.set(
-        -Math.sin(player.yaw) * cosP,
-        Math.sin(player.pitch),
-        -Math.cos(player.yaw) * cosP
-      );
-      // Offset sight slightly behind turret mount so gun barrel sits below lower crosshair without occluding view
+      const horizFwdX = -Math.sin(player.yaw);
+      const horizFwdZ = -Math.cos(player.yaw);
+      // Position gunner sight cleanly above and slightly ahead of turret ring so barrel/roof never occlude forward sightline
       camera.position.set(
-        this._opticWorld.x - this._fwdDir.x * 0.42,
-        this._opticWorld.y - this._fwdDir.y * 0.28 + 0.14,
-        this._opticWorld.z - this._fwdDir.z * 0.42
+        this._opticWorld.x + horizFwdX * 0.14,
+        Math.max(this._opticWorld.y + 0.16, vehicle.position.y + (isHeavy ? 3.08 : 2.86)),
+        this._opticWorld.z + horizFwdZ * 0.14
       );
       this._euler.set(player.pitch, player.yaw, 0, 'YXZ');
       camera.quaternion.setFromEuler(this._euler);
       camera.updateMatrixWorld(true);
     } else {
       // 'chase' or 'orbit' spring-arm exterior camera
-      this.setFpvHiddenVisibility(vehicle, true);
-
       const isOrbit = this.mode === 'orbit';
       player.pitch = THREE.MathUtils.clamp(player.pitch, -0.95, 0.34);
 
       const desiredDist = isOrbit ? (isHeavy ? 12.2 : 10.8) : isHeavy ? 9.4 : 8.2;
-      const pivotHeight = isHeavy ? 2.65 : 2.35;
+      const pivotHeight = isHeavy ? 2.88 : 2.64;
       this._pivot.set(vehicle.position.x, vehicle.position.y + pivotHeight, vehicle.position.z);
 
       if (!this.pivotInitialized) {
@@ -217,9 +212,13 @@ export class VehicleCameraRig {
         -Math.cos(player.yaw) * cosP
       );
 
-      // Spring-arm points behind aim direction with slight vertical elevation so roof never fills center screen
+      // Spring-arm always maintains positive vertical elevation above roof plane even when pitching upward
       this._armDir
-        .set(-this._fwdDir.x, -this._fwdDir.y + (isOrbit ? 0.24 : 0.1), -this._fwdDir.z)
+        .set(
+          -this._fwdDir.x,
+          Math.max(0.08, -this._fwdDir.y + (isOrbit ? 0.24 : 0.14)),
+          -this._fwdDir.z
+        )
         .normalize();
 
       const hitWall = collision.sweptSphereTest(
@@ -236,7 +235,7 @@ export class VehicleCameraRig {
         vehicle.collider.id
       );
 
-      const minOutsideHullDist = vehicle.halfLength + 0.72;
+      const minOutsideHullDist = vehicle.halfLength + 0.85;
       let targetDist = desiredDist;
       let pinchedNearWall = false;
 
@@ -259,12 +258,17 @@ export class VehicleCameraRig {
 
       let camX = this.smoothPivot.x + this._armDir.x * this.smoothDist;
       let camY = this.smoothPivot.y + this._armDir.y * this.smoothDist;
-      let camZ = this.smoothPivot.z + this._armDir.z * this.smoothDist;
+      const camZ = this.smoothPivot.z + this._armDir.z * this.smoothDist;
 
-      // If tightly pinched against a wall right behind bumper, elevate cleanly above the cab roof
-      if (pinchedNearWall || this.smoothDist < minOutsideHullDist) {
-        camY = Math.max(camY, vehicle.position.y + (isHeavy ? 3.15 : 2.8));
+      // Never allow exterior chase/orbit camera to dip below the vehicle roof/turret plane
+      const minRoofClearY = vehicle.position.y + (isHeavy ? 2.82 : 2.58);
+      camY = Math.max(camY, minRoofClearY);
+
+      // If tightly pinched against a wall right behind bumper, elevate cleanly above the cab roof and hide self-occluding cab meshes if within hull footprint
+      if (pinchedNearWall || this.smoothDist < minOutsideHullDist + 0.6) {
+        camY = Math.max(camY, vehicle.position.y + (isHeavy ? 3.2 : 2.88));
       }
+      this.setFpvHiddenVisibility(vehicle, this.smoothDist >= vehicle.halfLength + 0.55);
 
       // Ground terrain floor clearance clamp
       const terrainY = collision.getGroundHeightAt(camX, camZ);
@@ -286,6 +290,7 @@ export class VehicleCameraRig {
       this.debugRay.endZ = camZ;
       this.debugRay.clamped = hitWall;
     }
+
 
     const speedFovBoost = this.mode === 'chase' ? Math.min(6, Math.abs(vehicle.speed) * 0.22) : 0;
     const desiredFov = targetFov + speedFovBoost;

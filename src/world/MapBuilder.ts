@@ -193,9 +193,14 @@ export function buildWorldMap(
     );
     grp.position.set(x, y, z);
     chunkManager.registerObject(grp, x, z, scene);
-    collisionWorld.physicsWorld.registerBvhMesh(grp.children[0] as THREE.Mesh);
+    grp.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        collisionWorld.physicsWorld.registerBvhMesh(child);
+      }
+    });
 
     const halfW = w * 0.5;
+
     const halfD = d * 0.5;
     const halfDoor = doorW * 0.5;
     const halfWin = winW * 0.5;
@@ -368,6 +373,12 @@ export function buildWorldMap(
     const grp = buildWatchtower(assetManager, resourceManager, scope);
     grp.position.set(x, y, z);
     chunkManager.registerObject(grp, x, z, scene);
+    grp.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        collisionWorld.physicsWorld.registerBvhMesh(child);
+      }
+    });
+
 
     for (const [lx, lz, tagIdx] of [
       [-1.4, -1.4, 'NW'],

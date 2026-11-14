@@ -107,7 +107,14 @@ export function TitleScreen({
           >
             <Settings className="w-4 h-4" /> Settings
           </Button>
-          <Button variant="outline" size="md" onClick={() => nav('howToPlay')}>
+          <Button
+            variant="outline"
+            size="md"
+            onClick={() => {
+              onUiClick();
+              uiStore.getState().openHowToPlayFrom('title');
+            }}
+          >
             <BookOpen className="w-4 h-4" /> Controls Guide
           </Button>
         </div>

@@ -248,20 +248,32 @@ export function GameHUD({ onRequestPointerLock }: { onRequestPointerLock: () => 
             })}
           </div>
 
-          <div className="bg-[#0B0E11]/82 border border-zinc-800/90 px-3 py-2 rounded-sm space-y-1.5">
+          <div className="bg-[#0B0E11]/82 border border-zinc-800/90 px-3 py-2 rounded-sm space-y-2 min-w-[215px]">
             <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
               Mission Objectives
             </div>
-            {hud.objectives.map((o) => (
-              <div key={o.id} className="flex items-center justify-between gap-3 text-xs">
-                <span className={o.completed ? 'line-through text-emerald-400/80' : 'text-zinc-200'}>
-                  {o.title}
-                </span>
-                <span className="font-mono text-[11px] tabular-nums text-amber-400 shrink-0">
-                  {o.current}/{o.target}
-                </span>
-              </div>
-            ))}
+            {hud.objectives.map((o) => {
+              const distMeters =
+                !o.completed && o.markerPos
+                  ? Math.round(Math.hypot(o.markerPos.x - hud.playerX, o.markerPos.z - hud.playerZ))
+                  : null;
+              return (
+                <div key={o.id} className="space-y-0.5">
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className={o.completed ? 'line-through text-emerald-400/80' : 'text-zinc-100 font-medium'}>
+                      {o.title}
+                    </span>
+                    <span className="font-mono text-[11px] tabular-nums text-amber-400 shrink-0">
+                      {distMeters !== null ? `${distMeters}m · ` : ''}
+                      {o.current}/{o.target}
+                    </span>
+                  </div>
+                  {!o.completed && o.description && (
+                    <div className="text-[10px] text-zinc-400 leading-tight">{o.description}</div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
