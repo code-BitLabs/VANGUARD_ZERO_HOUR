@@ -243,7 +243,7 @@ export class EnemyManager {
         detectedPlayer: false,
         lastKnownPosition: null,
         lkpTimestampSec: -999,
-        initialGraceTimerSec: diffProf.reactionDelayBaseSec * 1.4 + (i % 3) * 0.25,
+        initialGraceTimerSec: diffProf.groundInitialGraceSec + (i % 3) * 0.25,
         stateTimerSec: 0,
         reactionTimerSec: 0,
         aimDurationSec: 0,
@@ -516,9 +516,14 @@ export class EnemyManager {
     }
 
     if (u.initialGraceTimerSec > 0) {
-      u.initialGraceTimerSec = Math.max(0, u.initialGraceTimerSec - dt);
-      if (u.initialGraceTimerSec > 0 && u.state === 'UNAWARE') {
-        return;
+      const acousticRadius = player.getActiveAcousticRadius(nowSec);
+      if (player.alive && acousticRadius > 0 && dist <= acousticRadius) {
+        u.initialGraceTimerSec = 0;
+      } else {
+        u.initialGraceTimerSec = Math.max(0, u.initialGraceTimerSec - dt);
+        if (u.initialGraceTimerSec > 0 && u.state === 'UNAWARE') {
+          return;
+        }
       }
     }
 

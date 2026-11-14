@@ -37,13 +37,22 @@ export function ArmoryScreen({
   const effectiveReload = (active.reloadTimeSec * Math.max(0.58, 1 - levels.reload * 0.08)).toFixed(2);
 
   return (
-    <div className="fixed inset-0 z-20 bg-[#0B0E11]/94 flex flex-col p-5 sm:p-8 overflow-y-auto">
-      <div className="max-w-6xl w-full mx-auto flex flex-col gap-6 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+    <div
+      className="fixed inset-0 z-20 bg-[#0B0E11]/94 flex flex-col overflow-y-auto"
+      style={{
+        paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="max-w-6xl w-full mx-auto flex flex-col gap-4 sm:gap-6 flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="sm"
+              className="min-h-[44px]"
               onClick={() => {
                 onUiClick();
                 uiStore.getState().setScreen('title');
@@ -55,21 +64,21 @@ export function ArmoryScreen({
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-cyan-400">
                 All 9 Arsenal Slots + M67 Grenades
               </p>
-              <h2 className="font-display text-2xl font-bold uppercase tracking-wider text-white">
+              <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-wider text-white">
                 Tactical Armory
               </h2>
             </div>
           </div>
 
-          <div className="bg-[#141920] border border-amber-500/50 px-4 py-2 rounded-sm font-mono text-xs">
+          <div className="bg-[#141920] border border-amber-500/50 px-3.5 py-2 rounded-sm font-mono text-xs">
             <span className="text-zinc-400 mr-2">REQUISITION CREDITS:</span>
             <span className="text-amber-400 font-bold text-sm tabular-nums">{save.requisitionPoints} REQ</span>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6 flex-1">
           {/* Weapon Roster */}
-          <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2">
+          <div className="md:col-span-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2 content-start">
             {WEAPON_CATALOG.map((w) => {
               const activeCard = w.id === active.id;
               return (
@@ -80,7 +89,7 @@ export function ArmoryScreen({
                     onUiClick();
                     setSelectedId(w.id);
                   }}
-                  className={`flex items-center justify-between px-4 py-2.5 rounded-sm border text-left transition-colors cursor-pointer ${
+                  className={`flex items-center justify-between min-h-[48px] px-3.5 py-2 rounded-sm border text-left transition-colors cursor-pointer ${
                     activeCard
                       ? 'bg-[#1B222C] border-amber-500'
                       : 'bg-[#141920] border-zinc-800 hover:border-zinc-600'
@@ -97,27 +106,27 @@ export function ArmoryScreen({
           </div>
 
           {/* Weapon Inspection & Upgrades */}
-          <Card className="lg:col-span-7 flex flex-col">
-            <CardContent className="flex flex-col justify-between gap-5 flex-1">
+          <Card className="md:col-span-7 flex flex-col">
+            <CardContent className="flex flex-col justify-between gap-4 sm:gap-5 flex-1">
               <div>
-                <div className="bg-[#0B0E11] border border-zinc-800 p-6 rounded-sm flex flex-col items-center justify-center">
-                  <WeaponSilhouette weaponId={active.id} className="w-56 h-20 text-amber-400" />
-                  <div className="font-mono text-[11px] uppercase tracking-widest text-zinc-400 mt-3">
+                <div className="bg-[#0B0E11] border border-zinc-800 p-4 sm:p-6 rounded-sm flex flex-col items-center justify-center">
+                  <WeaponSilhouette weaponId={active.id} className="w-48 sm:w-56 h-16 sm:h-20 text-amber-400" />
+                  <div className="font-mono text-[11px] uppercase tracking-widest text-zinc-400 mt-2.5">
                     {active.fireModes.join(' / ').toUpperCase()} • {active.projectileType.replace('_', ' ').toUpperCase()}
                   </div>
                 </div>
 
-                <h3 className="font-display text-2xl font-bold uppercase text-white mt-4">{active.name}</h3>
-                <p className="text-sm text-zinc-300 mt-1">{active.description}</p>
+                <h3 className="font-display text-xl sm:text-2xl font-bold uppercase text-white mt-3.5">{active.name}</h3>
+                <p className="text-xs sm:text-sm text-zinc-300 mt-1">{active.description}</p>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-3.5">
                   <StatBox label="Damage" value={`${effectiveDamage}${active.pelletCount > 1 ? `x${active.pelletCount}` : ''}`} />
                   <StatBox label="Rate (RPM)" value={String(active.fireRateRpm)} />
                   <StatBox label="Magazine" value={`${effectiveMag}`} />
                   <StatBox label="Reload" value={`${effectiveReload}s`} />
                 </div>
 
-                <div className="mt-5 space-y-2.5">
+                <div className="mt-4 space-y-2">
                   <div className="font-mono text-xs uppercase tracking-widest text-zinc-400">
                     Field Modifications
                   </div>
@@ -129,12 +138,12 @@ export function ArmoryScreen({
                     return (
                       <div
                         key={u.key}
-                        className="bg-[#0B0E11] border border-zinc-800 px-4 py-2.5 rounded-sm flex items-center justify-between gap-4"
+                        className="bg-[#0B0E11] border border-zinc-800 px-3.5 py-2 rounded-sm flex items-center justify-between gap-3"
                       >
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="font-medium text-zinc-100">{u.label}</span>
-                            <span className="font-mono text-zinc-400">{u.effect} (Lv {lv}/5)</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between text-xs mb-1 gap-2">
+                            <span className="font-medium text-zinc-100 truncate">{u.label}</span>
+                            <span className="font-mono text-zinc-400 shrink-0">{u.effect} (Lv {lv}/5)</span>
                           </div>
                           <ProgressBar value={(lv / 5) * 100} className="h-1.5" />
                         </div>
@@ -146,7 +155,7 @@ export function ArmoryScreen({
                             onUiClick();
                             upgradeWeapon(active.id, u.key);
                           }}
-                          className="shrink-0 font-mono text-[11px]"
+                          className="shrink-0 min-h-[44px] font-mono text-[11px]"
                         >
                           <ArrowUpCircle className="w-3.5 h-3.5" />
                           {maxed ? 'MAXED' : `${cost} REQ`}
@@ -157,12 +166,13 @@ export function ArmoryScreen({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-zinc-800 flex items-center justify-between gap-4">
-                <span className="font-mono text-xs text-zinc-400">
-                  M67 Fragmentation Grenades [G] included in every deployment
+              <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-3">
+                <span className="font-mono text-[11px] text-zinc-400">
+                  M67 Fragmentation Grenades included in every deployment
                 </span>
                 <Button
                   size="lg"
+                  className="min-h-[44px]"
                   onClick={() => {
                     onUiClick();
                     onDeployWithWeapon(active.id);

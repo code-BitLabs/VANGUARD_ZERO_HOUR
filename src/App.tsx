@@ -1,5 +1,7 @@
 import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { Smartphone } from 'lucide-react';
 import { GameEngine } from '@/src/engine/GameEngine';
+import { InputManager } from '@/src/engine/InputManager';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
@@ -7,6 +9,7 @@ import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { progressionStore } from '@/src/stores/progressionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
+import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { GameHUD } from '@/src/ui/hud/GameHUD';
 import { CombatDebugOverlay } from '@/src/ui/debug/CombatDebugOverlay';
 import { ErrorBoundary } from '@/src/ui/primitives/ErrorBoundary';
@@ -44,15 +47,21 @@ function MenuSuspenseFallback() {
 export default function App() {
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const [inputManager, setInputManager] = useState<InputManager | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
 
   const screen = useUIStore((s) => s.screen);
   const previousMenuScreen = useUIStore((s) => s.previousMenuScreen);
   const diagnosticsOpen = useUIStore((s) => s.diagnosticsOpen);
+  const touchHudOverride = useUIStore((s) => s.touchHudOverride);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
+  const touchMode = useSettingsStore((s) => s.input.touchMode);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
+
+  const viewport = useViewportMode();
+  const touchControlsVisible = resolveTouchControlsVisible(touchMode, touchHudOverride, viewport);
 
   useEffect(() => {
     const container = canvasContainerRef.current;
@@ -61,6 +70,7 @@ export default function App() {
     try {
       const engine = new GameEngine(container);
       engineRef.current = engine;
+      setInputManager(engine.getInputManager());
 
       const onResize = () => {
         engine.resize();
@@ -79,6 +89,7 @@ export default function App() {
 
       return () => {
         window.removeEventListener('resize', onResize);
+        setInputManager(null);
         engine.dispose();
         engineRef.current = null;
       };
@@ -86,6 +97,22 @@ export default function App() {
       setEngineError(err instanceof Error ? err.message : 'WebGL initialization failed.');
     }
   }, []);
+
+  // Re-sync renderer canvas whenever settled viewport / visualViewport dimensions change
+  useEffect(() => {
+    engineRef.current?.resize();
+  }, [viewport.width, viewport.height]);
+
+  // Portrait orientation gate: auto-pause active combat & release held inputs
+  useEffect(() => {
+    uiStore.getState().setPortraitBlocked(viewport.shouldBlockPortrait);
+    if (viewport.shouldBlockPortrait) {
+      engineRef.current?.getInputManager().clearAllInputs();
+      if (uiStore.getState().screen === 'playing') {
+        engineRef.current?.pauseMission();
+      }
+    }
+  }, [viewport.shouldBlockPortrait]);
 
   const handleDeploy = (missionId: number, diff: Difficulty, weaponId?: WeaponId) => {
     void engineRef.current?.startMission(missionId, diff, weaponId);
@@ -98,13 +125,13 @@ export default function App() {
   return (
     <ErrorBoundary>
       <TooltipProvider>
-        <div className="relative w-full h-full overflow-hidden bg-[#0B0E11] select-none">
+        <div className="relative w-full h-[100dvh] overflow-hidden bg-[#0B0E11] select-none">
           {/* Isolated WebGL Three.js Canvas Sibling */}
           <div
             ref={canvasContainerRef}
             className="fixed inset-0 z-0"
             onClick={() => {
-              if (screen === 'playing') {
+              if (screen === 'playing' && !touchControlsVisible && !viewport.isCoarsePointer) {
                 engineRef.current?.requestPointerLock();
               }
             }}
@@ -123,7 +150,7 @@ export default function App() {
 
           {screen === 'title' && (
             <TitleScreen
-              onQuickPlay={() => handleDeploy(selectedMissionId, difficulty)}
+              onQuickDeploy={() => handleDeploy(selectedMissionId, difficulty)}
               onUiClick={handleUiClick}
             />
           )}
@@ -145,6 +172,8 @@ export default function App() {
 
             {screen === 'settings' && (
               <SettingsPanel
+                gpuReport={engineRef.current?.getGpuCapabilityReport() ?? null}
+                onReapplyAutoGraphics={() => engineRef.current?.reapplyAutoGraphics() ?? null}
                 onBack={() => {
                   handleUiClick();
                   uiStore.getState().setScreen(previousMenuScreen);
@@ -167,7 +196,12 @@ export default function App() {
           )}
 
           {screen === 'playing' && (
-            <GameHUD onRequestPointerLock={() => engineRef.current?.requestPointerLock()} />
+            <GameHUD
+              onRequestPointerLock={() => engineRef.current?.requestPointerLock()}
+              onPause={() => engineRef.current?.pauseMission()}
+              inputManager={inputManager}
+              touchControlsVisible={touchControlsVisible}
+            />
           )}
 
           {screen === 'paused' && (
@@ -195,9 +229,40 @@ export default function App() {
           )}
 
           <ToastAndRecoveryLayer />
+
+          {/* Portrait Orientation Enforcement Gate for Mobile Smartphones */}
+          {viewport.shouldBlockPortrait && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Rotate Device to Landscape"
+              className="fixed inset-0 z-[70] h-[100dvh] bg-[#0B0E11] flex flex-col items-center justify-center p-6 text-center"
+              style={{
+                paddingTop: 'max(24px, env(safe-area-inset-top, 0px))',
+                paddingBottom: 'max(24px, env(safe-area-inset-bottom, 0px))',
+                paddingLeft: 'max(24px, env(safe-area-inset-left, 0px))',
+                paddingRight: 'max(24px, env(safe-area-inset-right, 0px))',
+              }}
+            >
+              <div className="max-w-sm bg-[#141920] border border-amber-500/70 p-6 rounded-sm space-y-3 shadow-2xl">
+                <Smartphone className="w-10 h-10 text-amber-400 mx-auto rotate-90" />
+                <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-amber-500">
+                  Landscape Display Required
+                </p>
+                <h2 className="font-display text-2xl font-bold uppercase text-white">
+                  Rotate Device to Landscape
+                </h2>
+                <p className="text-xs text-zinc-300 leading-relaxed">
+                  VANGUARD: ZERO HOUR uses twin-stick landscape tactical controls and wide-angle combat optics.
+                  Rotate your phone sideways to continue.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </TooltipProvider>
     </ErrorBoundary>
   );
 }
+
 

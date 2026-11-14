@@ -5,6 +5,16 @@ import { Card, CardContent } from '@/src/ui/primitives/Card';
 
 const SECTIONS = [
   {
+    title: 'Mobile Landscape Touch Controls',
+    items: [
+      ['Left Thumbstick', 'Move & Strafe; push outer edge for Auto-Sprint'],
+      ['Right Screen Drag', 'Aim Camera / Steer Turret (never fires accidentally)'],
+      ['FIRE / ADS Buttons', 'Dedicated Fire button + momentary Hold-to-ADS'],
+      ['Cluster Actions', 'Reload, Jump, Crouch, Grenade, Prev/Next Weapon, C4, Strike'],
+      ['Top-Right HUD', 'Touch Overlay Toggle & Pause Button (min 44px targets)'],
+    ],
+  },
+  {
     title: 'Infantry Movement & Stance',
     items: [
       ['W / A / S / D', 'Move & Strafe'],
@@ -40,28 +50,38 @@ const SECTIONS = [
 
 export function HowToPlayModal({ onBack }: { onBack: () => void }) {
   return (
-    <div className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-center justify-center p-5 overflow-y-auto">
-      <div className="max-w-4xl w-full space-y-5">
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+    <div
+      className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-start sm:items-center justify-center overflow-y-auto"
+      style={{
+        paddingTop: 'max(14px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="max-w-5xl w-full space-y-4 my-auto">
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div>
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-amber-500">Field Manual</p>
-            <h2 className="font-display text-2xl font-bold uppercase text-white">Combat Controls & Systems</h2>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500">Field Manual</p>
+            <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
+              Combat Controls &amp; Systems
+            </h2>
           </div>
-          <Button variant="secondary" size="sm" onClick={onBack}>
+          <Button variant="secondary" size="sm" className="min-h-[44px] px-4" onClick={onBack}>
             <ArrowLeft className="w-4 h-4" /> Back
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {SECTIONS.map((sec) => (
             <Card key={sec.title}>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-2.5">
                 <h3 className="font-display text-sm font-bold uppercase tracking-wider text-amber-400">
                   {sec.title}
                 </h3>
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   {sec.items.map(([k, desc]) => (
-                    <div key={k} className="border-b border-zinc-800/70 pb-2 last:border-0 last:pb-0">
+                    <div key={k} className="border-b border-zinc-800/70 pb-1.5 last:border-0 last:pb-0">
                       <div className="font-mono text-xs text-cyan-400">{k}</div>
                       <div className="text-xs text-zinc-300 mt-0.5">{desc}</div>
                     </div>

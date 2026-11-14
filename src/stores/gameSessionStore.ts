@@ -29,6 +29,11 @@ export interface EngineDiagnosticsSnapshot {
   activeEnemies: number;
   renderScale: number;
   governorTier: string;
+  fps1PercentLow?: number;
+  renderWidth?: number;
+  renderHeight?: number;
+  pixelRatio?: number;
+  memoryUsedMb?: number | null;
 }
 
 export interface GameSessionState {
@@ -115,6 +120,11 @@ const DEFAULT_DIAG: EngineDiagnosticsSnapshot = {
   activeEnemies: 0,
   renderScale: 1,
   governorTier: 'high',
+  fps1PercentLow: 60,
+  renderWidth: 1280,
+  renderHeight: 720,
+  pixelRatio: 1,
+  memoryUsedMb: null,
 };
 
 let hitSeq = 0;

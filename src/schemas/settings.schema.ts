@@ -20,13 +20,32 @@ export const ControlBindingsSchema = z.object({
 });
 export type ControlBindings = z.infer<typeof ControlBindingsSchema>;
 
+export const QualityModeSchema = z.enum(['auto', 'manual']);
+export type QualityMode = z.infer<typeof QualityModeSchema>;
+
+export const SubQualityLevelSchema = z.enum(['low', 'medium', 'high']);
+export type SubQualityLevel = z.infer<typeof SubQualityLevelSchema>;
+
+export const DrawDistanceSettingSchema = z.enum(['auto', 'short', 'medium', 'long', 'ultra']);
+export type DrawDistanceSetting = z.infer<typeof DrawDistanceSettingSchema>;
+
+export const FpsCapSchema = z.union([z.literal(0), z.literal(30), z.literal(60), z.literal(120)]);
+export type FpsCapSetting = z.infer<typeof FpsCapSchema>;
+
 export const GraphicsSettingsSchema = z.object({
+  qualityMode: QualityModeSchema.default('auto'),
+  autoDetectedPresetApplied: z.boolean().default(false),
   quality: QualityTierSchema.default('high'),
   fov: z.number().min(65).max(110).default(78),
   adaptiveGovernor: z.boolean().default(true),
   shadowsEnabled: z.boolean().default(true),
   bloomEnabled: z.boolean().default(true),
-  renderScale: z.number().min(0.6).max(1.0).default(1.0),
+  renderScale: z.number().min(0.5).max(1.0).default(1.0),
+  textureQuality: SubQualityLevelSchema.default('high'),
+  antialiasing: z.boolean().default(true),
+  effectsQuality: SubQualityLevelSchema.default('high'),
+  drawDistance: DrawDistanceSettingSchema.default('auto'),
+  fpsCap: FpsCapSchema.default(0),
   headBobIntensity: z.number().min(0).max(1.5).default(0.8),
 });
 export type GraphicsSettings = z.infer<typeof GraphicsSettingsSchema>;
@@ -40,11 +59,23 @@ export const AudioSettingsSchema = z.object({
 });
 export type AudioSettings = z.infer<typeof AudioSettingsSchema>;
 
+export const TouchModeSchema = z.enum(['auto', 'always_on', 'always_off']);
+export type TouchMode = z.infer<typeof TouchModeSchema>;
+
+export const TouchFireBehaviorSchema = z.enum(['dedicated', 'ads_on_fire']);
+export type TouchFireBehavior = z.infer<typeof TouchFireBehaviorSchema>;
+
 export const InputSettingsSchema = z.object({
   mouseSensitivity: z.number().min(0.1).max(4.0).default(1.0),
   adsSensitivity: z.number().min(0.1).max(2.0).default(0.6),
   invertY: z.boolean().default(false),
   gamepadEnabled: z.boolean().default(true),
+  touchMode: TouchModeSchema.default('auto'),
+  touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
+  touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
+  touchButtonOpacity: z.number().min(0.35).max(0.95).default(0.72),
+  autoSprint: z.boolean().default(true),
+  touchFireBehavior: TouchFireBehaviorSchema.default('dedicated'),
   bindings: ControlBindingsSchema.default(() => ControlBindingsSchema.parse({})),
 });
 export type InputSettings = z.infer<typeof InputSettingsSchema>;

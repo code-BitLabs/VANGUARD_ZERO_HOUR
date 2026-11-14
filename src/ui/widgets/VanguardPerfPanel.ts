@@ -72,12 +72,16 @@ class VanguardPerfPanel extends HTMLElement {
     if (!rowsEl) return;
 
     const fpsCls = d.fps >= 50 ? 'ok' : 'warn';
+    const low1 = d.fps1PercentLow ?? d.fps;
+    const resStr =
+      d.renderWidth && d.renderHeight ? `${d.renderWidth}×${d.renderHeight}` : '--';
+    const memStr = d.memoryUsedMb != null ? `${d.memoryUsedMb} MB` : 'N/A';
     rowsEl.innerHTML = `
-      <div class="row"><span class="lbl">FPS / Frame</span><span class="val ${fpsCls}">${d.fps} / ${d.frameMs.toFixed(1)}ms</span></div>
-      <div class="row"><span class="lbl">Governor</span><span class="val">${d.governorTier.toUpperCase()} (${Math.round(d.renderScale * 100)}%)</span></div>
+      <div class="row"><span class="lbl">FPS / 1% Low</span><span class="val ${fpsCls}">${d.fps} / ${low1} (${d.frameMs.toFixed(1)}ms)</span></div>
+      <div class="row"><span class="lbl">Governor / Res</span><span class="val">${d.governorTier.toUpperCase()} ${Math.round(d.renderScale * 100)}% (${resStr})</span></div>
       <div class="row"><span class="lbl">Phys / AI / Game</span><span class="val">${d.physicsMs.toFixed(1)} / ${d.aiMs.toFixed(1)} / ${d.gameplayMs.toFixed(1)}ms</span></div>
       <div class="row"><span class="lbl">Draw Calls / Tris</span><span class="val">${d.drawCalls} / ${(d.triangles / 1000).toFixed(1)}k</span></div>
-      <div class="row"><span class="lbl">Geo / Tex</span><span class="val">${d.activeGeometries} / ${d.activeTextures}</span></div>
+      <div class="row"><span class="lbl">Geo / Tex / Mem</span><span class="val">${d.activeGeometries} / ${d.activeTextures} / ${memStr}</span></div>
       <div class="row"><span class="lbl">Shared / Mission Res</span><span class="val">${d.activeSharedRes} / ${d.activeMissionRes}</span></div>
       <div class="row"><span class="lbl">VFX / Voices / AI</span><span class="val">${d.activePooledVfx} / ${d.activeAudioVoices} / ${d.activeEnemies}</span></div>
     `;

@@ -55,6 +55,7 @@ export class AudioManager {
   private musicIntervalId = 0;
   private settings: AudioSettings;
   private initialized = false;
+  private suspendedByLifecycle = false;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -75,6 +76,7 @@ export class AudioManager {
 
   unlock(): void {
     try {
+      this.suspendedByLifecycle = false;
       if (!this.ctx) {
         const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         if (!AudioCtx) return;
@@ -96,14 +98,31 @@ export class AudioManager {
       if (this.ctx.state === 'suspended') {
         void this.ctx.resume();
       }
+      Howler.mute(this.settings.muted);
     } catch {
       // Fail gracefully if Web Audio is blocked or unavailable
     }
   }
 
+  suspend(): void {
+    this.suspendedByLifecycle = true;
+    Howler.mute(true);
+    if (this.ctx && this.ctx.state === 'running') {
+      void this.ctx.suspend().catch(() => {});
+    }
+  }
+
+  resume(): void {
+    this.suspendedByLifecycle = false;
+    Howler.mute(this.settings.muted);
+    if (this.ctx && this.ctx.state === 'suspended') {
+      void this.ctx.resume().catch(() => {});
+    }
+  }
+
   applySettings(settings: AudioSettings): void {
     this.settings = settings;
-    Howler.mute(settings.muted);
+    Howler.mute(this.suspendedByLifecycle || settings.muted);
     Howler.volume(settings.masterVolume);
 
     if (!this.ctx || !this.masterGain || !this.sfxGain || !this.musicGain || !this.ambienceGain) return;

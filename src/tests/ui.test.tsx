@@ -1,6 +1,7 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { missionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import { progressionStore } from '@/src/stores/progressionStore';
 import { uiStore } from '@/src/stores/uiStore';
@@ -11,19 +12,26 @@ import { TitleScreen } from '@/src/ui/screens/TitleScreen';
 describe('Tactical UI Screens & HUD', () => {
   afterEach(() => {
     cleanup();
+    uiStore.getState().setTouchHudOverride(null);
   });
 
-  it('renders TitleScreen with Play Campaign CTA and navigates to CampaignScreen with all 5 missions unlocked', () => {
+  it('routes Play Campaign to CampaignScreen first, marks briefing seen on deploy, and shows Quick Deploy for returning players', () => {
     progressionStore.getState().resetAllProgress();
-    const onQuickPlay = vi.fn();
+    missionSelectionStore.setState({ selectedMissionId: 1, difficulty: 'normal', hasSeenCampaignBriefing: false });
+    uiStore.getState().setScreen('title');
+
+    const onQuickDeploy = vi.fn();
     const onUiClick = vi.fn();
 
-    render(<TitleScreen onQuickPlay={onQuickPlay} onUiClick={onUiClick} />);
+    render(<TitleScreen onQuickDeploy={onQuickDeploy} onUiClick={onUiClick} />);
     expect(screen.getByText(/VANGUARD/i)).toBeTruthy();
 
+    // First-time Play Campaign goes to CampaignScreen instead of deploying immediately
     fireEvent.click(screen.getByRole('button', { name: /Play Campaign/i }));
-    expect(onQuickPlay).toHaveBeenCalledTimes(1);
+    expect(onQuickDeploy).not.toHaveBeenCalled();
+    expect(uiStore.getState().screen).toBe('campaign');
 
+    // Select Operation button also routes to CampaignScreen
     fireEvent.click(screen.getByRole('button', { name: /Select Operation/i }));
     expect(uiStore.getState().screen).toBe('campaign');
 
@@ -38,9 +46,16 @@ describe('Tactical UI Screens & HUD', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Deploy Operation/i }));
     expect(onDeploy).toHaveBeenCalledTimes(1);
+    expect(missionSelectionStore.getState().hasSeenCampaignBriefing).toBe(true);
+
+    // Returning player now sees Quick Deploy on TitleScreen
+    cleanup();
+    render(<TitleScreen onQuickDeploy={onQuickDeploy} onUiClick={onUiClick} />);
+    fireEvent.click(screen.getByRole('button', { name: /Quick Deploy/i }));
+    expect(onQuickDeploy).toHaveBeenCalledTimes(1);
   });
 
-  it('renders GameHUD live telemetry for health, armor, weapon ammo, and objectives', () => {
+  it('renders GameHUD live telemetry, Pause button, Touch HUD toggle, and MobileTouchControls when enabled', () => {
     gameSessionStore.getState().updateHudSnapshot({
       ...gameSessionStore.getState().hud,
       health: 84,
@@ -55,12 +70,26 @@ describe('Tactical UI Screens & HUD', () => {
       ],
     });
 
-    render(<GameHUD onRequestPointerLock={() => {}} />);
+    const onPause = vi.fn();
+    render(
+      <GameHUD
+        onRequestPointerLock={() => {}}
+        onPause={onPause}
+        touchControlsVisible={true}
+      />
+    );
     expect(screen.getByText('84')).toBeTruthy();
-    expect(screen.getByText('62')).toBeTruthy();
+    expect(screen.getByText(/ARM 62/i)).toBeTruthy();
     expect(screen.getByText('AX-50')).toBeTruthy();
     expect(screen.getByText('Destroy AA Radar Relays')).toBeTruthy();
     expect(screen.getByText('1/2')).toBeTruthy();
+    expect(screen.getByTestId('mobile-touch-controls')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Pause Mission/i }));
+    expect(onPause).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Toggle Touch Controls/i }));
+    expect(uiStore.getState().touchHudOverride).toBe(false);
   });
 
   it('renders visible [F4] HUD launcher and toggles CombatDebugOverlay between corner bubble and full workbench', async () => {

@@ -568,8 +568,8 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     unit.position.set(0, 0, -18);
     unit.yaw = 0;
 
-    // Step until enemy acquires player, clears reaction delay, and enters ENGAGING
-    for (let i = 0; i < 45; i++) {
+    // Step until enemy clears initial spawn grace (1.6s on normal), acquires player, clears reaction delay, and enters ENGAGING
+    for (let i = 0; i < 75; i++) {
       telemetry.tickExposure(0.05, true);
       localEn.update(0.05, player, collision, [], stubWorker, 0.1);
       if (unit.state === 'ENGAGING') break;

@@ -68,6 +68,11 @@ export class PerformanceMonitor {
     lastSpikeSubsystem: 'none',
     governorTier: 'high',
     renderScale: 1,
+    fps1PercentLow: 60,
+    renderWidth: 1280,
+    renderHeight: 720,
+    pixelRatio: 1,
+    memoryUsedMb: null,
     gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
   };
 
@@ -163,18 +168,27 @@ export class PerformanceMonitor {
       const avgFrameMs = n > 0 ? sorted.reduce((a, b) => a + b, 0) / n : this.smoothedFrameMs;
       const p95FrameMs = n > 0 ? sorted[Math.min(n - 1, Math.floor(n * 0.95))] : this.smoothedFrameMs;
       const p99FrameMs = n > 0 ? sorted[Math.min(n - 1, Math.floor(n * 0.99))] : this.smoothedFrameMs;
+      const fps1PercentLow = Math.max(1, Math.round(1000 / Math.max(1, p99FrameMs)));
 
       const drawInfo = renderer.getDrawInfo();
+      const renderMetrics = renderer.getRenderMetrics();
       const resSnap = resourceManager.getSnapshot();
       const profile = governor.getProfile();
       const lastSpikeAgeSec =
         this.lastSpikeAtSec >= 0 ? Number((this.missionElapsedSec - this.lastSpikeAtSec).toFixed(1)) : 999;
+
+      const perfMem = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+      const memoryUsedMb =
+        perfMem && typeof perfMem.usedJSHeapSize === 'number'
+          ? Number((perfMem.usedJSHeapSize / (1024 * 1024)).toFixed(1))
+          : null;
 
       this.latestSnapshot = {
         fps,
         avgFps,
         minFps: this.minFps,
         maxFps: this.maxFps,
+        fps1PercentLow,
         frameMs: Number(this.smoothedFrameMs.toFixed(2)),
         avgFrameMs: Number(avgFrameMs.toFixed(2)),
         p95FrameMs: Number(p95FrameMs.toFixed(2)),
@@ -198,11 +212,16 @@ export class PerformanceMonitor {
         lastSpikeSubsystem: this.lastSpikeSubsystem,
         governorTier: governor.getTier(),
         renderScale: profile.renderScale,
+        renderWidth: renderMetrics.renderWidth,
+        renderHeight: renderMetrics.renderHeight,
+        pixelRatio: renderMetrics.pixelRatio,
+        memoryUsedMb,
         gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
       };
 
       gameSessionStore.getState().updateDiagnostics({
         fps,
+        fps1PercentLow,
         frameMs: Number(this.smoothedFrameMs.toFixed(2)),
         physicsMs: Number(this.phases.physics.toFixed(2)),
         aiMs: Number(this.phases.ai.toFixed(2)),
@@ -219,6 +238,10 @@ export class PerformanceMonitor {
         activeEnemies,
         renderScale: profile.renderScale,
         governorTier: governor.getTier(),
+        renderWidth: renderMetrics.renderWidth,
+        renderHeight: renderMetrics.renderHeight,
+        pixelRatio: renderMetrics.pixelRatio,
+        memoryUsedMb,
       });
     }
   }

@@ -46,6 +46,7 @@ export const DifficultyCombatProfileSchema = z.object({
   damageMultiplier: z.number().min(0.2).max(3.0),
   damageBurstThreshold2s: z.number().min(15).max(200),
   airInitialGraceSec: z.number().min(0.5).max(15),
+  groundInitialGraceSec: z.number().min(0.2).max(10),
 });
 export type DifficultyCombatProfile = z.infer<typeof DifficultyCombatProfileSchema>;
 
@@ -110,6 +111,7 @@ export const DIFFICULTY_COMBAT_PROFILES: Record<
     damageMultiplier: 0.75,
     damageBurstThreshold2s: 42,
     airInitialGraceSec: 5.5,
+    groundInitialGraceSec: 2.2,
   }),
   normal: DifficultyCombatProfileSchema.parse({
     difficulty: 'normal',
@@ -125,6 +127,7 @@ export const DIFFICULTY_COMBAT_PROFILES: Record<
     damageMultiplier: 1.0,
     damageBurstThreshold2s: 55,
     airInitialGraceSec: 4.5,
+    groundInitialGraceSec: 1.6,
   }),
   hard: DifficultyCombatProfileSchema.parse({
     difficulty: 'hard',
@@ -140,6 +143,7 @@ export const DIFFICULTY_COMBAT_PROFILES: Record<
     damageMultiplier: 1.15,
     damageBurstThreshold2s: 70,
     airInitialGraceSec: 3.8,
+    groundInitialGraceSec: 1.1,
   }),
   extreme: DifficultyCombatProfileSchema.parse({
     difficulty: 'extreme',
@@ -155,6 +159,7 @@ export const DIFFICULTY_COMBAT_PROFILES: Record<
     damageMultiplier: 1.3,
     damageBurstThreshold2s: 88,
     airInitialGraceSec: 3.0,
+    groundInitialGraceSec: 0.7,
   }),
 };
 

@@ -31,11 +31,16 @@ export interface UIStoreState {
   combatDebugCollapsed: boolean;
   debugSimPaused: boolean;
   contextLost: boolean;
+  isPortraitBlocked: boolean;
+  touchHudOverride: boolean | null;
   toast: ToastNotice | null;
   setScreen: (screen: ScreenState) => void;
   openSettingsFrom: (from: 'title' | 'campaign' | 'paused') => void;
   openHowToPlayFrom: (from: 'title' | 'campaign' | 'paused') => void;
   setPointerLocked: (locked: boolean) => void;
+  setPortraitBlocked: (blocked: boolean) => void;
+  setTouchHudOverride: (override: boolean | null) => void;
+  toggleTouchHudOverride: (currentlyVisible: boolean) => void;
   toggleDiagnostics: () => void;
   setCombatDebugOpen: (open: boolean) => void;
   toggleCombatDebug: () => void;
@@ -67,11 +72,16 @@ export const uiStore = createStore<UIStoreState>()(
     combatDebugCollapsed: settingsStore.getState().developer.combatDebugCollapsed,
     debugSimPaused: false,
     contextLost: false,
+    isPortraitBlocked: false,
+    touchHudOverride: null,
     toast: null,
     setScreen: (screen) => set({ screen }),
     openSettingsFrom: (from) => set({ previousMenuScreen: from, screen: 'settings' }),
     openHowToPlayFrom: (from) => set({ previousMenuScreen: from, screen: 'howToPlay' }),
     setPointerLocked: (pointerLocked) => set({ pointerLocked }),
+    setPortraitBlocked: (isPortraitBlocked) => set({ isPortraitBlocked }),
+    setTouchHudOverride: (touchHudOverride) => set({ touchHudOverride }),
+    toggleTouchHudOverride: (currentlyVisible) => set({ touchHudOverride: !currentlyVisible }),
     toggleDiagnostics: () => {
       if (!isDeveloperModeActive()) {
         set({ diagnosticsOpen: false });

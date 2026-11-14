@@ -12,6 +12,9 @@ export const ObjectiveTypeSchema = z.enum([
 ]);
 export type ObjectiveType = z.infer<typeof ObjectiveTypeSchema>;
 
+export const AirUnitTypeSchema = z.enum(['helicopter', 'attack_drone', 'fighter_jet', 'transport', 'gunship']);
+export type AirUnitType = z.infer<typeof AirUnitTypeSchema>;
+
 export const ObjectiveSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -19,6 +22,7 @@ export const ObjectiveSchema = z.object({
   type: ObjectiveTypeSchema,
   targetCount: z.number().int().positive(),
   markerPos: Vec3Schema,
+  targetAirUnitTypes: z.array(AirUnitTypeSchema).optional(),
 });
 export type MissionObjectiveConfig = z.infer<typeof ObjectiveSchema>;
 
@@ -28,9 +32,6 @@ export const WaveSpawnSchema = z.object({
   spawnArea: Vec3Schema,
   radius: z.number().positive().default(14),
 });
-
-export const AirUnitTypeSchema = z.enum(['helicopter', 'attack_drone', 'fighter_jet', 'transport', 'gunship']);
-export type AirUnitType = z.infer<typeof AirUnitTypeSchema>;
 
 export const AirSpawnSchema = z.object({
   type: AirUnitTypeSchema,

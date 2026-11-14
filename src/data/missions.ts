@@ -40,6 +40,7 @@ const RAW_MISSIONS: MissionConfig[] = [
         type: 'air_defense',
         targetCount: 1,
         markerPos: { x: 0, y: 28, z: -15 },
+        targetAirUnitTypes: ['helicopter'],
       },
     ],
     initialWaves: [
@@ -139,6 +140,7 @@ const RAW_MISSIONS: MissionConfig[] = [
         type: 'air_defense',
         targetCount: 4,
         markerPos: { x: 0, y: 12, z: 0 },
+        targetAirUnitTypes: ['attack_drone'],
       },
       {
         id: 'obj_night_helis',
@@ -147,6 +149,7 @@ const RAW_MISSIONS: MissionConfig[] = [
         type: 'air_defense',
         targetCount: 3,
         markerPos: { x: 12, y: 30, z: -20 },
+        targetAirUnitTypes: ['helicopter', 'gunship'],
       },
       {
         id: 'obj_night_operators',
@@ -206,11 +209,12 @@ const RAW_MISSIONS: MissionConfig[] = [
       },
       {
         id: 'obj_jungle_air',
-        title: 'Down Jungle Recon Helicopters',
-        description: 'Destroy enemy air support circling the river canopy.',
+        title: 'Down Jungle Recon Air Support',
+        description: 'Destroy the recon helicopter and attack drones circling the river canopy.',
         type: 'air_defense',
         targetCount: 2,
         markerPos: { x: -12, y: 26, z: -24 },
+        targetAirUnitTypes: ['helicopter', 'attack_drone'],
       },
     ],
     initialWaves: [
@@ -267,6 +271,7 @@ const RAW_MISSIONS: MissionConfig[] = [
         type: 'air_defense',
         targetCount: 1,
         markerPos: { x: 0, y: 34, z: -22 },
+        targetAirUnitTypes: ['gunship'],
       },
       {
         id: 'obj_ind_extract',

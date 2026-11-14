@@ -252,6 +252,11 @@ export interface PerformanceTelemetrySnapshot {
   lastSpikeSubsystem: string;
   governorTier: string;
   renderScale: number;
+  fps1PercentLow?: number;
+  renderWidth?: number;
+  renderHeight?: number;
+  pixelRatio?: number;
+  memoryUsedMb?: number | null;
   gpuTimerNote: string;
 }
 
@@ -598,6 +603,11 @@ export class CombatTelemetryRecorder {
     lastSpikeSubsystem: 'none',
     governorTier: 'high',
     renderScale: 1,
+    fps1PercentLow: 60,
+    renderWidth: 1280,
+    renderHeight: 720,
+    pixelRatio: 1,
+    memoryUsedMb: null,
     gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
   };
 

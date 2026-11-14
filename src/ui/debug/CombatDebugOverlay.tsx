@@ -241,7 +241,7 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
       style={{ backgroundColor: `rgba(11, 14, 17, ${bgOpacity})` }}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className={`fixed top-14 ${dockClass} z-40 w-[640px] max-w-[96vw] max-h-[calc(100vh-4.5rem)] border border-zinc-700/90 rounded-sm shadow-2xl text-zinc-100 font-mono text-[11px] flex flex-col pointer-events-auto`}
+      className={`fixed top-12 ${dockClass} z-40 w-[640px] max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-3.5rem)] border border-zinc-700/90 rounded-sm shadow-2xl text-zinc-100 font-mono text-[11px] flex flex-col pointer-events-auto`}
     >
       {/* Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-zinc-800 bg-[#141920]/95">
@@ -1201,9 +1201,9 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
             <div className="space-y-2.5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <MetricTile
-                  label="FPS (Cur / Avg)"
-                  value={`${snapshot.performance.fps} / ${snapshot.performance.avgFps}`}
-                  sub={`Min ${snapshot.performance.minFps} · Max ${snapshot.performance.maxFps}`}
+                  label="FPS (Cur / 1% Low)"
+                  value={`${snapshot.performance.fps} / ${snapshot.performance.fps1PercentLow ?? snapshot.performance.fps}`}
+                  sub={`Avg ${snapshot.performance.avgFps} · Min ${snapshot.performance.minFps} · Max ${snapshot.performance.maxFps}`}
                 />
                 <MetricTile
                   label="Frame (Avg / p95 / p99)"
@@ -1211,14 +1211,18 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                   sub={`CPU Total: ${snapshot.performance.cpuTimeMs}ms`}
                 />
                 <MetricTile
-                  label="Draw Calls / Tris"
-                  value={`${snapshot.performance.drawCalls}`}
-                  sub={`Tris: ${snapshot.performance.triangles.toLocaleString()}`}
+                  label="Render & Pixel Ratio"
+                  value={
+                    snapshot.performance.renderWidth && snapshot.performance.renderHeight
+                      ? `${snapshot.performance.renderWidth}×${snapshot.performance.renderHeight}`
+                      : `${Math.round(snapshot.performance.renderScale * 100)}%`
+                  }
+                  sub={`Scale ${Math.round(snapshot.performance.renderScale * 100)}% · DPR ${(snapshot.performance.pixelRatio ?? 1).toFixed(2)}x · ${snapshot.performance.governorTier}`}
                 />
                 <MetricTile
-                  label="Frame Spikes (>28ms)"
-                  value={`${snapshot.performance.spikeCount}`}
-                  sub={`Last: ${snapshot.performance.lastSpikeMs}ms (${snapshot.performance.lastSpikeSubsystem})`}
+                  label="Draw / Tris / Mem"
+                  value={`${snapshot.performance.drawCalls} / ${snapshot.performance.triangles.toLocaleString()}`}
+                  sub={`Spikes: ${snapshot.performance.spikeCount} · Heap: ${snapshot.performance.memoryUsedMb != null ? `${snapshot.performance.memoryUsedMb} MB` : 'N/A'}`}
                 />
               </div>
 

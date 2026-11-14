@@ -225,7 +225,15 @@ export class WeaponSystem {
     const state = this.getActiveState();
     const cfg = state.config;
 
-    // Weapon slot hotkeys 1..9
+    // Weapon slot hotkeys 1..9 or queued virtual slot
+    const queuedSlot = input.consumeQueuedWeaponSlot();
+    if (queuedSlot !== null && !inVehicle) {
+      const w = WEAPON_CATALOG.find((x) => x.slot === queuedSlot);
+      if (w && w.id !== this.activeWeaponId) {
+        this.selectWeapon(w.id);
+        return;
+      }
+    }
     for (let i = 1; i <= 9; i++) {
       if (input.wasKeyPressed(`Digit${i}`)) {
         const w = WEAPON_CATALOG.find((x) => x.slot === i);
@@ -236,11 +244,12 @@ export class WeaponSystem {
       }
     }
 
-    // Mouse wheel cycle
+    // Mouse wheel or virtual touch weapon cycle
     const wheel = input.consumeWheelDelta();
     if (wheel !== 0 && !inVehicle) {
       const idx = WEAPON_CATALOG.findIndex((w) => w.id === this.activeWeaponId);
-      const nextIdx = (idx + (wheel > 0 ? 1 : -1) + WEAPON_CATALOG.length) % WEAPON_CATALOG.length;
+      const step = wheel > 0 ? 1 : -1;
+      const nextIdx = (idx + step + WEAPON_CATALOG.length) % WEAPON_CATALOG.length;
       this.selectWeapon(WEAPON_CATALOG[nextIdx].id);
       return;
     }
@@ -294,7 +303,7 @@ export class WeaponSystem {
       this.equipTimer <= 0 &&
       state.ammoInMag < state.magSize &&
       state.reserveAmmo > 0 &&
-      (input.wasActionPressed('reload') || (state.ammoInMag === 0 && input.isMouseHeld(0)))
+      (input.wasActionPressed('reload') || (state.ammoInMag === 0 && input.isActionHeld('fire')))
     ) {
       this.isReloading = true;
       const reloadLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'reload');
@@ -315,7 +324,7 @@ export class WeaponSystem {
     }
 
     // ADS & Sniper Scope
-    this.isAds = input.isMouseHeld(2) && !this.isReloading && !player.isSprinting;
+    this.isAds = input.isActionHeld('ads') && !this.isReloading && !player.isSprinting;
     this.isScoped = this.isAds && cfg.hasOpticalScope;
 
     // Guided Missile Lock-On State Machine
@@ -325,10 +334,10 @@ export class WeaponSystem {
     const mode = this.getActiveFireMode();
     const wantsFire =
       mode === 'auto'
-        ? input.isMouseHeld(0)
+        ? input.isActionHeld('fire')
         : mode === 'burst'
-          ? input.wasMousePressed(0) || this.burstRemaining > 0
-          : input.wasMousePressed(0);
+          ? input.wasActionPressed('fire') || this.burstRemaining > 0
+          : input.wasActionPressed('fire');
 
     if (
       wantsFire &&

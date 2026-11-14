@@ -588,7 +588,7 @@ export class VehicleManager {
         // Multi-mode VehicleCameraRig (Chase, Driver FPV, Gunner Turret, Tactical Orbit)
         this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov);
 
-        if (input.isMouseHeld(0) && v.turretFireCooldown <= 0) {
+        if (input.isActionHeld('fire') && v.turretFireCooldown <= 0) {
           v.turretFireCooldown = 0.12;
           camera.getWorldDirection(this._turretDir);
           this._muzzlePos.set(0, 0.12, -1.55).applyMatrix4(v.turretGun.matrixWorld);
@@ -849,17 +849,6 @@ export class VehicleManager {
         w.rotation.x -= v.speed * dt * 1.4;
       }
       v.centerPos.set(v.position.x, v.position.y + 1.2, v.position.z);
-
-      if (v.occupiedByPlayer && Math.abs(v.speed) > 10) {
-        for (const other of this.vehicles) {
-          if (other === v || !other.alive || !other.hostile) continue;
-          if (v.position.distanceTo(other.position) < 4.2) {
-            this.damageVehicle(other, 95, onConvoyDestroyed);
-            this.damageVehicle(v, 18);
-            v.speed *= -0.3;
-          }
-        }
-      }
     }
   }
 

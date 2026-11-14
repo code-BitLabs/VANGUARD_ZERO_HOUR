@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { GpuCapabilityReport } from '@/src/engine/GpuCapabilityDetector';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { ColorblindModeSchema, QualityTierSchema } from '@/src/schemas/common.schema';
-import { AudioSettingsSchema, ControlBindings, ControlBindingsSchema } from '@/src/schemas/settings.schema';
+import {
+  AudioSettingsSchema,
+  ControlBindings,
+  ControlBindingsSchema,
+  DrawDistanceSettingSchema,
+  FpsCapSchema,
+  SubQualityLevelSchema,
+  TouchFireBehaviorSchema,
+  TouchModeSchema,
+} from '@/src/schemas/settings.schema';
 import { useAudioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore } from '@/src/stores/uiStore';
@@ -28,7 +38,15 @@ const BINDING_LABELS: Array<{ key: keyof ControlBindings; label: string }> = [
   { key: 'strategicNuke', label: 'Strategic Strike Request' },
 ];
 
-export function SettingsPanel({ onBack }: { onBack: () => void }) {
+export function SettingsPanel({
+  onBack,
+  gpuReport = null,
+  onReapplyAutoGraphics,
+}: {
+  onBack: () => void;
+  gpuReport?: GpuCapabilityReport | null;
+  onReapplyAutoGraphics?: () => GpuCapabilityReport | null;
+}) {
   const graphics = useSettingsStore((s) => s.graphics);
   const input = useSettingsStore((s) => s.input);
   const accessibility = useSettingsStore((s) => s.accessibility);
@@ -42,6 +60,11 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
 
   const audio = useAudioSettingsStore((s) => s);
   const [rebindingAction, setRebindingAction] = useState<keyof ControlBindings | null>(null);
+  const [latestGpuReport, setLatestGpuReport] = useState<GpuCapabilityReport | null>(gpuReport);
+
+  useEffect(() => {
+    setLatestGpuReport(gpuReport);
+  }, [gpuReport]);
 
   useEffect(() => {
     if (!rebindingAction) return;
@@ -69,36 +92,79 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
     uiStore.getState().showToast('Settings Restored', 'All graphics, audio, and keybindings reset.', 'info');
   };
 
+  const handleRedetect = () => {
+    const report = onReapplyAutoGraphics?.() ?? null;
+    if (report) {
+      setLatestGpuReport(report);
+      uiStore
+        .getState()
+        .showToast(
+          'Optimal Graphics Applied',
+          `Auto mode selected ${report.recommendedTier.toUpperCase()} preset (score ${report.score}/100).`,
+          'info'
+        );
+    } else {
+      updateGraphics({ qualityMode: 'auto' }, { preserveAutoMode: true });
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-center justify-center p-4 sm:p-6">
-      <div className="w-full max-w-4xl bg-[#141920] border border-zinc-800 rounded-sm shadow-2xl flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+    <div
+      className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-center justify-center"
+      style={{
+        paddingTop: 'max(8px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(10px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(10px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="w-full max-w-4xl bg-[#141920] border border-zinc-800 rounded-sm shadow-2xl flex flex-col max-h-[96dvh]">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-6 py-3 border-b border-zinc-800 shrink-0">
           <div>
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-amber-500">System Configuration</p>
-            <h2 className="font-display text-2xl font-bold uppercase tracking-wider text-zinc-100">Settings</h2>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500">System Configuration</p>
+            <h2 className="font-display text-xl sm:text-2xl font-bold uppercase tracking-wider text-zinc-100">
+              Settings
+            </h2>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={handleResetAll}>
+            <Button variant="ghost" size="sm" className="min-h-[44px]" onClick={handleResetAll}>
               <RotateCcw className="w-3.5 h-3.5" /> Reset Defaults
             </Button>
-            <Button variant="secondary" size="sm" onClick={onBack}>
+            <Button variant="secondary" size="sm" className="min-h-[44px] px-4" onClick={onBack}>
               Done
             </Button>
           </div>
         </div>
 
-        <Tabs defaultValue="graphics" className="flex-1 flex flex-col overflow-hidden p-6">
-          <TabsList className="mb-5 self-start flex-wrap">
-            <TabsTrigger value="graphics">Graphics</TabsTrigger>
-            <TabsTrigger value="audio">Audio</TabsTrigger>
-            <TabsTrigger value="controls">Controls &amp; Keys</TabsTrigger>
-            <TabsTrigger value="accessibility">Accessibility</TabsTrigger>
-            {isEnvDevModeAllowed() && <TabsTrigger value="developer">Developer Tools</TabsTrigger>}
+        <Tabs defaultValue="graphics" className="flex-1 flex flex-col overflow-hidden p-3 sm:p-5">
+          <TabsList className="mb-3 sm:mb-4 self-start flex-wrap">
+            <TabsTrigger value="graphics" className="min-h-[40px]">Graphics</TabsTrigger>
+            <TabsTrigger value="audio" className="min-h-[40px]">Audio</TabsTrigger>
+            <TabsTrigger value="controls" className="min-h-[40px]">Controls &amp; Keys</TabsTrigger>
+            <TabsTrigger value="accessibility" className="min-h-[40px]">Accessibility</TabsTrigger>
+            {isEnvDevModeAllowed() && (
+              <TabsTrigger value="developer" className="min-h-[40px]">Developer Tools</TabsTrigger>
+            )}
           </TabsList>
 
-          <div className="flex-1 overflow-y-auto pr-1 space-y-5">
-            <TabsContent value="graphics" className="space-y-4">
-              <SettingRow label="Quality Preset" hint="Adjusts shadow resolution, draw distance, and particle budget.">
+          <div className="flex-1 overflow-y-auto pr-1 space-y-3 sm:space-y-4">
+            <TabsContent value="graphics" className="space-y-3">
+              <SettingRow
+                label={`Graphics Mode: ${graphics.qualityMode === 'auto' ? 'Auto (Device Tuned)' : 'Manual Override'}`}
+                hint={
+                  latestGpuReport
+                    ? `Hardware probe score ${latestGpuReport.score}/100 · WebGL${latestGpuReport.signals.webglVersion || '?'} · Recommended ${latestGpuReport.recommendedTier.toUpperCase()}${
+                        latestGpuReport.signals.rendererHint ? ` · ${latestGpuReport.signals.rendererHint}` : ''
+                      }`
+                    : 'Auto mode detects hardware tier once. Editing any visual setting switches to Manual.'
+                }
+              >
+                <Button variant="outline" size="sm" className="min-h-[44px]" onClick={handleRedetect}>
+                  Re-Detect Optimal Preset
+                </Button>
+              </SettingRow>
+
+              <SettingRow label="Quality Preset" hint="Sets baseline shadow, draw distance, and particle profile.">
                 <Select
                   aria-label="Quality Preset"
                   value={graphics.quality}
@@ -112,8 +178,86 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
                 />
               </SettingRow>
 
+              <SettingRow
+                label={`Render Scale (${Math.round(graphics.renderScale * 100)}%)`}
+                hint="Internal 3D resolution scale (lower improves mobile frame rate)."
+              >
+                <div className="w-48 sm:w-52">
+                  <Slider
+                    aria-label="Render Scale"
+                    value={graphics.renderScale}
+                    min={0.5}
+                    max={1.0}
+                    step={0.05}
+                    onValueChange={(renderScale) => updateGraphics({ renderScale })}
+                  />
+                </div>
+              </SettingRow>
+
+              <SettingRow label="Texture Quality" hint="Procedural material resolution and anisotropic filtering.">
+                <Select
+                  aria-label="Texture Quality"
+                  value={graphics.textureQuality}
+                  onValueChange={(v) => updateGraphics({ textureQuality: SubQualityLevelSchema.parse(v) })}
+                  options={[
+                    { value: 'low', label: 'Low' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'high', label: 'High' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow label="Effects & Particle Budget">
+                <Select
+                  aria-label="Effects Quality"
+                  value={graphics.effectsQuality}
+                  onValueChange={(v) => updateGraphics({ effectsQuality: SubQualityLevelSchema.parse(v) })}
+                  options={[
+                    { value: 'low', label: 'Low' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'high', label: 'High' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow label="Draw Distance">
+                <Select
+                  aria-label="Draw Distance"
+                  value={graphics.drawDistance}
+                  onValueChange={(v) => updateGraphics({ drawDistance: DrawDistanceSettingSchema.parse(v) })}
+                  options={[
+                    { value: 'auto', label: 'Auto (Follows Preset)' },
+                    { value: 'short', label: 'Short (160m)' },
+                    { value: 'medium', label: 'Medium (260m)' },
+                    { value: 'long', label: 'Long (380m)' },
+                    { value: 'ultra', label: 'Ultra (520m)' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow label="Frame Rate Cap" hint="Limit frame rate to reduce mobile battery drain and heat.">
+                <Select
+                  aria-label="Frame Rate Cap"
+                  value={String(graphics.fpsCap)}
+                  onValueChange={(v) => updateGraphics({ fpsCap: FpsCapSchema.parse(Number(v)) })}
+                  options={[
+                    { value: '0', label: 'Uncapped (Display Sync)' },
+                    { value: '30', label: '30 FPS (Battery Saver)' },
+                    { value: '60', label: '60 FPS' },
+                    { value: '120', label: '120 FPS' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow label="Antialiasing" hint="Hardware MSAA on direct render path or post-process edge smoothing.">
+                <Switch
+                  checked={graphics.antialiasing}
+                  onCheckedChange={(antialiasing) => updateGraphics({ antialiasing })}
+                />
+              </SettingRow>
+
               <SettingRow label={`Field of View (${graphics.fov}°)`} hint="Horizontal camera angle while on foot.">
-                <div className="w-52">
+                <div className="w-48 sm:w-52">
                   <Slider
                     aria-label="Field of View"
                     value={graphics.fov}
@@ -126,7 +270,7 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
               </SettingRow>
 
               <SettingRow label={`Head Bob Intensity (${Math.round(graphics.headBobIntensity * 100)}%)`}>
-                <div className="w-52">
+                <div className="w-48 sm:w-52">
                   <Slider
                     aria-label="Head Bob Intensity"
                     value={graphics.headBobIntensity}
@@ -138,10 +282,15 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
                 </div>
               </SettingRow>
 
-              <SettingRow label="Adaptive Performance Governor" hint="Auto-scales quality if frame times sustain above 19ms.">
+              <SettingRow
+                label="Adaptive Performance Governor"
+                hint="Dynamically trims render scale if frame times sustain above 19ms without exceeding your caps."
+              >
                 <Switch
                   checked={graphics.adaptiveGovernor}
-                  onCheckedChange={(adaptiveGovernor) => updateGraphics({ adaptiveGovernor })}
+                  onCheckedChange={(adaptiveGovernor) =>
+                    updateGraphics({ adaptiveGovernor }, { preserveAutoMode: true })
+                  }
                 />
               </SettingRow>
 
@@ -258,6 +407,95 @@ export function SettingsPanel({ onBack }: { onBack: () => void }) {
                   onCheckedChange={(gamepadEnabled) => updateInput({ gamepadEnabled })}
                 />
               </SettingRow>
+
+              <div className="pt-2 border-t border-zinc-800 space-y-3">
+                <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
+                  Mobile &amp; Touch Controls
+                </p>
+
+                <SettingRow
+                  label="Touch HUD Mode"
+                  hint="Auto displays twin-stick touch controls on touch/coarse devices; HUD toggle overrides per session."
+                >
+                  <Select
+                    aria-label="Touch HUD Mode"
+                    value={input.touchMode}
+                    onValueChange={(v) => {
+                      uiStore.getState().setTouchHudOverride(null);
+                      updateInput({ touchMode: TouchModeSchema.parse(v) });
+                    }}
+                    options={[
+                      { value: 'auto', label: 'Auto (Smart Detect)' },
+                      { value: 'always_on', label: 'Always On' },
+                      { value: 'always_off', label: 'Always Off' },
+                    ]}
+                  />
+                </SettingRow>
+
+                <SettingRow label={`Touch Look Sensitivity (${input.touchSensitivity.toFixed(2)}x)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Touch Look Sensitivity"
+                      value={input.touchSensitivity}
+                      min={0.3}
+                      max={3.0}
+                      step={0.05}
+                      onValueChange={(touchSensitivity) => updateInput({ touchSensitivity })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Touch Button Scale (${Math.round(input.touchButtonScale * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Touch Button Scale"
+                      value={input.touchButtonScale}
+                      min={0.75}
+                      max={1.35}
+                      step={0.05}
+                      onValueChange={(touchButtonScale) => updateInput({ touchButtonScale })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Touch Overlay Opacity (${Math.round(input.touchButtonOpacity * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Touch Overlay Opacity"
+                      value={input.touchButtonOpacity}
+                      min={0.35}
+                      max={0.95}
+                      step={0.05}
+                      onValueChange={(touchButtonOpacity) => updateInput({ touchButtonOpacity })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow
+                  label="Auto-Sprint on Full Stick"
+                  hint="Automatically engages sprint when pushing the left thumbstick past 78%."
+                >
+                  <Switch
+                    checked={input.autoSprint}
+                    onCheckedChange={(autoSprint) => updateInput({ autoSprint })}
+                  />
+                </SettingRow>
+
+                <SettingRow
+                  label="Touch Fire Behavior"
+                  hint="Choose dedicated Fire + separate ADS, or automatic ADS while holding Fire."
+                >
+                  <Select
+                    aria-label="Touch Fire Behavior"
+                    value={input.touchFireBehavior}
+                    onValueChange={(v) => updateInput({ touchFireBehavior: TouchFireBehaviorSchema.parse(v) })}
+                    options={[
+                      { value: 'dedicated', label: 'Dedicated Fire + ADS' },
+                      { value: 'ads_on_fire', label: 'ADS While Firing' },
+                    ]}
+                  />
+                </SettingRow>
+              </div>
 
               <div className="pt-2 border-t border-zinc-800">
                 <p className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-3">

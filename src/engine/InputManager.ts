@@ -2,6 +2,14 @@ import { ResourceManager } from '@/src/core/ResourceManager';
 import { ControlBindings, InputSettings } from '@/src/schemas/settings.schema';
 
 export type InputAction = keyof ControlBindings;
+export type ExtendedInputAction =
+  | InputAction
+  | 'fire'
+  | 'ads'
+  | 'c4Detonate'
+  | 'cycleBomb'
+  | 'confirmNuke'
+  | 'cancelNuke';
 
 export class InputManager {
   private heldKeys = new Set<string>();
@@ -14,6 +22,15 @@ export class InputManager {
   private pointerLocked = false;
   private attached = false;
   private prevGamepadButtons = new Set<number>();
+
+  private virtualMoveForward = 0;
+  private virtualMoveRight = 0;
+  private virtualLookDeltaX = 0;
+  private virtualLookDeltaY = 0;
+  private virtualHeldActions = new Set<string>();
+  private virtualJustPressedActions = new Set<string>();
+  private queuedWeaponDelta = 0;
+  private queuedWeaponSlot: number | null = null;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -105,9 +122,71 @@ export class InputManager {
     return this.pointerLocked;
   }
 
-  isActionHeld(action: InputAction): boolean {
-    const code = this.settings.bindings[action];
-    if (this.heldKeys.has(code)) return true;
+  setVirtualMoveAxes(forward: number, right: number): void {
+    const f = Math.max(-1, Math.min(1, forward));
+    const r = Math.max(-1, Math.min(1, right));
+    const len = Math.hypot(f, r);
+    if (len > 1) {
+      this.virtualMoveForward = f / len;
+      this.virtualMoveRight = r / len;
+    } else {
+      this.virtualMoveForward = f;
+      this.virtualMoveRight = r;
+    }
+  }
+
+  addVirtualLookDelta(dxPx: number, dyPx: number): void {
+    if (!Number.isFinite(dxPx) || !Number.isFinite(dyPx)) return;
+    this.virtualLookDeltaX += dxPx;
+    this.virtualLookDeltaY += dyPx;
+  }
+
+  setVirtualActionState(action: ExtendedInputAction, held: boolean): void {
+    if (held) {
+      if (!this.virtualHeldActions.has(action)) {
+        this.virtualJustPressedActions.add(action);
+      }
+      this.virtualHeldActions.add(action);
+    } else {
+      this.virtualHeldActions.delete(action);
+    }
+  }
+
+  triggerVirtualActionPress(action: ExtendedInputAction): void {
+    this.virtualJustPressedActions.add(action);
+  }
+
+  queueWeaponSlot(slot: number): void {
+    if (slot >= 1 && slot <= 9) {
+      this.queuedWeaponSlot = Math.floor(slot);
+    }
+  }
+
+  consumeQueuedWeaponSlot(): number | null {
+    const slot = this.queuedWeaponSlot;
+    this.queuedWeaponSlot = null;
+    return slot;
+  }
+
+  cycleWeapon(delta: 1 | -1): void {
+    this.queuedWeaponDelta += delta;
+  }
+
+  isActionHeld(action: ExtendedInputAction): boolean {
+    if (this.virtualHeldActions.has(action)) return true;
+
+    if (action === 'fire') {
+      return this.isMouseHeld(0);
+    }
+    if (action === 'ads') {
+      return this.isMouseHeld(2);
+    }
+
+    if (action in this.settings.bindings) {
+      const code = this.settings.bindings[action as InputAction];
+      if (this.heldKeys.has(code)) return true;
+    }
+
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
       if (gp) {
@@ -119,9 +198,21 @@ export class InputManager {
     return false;
   }
 
-  wasActionPressed(action: InputAction): boolean {
-    const code = this.settings.bindings[action];
-    if (this.justPressedKeys.has(code)) return true;
+  wasActionPressed(action: ExtendedInputAction): boolean {
+    if (this.virtualJustPressedActions.has(action)) return true;
+
+    if (action === 'fire') {
+      return this.wasMousePressed(0);
+    }
+    if (action === 'ads') {
+      return this.wasMousePressed(2);
+    }
+
+    if (action in this.settings.bindings) {
+      const code = this.settings.bindings[action as InputAction];
+      if (this.justPressedKeys.has(code)) return true;
+    }
+
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
       if (gp) {
@@ -132,7 +223,7 @@ export class InputManager {
           interact: 3,
           grenade: 5,
         };
-        const btnIdx = map[action];
+        const btnIdx = map[action as InputAction];
         if (btnIdx !== undefined && gp.buttons[btnIdx]?.pressed && !this.prevGamepadButtons.has(btnIdx)) {
           return true;
         }
@@ -150,6 +241,8 @@ export class InputManager {
   }
 
   isMouseHeld(button: number): boolean {
+    if (button === 0 && this.virtualHeldActions.has('fire')) return true;
+    if (button === 2 && this.virtualHeldActions.has('ads')) return true;
     if (this.mouseButtons.has(button)) return true;
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
@@ -162,15 +255,22 @@ export class InputManager {
   }
 
   wasMousePressed(button: number): boolean {
+    if (button === 0 && this.virtualJustPressedActions.has('fire')) return true;
+    if (button === 2 && this.virtualJustPressedActions.has('ads')) return true;
     return this.justPressedMouse.has(button);
   }
 
   consumeLookDelta(isAds: boolean): { yawDelta: number; pitchDelta: number } {
-    const baseSens = 0.0022 * this.settings.mouseSensitivity * (isAds ? this.settings.adsSensitivity : 1.0);
-    let dx = this.mouseDeltaX * baseSens;
-    let dy = this.mouseDeltaY * baseSens;
+    const adsScale = isAds ? this.settings.adsSensitivity : 1.0;
+    const baseSens = 0.0022 * this.settings.mouseSensitivity * adsScale;
+    const touchSens = 0.0042 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
+
+    let dx = this.mouseDeltaX * baseSens + this.virtualLookDeltaX * touchSens;
+    let dy = this.mouseDeltaY * baseSens + this.virtualLookDeltaY * touchSens;
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
+    this.virtualLookDeltaX = 0;
+    this.virtualLookDeltaY = 0;
 
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
@@ -187,8 +287,14 @@ export class InputManager {
   }
 
   getMoveAxes(): { forward: number; right: number } {
-    let forward = (this.isActionHeld('forward') ? 1 : 0) - (this.isActionHeld('backward') ? 1 : 0);
-    let right = (this.isActionHeld('right') ? 1 : 0) - (this.isActionHeld('left') ? 1 : 0);
+    let forward =
+      (this.isActionHeld('forward') ? 1 : 0) -
+      (this.isActionHeld('backward') ? 1 : 0) +
+      this.virtualMoveForward;
+    let right =
+      (this.isActionHeld('right') ? 1 : 0) -
+      (this.isActionHeld('left') ? 1 : 0) +
+      this.virtualMoveRight;
 
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
@@ -207,14 +313,16 @@ export class InputManager {
   }
 
   consumeWheelDelta(): number {
-    const d = this.wheelDelta;
+    const d = this.wheelDelta + this.queuedWeaponDelta;
     this.wheelDelta = 0;
+    this.queuedWeaponDelta = 0;
     return d;
   }
 
   endFrame(): void {
     this.justPressedKeys.clear();
     this.justPressedMouse.clear();
+    this.virtualJustPressedActions.clear();
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
       this.prevGamepadButtons.clear();
@@ -231,9 +339,17 @@ export class InputManager {
     this.justPressedKeys.clear();
     this.mouseButtons.clear();
     this.justPressedMouse.clear();
+    this.virtualHeldActions.clear();
+    this.virtualJustPressedActions.clear();
+    this.virtualMoveForward = 0;
+    this.virtualMoveRight = 0;
+    this.virtualLookDeltaX = 0;
+    this.virtualLookDeltaY = 0;
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
     this.wheelDelta = 0;
+    this.queuedWeaponDelta = 0;
+    this.queuedWeaponSlot = null;
   };
 
   private getGamepad(): Gamepad | null {

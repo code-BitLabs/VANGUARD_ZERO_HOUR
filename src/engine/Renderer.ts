@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BloomEffect, EffectComposer, EffectPass, RenderPass, VignetteEffect } from 'postprocessing';
 import { ResourceManager } from '@/src/core/ResourceManager';
+import { SceneLights } from '@/src/world/LightingRig';
 import { GovernorProfile } from './PerformanceGovernor';
 
 export class EngineRenderer {
@@ -131,11 +132,31 @@ export class EngineRenderer {
     );
   }
 
-  applyGovernorProfile(profile: GovernorProfile, shadowsSetting: boolean, bloomSetting: boolean): void {
+  applyGovernorProfile(
+    profile: GovernorProfile,
+    shadowsSetting: boolean,
+    bloomSetting: boolean,
+    lights?: SceneLights | null
+  ): void {
     this.renderScale = profile.renderScale;
     this.bloomEnabled = profile.bloomEnabled && bloomSetting;
-    this.renderer.shadowMap.enabled = shadowsSetting && profile.shadowMapSize >= 512;
-    this.camera.far = Math.max(160, profile.drawDistance + 40);
+    const shadowsActive = shadowsSetting && profile.shadowMapSize >= 512;
+    this.renderer.shadowMap.enabled = shadowsActive;
+    if (lights?.sun) {
+      lights.sun.castShadow = shadowsActive;
+      if (shadowsActive && profile.shadowMapSize >= 512 && lights.sun.shadow.mapSize.x !== profile.shadowMapSize) {
+        lights.sun.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+        lights.sun.shadow.map?.dispose();
+        lights.sun.shadow.map = null;
+      }
+      lights.sun.shadow.camera.left = -profile.shadowDistance;
+      lights.sun.shadow.camera.right = profile.shadowDistance;
+      lights.sun.shadow.camera.top = profile.shadowDistance;
+      lights.sun.shadow.camera.bottom = -profile.shadowDistance;
+      lights.sun.shadow.camera.updateProjectionMatrix();
+    }
+
+    this.camera.far = Math.max(150, profile.drawDistance + 40);
     this.camera.updateProjectionMatrix();
 
     if (this.bloomEffect) {
@@ -162,8 +183,12 @@ export class EngineRenderer {
     this.viewModelCamera.aspect = w / h;
     this.viewModelCamera.updateProjectionMatrix();
 
-    const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.renderer.setPixelRatio(Math.max(0.5, baseDpr * this.renderScale));
+    const isCoarse =
+      typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+    const maxDpr = isCoarse ? 1.5 : 2.0;
+    const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+    const effectiveDpr = Math.max(0.5, Number((baseDpr * this.renderScale).toFixed(2)));
+    this.renderer.setPixelRatio(effectiveDpr);
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
   }
@@ -172,6 +197,7 @@ export class EngineRenderer {
     if (this.renderer.getContext().isContextLost()) return;
 
     this.renderer.info.reset();
+    this.renderer.setRenderTarget(null);
     this.renderer.clear();
     if (this.bloomEnabled && this.composer && this.effectPass) {
       this.composer.render();
@@ -186,6 +212,15 @@ export class EngineRenderer {
 
     this.lastDrawCalls = this.renderer.info.render.calls;
     this.lastTriangles = this.renderer.info.render.triangles;
+  }
+
+  getRenderMetrics(): { renderWidth: number; renderHeight: number; pixelRatio: number } {
+    const pixelRatio = Number(this.renderer.getPixelRatio().toFixed(2));
+    return {
+      renderWidth: Math.round(this.width * pixelRatio),
+      renderHeight: Math.round(this.height * pixelRatio),
+      pixelRatio,
+    };
   }
 
   getDrawInfo(): { calls: number; triangles: number; geometries: number; textures: number } {

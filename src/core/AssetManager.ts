@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { SubQualityLevel } from '@/src/schemas/settings.schema';
 import { ResourceManager, ResourceScope } from './ResourceManager';
 
 export type TexturePattern =
@@ -18,6 +19,7 @@ export type TexturePattern =
 interface CachedTexture {
   texture: THREE.CanvasTexture;
   resourceId: string;
+  pattern: TexturePattern;
 }
 
 export class AssetManager {
@@ -27,6 +29,7 @@ export class AssetManager {
   private dracoLoader: DRACOLoader | null = null;
   private ktx2Loader: KTX2Loader | null = null;
   private maxAnisotropy = 4;
+  private textureQuality: SubQualityLevel = 'high';
   private fallbackLoads = 0;
 
   constructor(private readonly resourceManager: ResourceManager) {}
@@ -44,6 +47,38 @@ export class AssetManager {
     }
   }
 
+  private getTargetTexSize(): number {
+    if (this.textureQuality === 'low') return 128;
+    if (this.textureQuality === 'medium') return 192;
+    return 256;
+  }
+
+  private getTargetAnisotropy(): number {
+    if (this.textureQuality === 'low') return 1;
+    if (this.textureQuality === 'medium') return Math.min(2, this.maxAnisotropy);
+    return this.maxAnisotropy;
+  }
+
+  setTextureQuality(level: SubQualityLevel): void {
+    if (this.textureQuality === level) return;
+    this.textureQuality = level;
+    const size = this.getTargetTexSize();
+    const aniso = this.getTargetAnisotropy();
+    for (const entry of this.textures.values()) {
+      const canvas = entry.texture.image as HTMLCanvasElement | undefined;
+      if (canvas) {
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          this.paintPatternScaled(ctx, entry.pattern, size);
+        }
+      }
+      entry.texture.anisotropy = aniso;
+      entry.texture.needsUpdate = true;
+    }
+  }
+
   getProceduralTexture(pattern: TexturePattern, repeatX = 1, repeatY = 1): THREE.CanvasTexture {
     const key = `${pattern}_${repeatX}_${repeatY}`;
     const cached = this.textures.get(key);
@@ -52,12 +87,13 @@ export class AssetManager {
       return cached.texture;
     }
 
+    const size = this.getTargetTexSize();
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
+    canvas.width = size;
+    canvas.height = size;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      this.paintPattern(ctx, pattern);
+      this.paintPatternScaled(ctx, pattern, size);
     }
 
     const tex = new THREE.CanvasTexture(canvas);
@@ -65,11 +101,11 @@ export class AssetManager {
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(repeatX, repeatY);
-    tex.anisotropy = this.maxAnisotropy;
+    tex.anisotropy = this.getTargetAnisotropy();
     tex.needsUpdate = true;
 
     const resourceId = this.resourceManager.registerTexture(tex, 'shared', `tex_${key}`);
-    this.textures.set(key, { texture: tex, resourceId });
+    this.textures.set(key, { texture: tex, resourceId, pattern });
     return tex;
   }
 
@@ -162,6 +198,13 @@ export class AssetManager {
     this.gltfLoader = null;
     this.textures.clear();
     this.sharedMaterials.clear();
+  }
+
+  private paintPatternScaled(ctx: CanvasRenderingContext2D, pattern: TexturePattern, size: number): void {
+    ctx.save();
+    ctx.scale(size / 256, size / 256);
+    this.paintPattern(ctx, pattern);
+    ctx.restore();
   }
 
   private paintPattern(ctx: CanvasRenderingContext2D, pattern: TexturePattern): void {

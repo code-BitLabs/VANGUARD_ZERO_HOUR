@@ -16,17 +16,25 @@ export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
   const mission = getMissionById(selectedMissionId);
 
   return (
-    <div className="fixed inset-0 z-30 bg-[#0B0E11] flex items-center justify-center p-6">
-      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-7 rounded-sm shadow-2xl">
-        <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-amber-500">
+    <div
+      className="fixed inset-0 z-30 bg-[#0B0E11] flex items-center justify-center overflow-y-auto"
+      style={{
+        paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-4 sm:p-6 rounded-sm shadow-2xl my-auto">
+        <p className="font-mono text-[10px] sm:text-[11px] uppercase tracking-[0.24em] text-amber-500">
           Deploying Operation // {mission.codeName}
         </p>
-        <h2 className="font-display text-2xl font-bold uppercase text-white mt-1">
+        <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white mt-0.5">
           {mission.title}
         </h2>
-        <p className="text-xs text-zinc-300 mt-2 leading-relaxed">{mission.briefing}</p>
+        <p className="text-xs text-zinc-300 mt-1.5 leading-relaxed">{mission.briefing}</p>
 
-        <div className="mt-4 bg-[#0B0E11] border border-zinc-800/90 p-3 rounded-sm space-y-1.5">
+        <div className="mt-3 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 rounded-sm space-y-1.5">
           <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
             Primary Tactical Objectives
           </div>
@@ -41,15 +49,15 @@ export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
           ))}
         </div>
 
-        <div className="mt-5">
-          <div className="flex justify-between font-mono text-xs text-zinc-300 mb-2">
+        <div className="mt-4">
+          <div className="flex justify-between font-mono text-xs text-zinc-300 mb-1.5">
             <span>{progress.currentAsset}</span>
             <span className="tabular-nums text-amber-400">{progress.percent}%</span>
           </div>
           <ProgressBar value={progress.percent} className="h-2" />
         </div>
-        <div className="mt-6 flex justify-end">
-          <Button variant="outline" size="sm" onClick={onCancel}>
+        <div className="mt-4 flex justify-end">
+          <Button variant="outline" size="sm" className="min-h-[44px]" onClick={onCancel}>
             <XCircle className="w-4 h-4" /> Cancel Deployment
           </Button>
         </div>
@@ -68,39 +76,52 @@ export function PauseOverlay({
   onAbort: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-30 bg-black/78 flex items-center justify-center p-6">
-      <Card className="max-w-sm w-full">
-        <CardContent className="space-y-3">
-          <div className="border-b border-zinc-800 pb-3 mb-2">
+    <div
+      className="fixed inset-0 z-30 bg-black/82 flex items-center justify-center overflow-y-auto"
+      style={{
+        paddingTop: 'max(10px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <Card className="max-w-md w-full my-auto">
+        <CardContent className="space-y-2.5 p-4 sm:p-5">
+          <div className="border-b border-zinc-800 pb-2.5">
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-500">
               Operation Suspended
             </p>
-            <h2 className="font-display text-2xl font-bold uppercase text-white">Mission Paused</h2>
+            <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
+              Mission Paused
+            </h2>
           </div>
 
-          <Button className="w-full" size="lg" onClick={onResume}>
+          <Button className="w-full min-h-[44px]" size="lg" onClick={onResume}>
             <Play className="w-4 h-4 fill-current" /> Resume Combat
           </Button>
-          <Button className="w-full" variant="secondary" onClick={onRestartCheckpoint}>
-            <RotateCcw className="w-4 h-4" /> Restart Mission
-          </Button>
-          <Button
-            className="w-full"
-            variant="outline"
-            onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
-          >
-            <BookOpen className="w-4 h-4" /> Controls Guide
-          </Button>
-          <Button
-            className="w-full"
-            variant="outline"
-            onClick={() => uiStore.getState().openSettingsFrom('paused')}
-          >
-            <Settings className="w-4 h-4" /> Settings
-          </Button>
-          <Button className="w-full" variant="danger" onClick={onAbort}>
-            Abort to Campaign HQ
-          </Button>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <Button className="w-full min-h-[44px]" variant="secondary" onClick={onRestartCheckpoint}>
+              <RotateCcw className="w-4 h-4" /> Restart Mission
+            </Button>
+            <Button
+              className="w-full min-h-[44px]"
+              variant="outline"
+              onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
+            >
+              <BookOpen className="w-4 h-4" /> Controls Guide
+            </Button>
+            <Button
+              className="w-full min-h-[44px]"
+              variant="outline"
+              onClick={() => uiStore.getState().openSettingsFrom('paused')}
+            >
+              <Settings className="w-4 h-4" /> Settings
+            </Button>
+            <Button className="w-full min-h-[44px]" variant="danger" onClick={onAbort}>
+              Abort to HQ
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -125,10 +146,18 @@ export function DebriefScreen({
   const hasNext = debrief.missionId < 5;
 
   return (
-    <div className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-center justify-center p-5 overflow-y-auto">
-      <Card className="max-w-2xl w-full border-zinc-700">
-        <CardContent className="space-y-5">
-          <div className="flex items-start justify-between border-b border-zinc-800 pb-4">
+    <div
+      className="fixed inset-0 z-30 bg-[#0B0E11]/95 flex items-start sm:items-center justify-center overflow-y-auto"
+      style={{
+        paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <Card className="max-w-2xl w-full border-zinc-700 my-auto">
+        <CardContent className="space-y-4 p-4 sm:p-6">
+          <div className="flex items-start justify-between border-b border-zinc-800 pb-3">
             <div>
               <p
                 className={`font-mono text-xs uppercase tracking-[0.24em] ${
@@ -137,28 +166,28 @@ export function DebriefScreen({
               >
                 {debrief.victory ? 'Operation Accomplished' : 'Operator KIA // Mission Failed'}
               </p>
-              <h2 className="font-display text-3xl font-bold uppercase text-white mt-1">
+              <h2 className="font-display text-2xl sm:text-3xl font-bold uppercase text-white mt-0.5">
                 {mission.codeName}: {mission.title}
               </h2>
             </div>
 
-            <div className="text-center bg-[#0B0E11] border border-amber-500/60 px-4 py-2 rounded-sm">
+            <div className="text-center bg-[#0B0E11] border border-amber-500/60 px-3.5 py-1.5 rounded-sm shrink-0">
               <div className="font-mono text-[10px] text-zinc-400">RATING</div>
-              <div className="font-display text-3xl font-bold text-amber-400">
+              <div className="font-display text-2xl sm:text-3xl font-bold text-amber-400">
                 {debrief.victory ? debrief.grade : 'F'}
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono">
             <MetricBox label="Score" value={String(debrief.score)} />
             <MetricBox label="Eliminations" value={String(debrief.kills)} />
             <MetricBox label="Headshots" value={String(debrief.headshots)} />
             <MetricBox label="Accuracy" value={`${debrief.accuracyPct}%`} />
           </div>
 
-          <div className="bg-[#0B0E11] border border-zinc-800 p-4 rounded-sm space-y-2">
-            <div className="flex items-center justify-between text-xs font-mono">
+          <div className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
               <span className="text-zinc-300 flex items-center gap-2">
                 <Award className="w-4 h-4 text-amber-400" />
                 {rank.current.insignia} {rank.current.title}
@@ -171,7 +200,7 @@ export function DebriefScreen({
           </div>
 
           {debrief.newAchievements.length > 0 && (
-            <div className="bg-amber-500/10 border border-amber-500/40 p-3 rounded-sm">
+            <div className="bg-amber-500/10 border border-amber-500/40 p-2.5 rounded-sm">
               <div className="font-mono text-[11px] uppercase text-amber-400 mb-1">
                 Commendations Unlocked
               </div>
@@ -191,15 +220,15 @@ export function DebriefScreen({
             </div>
           )}
 
-          <div className="flex flex-wrap justify-end gap-3 pt-2 border-t border-zinc-800">
-            <Button variant="outline" onClick={onReturnMenu}>
+          <div className="flex flex-wrap justify-end gap-2.5 pt-2 border-t border-zinc-800">
+            <Button variant="outline" className="min-h-[44px]" onClick={onReturnMenu}>
               Campaign HQ
             </Button>
-            <Button variant="secondary" onClick={onRetry}>
+            <Button variant="secondary" className="min-h-[44px]" onClick={onRetry}>
               <RotateCcw className="w-4 h-4" /> Replay Mission
             </Button>
             {debrief.victory && hasNext && (
-              <Button onClick={() => onNextMission(debrief.missionId + 1)}>
+              <Button className="min-h-[44px]" onClick={() => onNextMission(debrief.missionId + 1)}>
                 <Play className="w-4 h-4 fill-current" /> Next Operation
               </Button>
             )}

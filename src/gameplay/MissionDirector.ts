@@ -1,6 +1,6 @@
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { MiniMapBlip, ObjectiveStatus } from '@/src/schemas/events.schema';
-import { MissionConfig } from '@/src/schemas/mission.schema';
+import { AirUnitType, MissionConfig } from '@/src/schemas/mission.schema';
 
 export interface MissionRuntimeSummary {
   victory: boolean;
@@ -25,6 +25,7 @@ export class MissionDirector {
     completed: boolean;
     completedAtSec: number | null;
     markerPos: { x: number; y: number; z: number };
+    targetAirUnitTypes?: AirUnitType[];
   }> = [];
 
   public score = 0;
@@ -59,6 +60,7 @@ export class MissionDirector {
       completed: false,
       completedAtSec: null,
       markerPos: { ...o.markerPos },
+      targetAirUnitTypes: o.targetAirUnitTypes ? [...o.targetAirUnitTypes] : undefined,
     }));
     this.score = 0;
     this.kills = 0;
@@ -90,11 +92,11 @@ export class MissionDirector {
     this.advanceObjectiveType('eliminate_wave', 1);
   }
 
-  onAirUnitKilled(points: number): void {
+  onAirUnitKilled(points: number, unitType?: AirUnitType): void {
     this.kills++;
     this.airKills++;
     this.score += points;
-    this.advanceObjectiveType('air_defense', 1);
+    this.advanceObjectiveType('air_defense', 1, unitType);
   }
 
   onDestructibleTargetDestroyed(points: number, targetKind?: string): void {
@@ -145,18 +147,30 @@ export class MissionDirector {
     return false;
   }
 
-  private advanceObjectiveType(type: MissionConfig['objectives'][number]['type'], delta: number): void {
+  private advanceObjectiveType(
+    type: MissionConfig['objectives'][number]['type'],
+    delta: number,
+    airUnitType?: AirUnitType
+  ): void {
     for (const o of this.objectives) {
-      if (o.type === type && !o.completed) {
-        o.current = Math.min(o.target, o.current + delta);
-        if (o.current >= o.target) {
-          o.completed = true;
-          o.completedAtSec = Number(this.elapsedSec.toFixed(2));
-          this.score += 350;
-          this.showAlert(`OBJECTIVE COMPLETE: ${o.title.toUpperCase()}`, 3.4);
-        }
-        break;
+      if (o.type !== type || o.completed) continue;
+      if (
+        type === 'air_defense' &&
+        o.targetAirUnitTypes &&
+        o.targetAirUnitTypes.length > 0 &&
+        airUnitType &&
+        !o.targetAirUnitTypes.includes(airUnitType)
+      ) {
+        continue;
       }
+      o.current = Math.min(o.target, o.current + delta);
+      if (o.current >= o.target) {
+        o.completed = true;
+        o.completedAtSec = Number(this.elapsedSec.toFixed(2));
+        this.score += 350;
+        this.showAlert(`OBJECTIVE COMPLETE: ${o.title.toUpperCase()}`, 3.4);
+      }
+      break;
     }
   }
 

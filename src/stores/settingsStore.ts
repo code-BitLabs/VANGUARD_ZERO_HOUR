@@ -17,7 +17,8 @@ export interface SettingsStoreState {
   input: InputSettings;
   accessibility: AccessibilitySettings;
   developer: DeveloperSettings;
-  updateGraphics: (patch: Partial<GraphicsSettings>) => void;
+  updateGraphics: (patch: Partial<GraphicsSettings>, options?: { preserveAutoMode?: boolean }) => void;
+  applyAutoDetectedGraphics: (patch: Partial<GraphicsSettings>) => void;
   updateInput: (patch: Partial<InputSettings>) => void;
   updateBinding: (action: keyof ControlBindings, keyCode: string) => void;
   updateAccessibility: (patch: Partial<AccessibilitySettings>) => void;
@@ -46,14 +47,55 @@ function persistCurrent(
   });
 }
 
+const MANUAL_GRAPHICS_OVERRIDE_KEYS: Array<keyof GraphicsSettings> = [
+  'quality',
+  'shadowsEnabled',
+  'bloomEnabled',
+  'renderScale',
+  'textureQuality',
+  'antialiasing',
+  'effectsQuality',
+  'drawDistance',
+  'fpsCap',
+];
+
 export const settingsStore = createStore<SettingsStoreState>()(
   subscribeWithSelector((set, get) => ({
     graphics: initial.graphics,
     input: initial.input,
     accessibility: initial.accessibility,
     developer: initial.developer,
-    updateGraphics: (patch) => {
-      const next = { ...get().graphics, ...patch };
+    updateGraphics: (patch, options) => {
+      const current = get().graphics;
+      const setsManualOverride =
+        !options?.preserveAutoMode &&
+        patch.qualityMode === undefined &&
+        MANUAL_GRAPHICS_OVERRIDE_KEYS.some((k) => patch[k] !== undefined);
+      const next: GraphicsSettings = {
+        ...current,
+        ...patch,
+        qualityMode:
+          patch.qualityMode !== undefined
+            ? patch.qualityMode
+            : setsManualOverride
+              ? 'manual'
+              : current.qualityMode,
+      };
+      set({ graphics: next });
+      persistCurrent({
+        graphics: next,
+        input: get().input,
+        accessibility: get().accessibility,
+        developer: get().developer,
+      });
+    },
+    applyAutoDetectedGraphics: (patch) => {
+      const next: GraphicsSettings = {
+        ...get().graphics,
+        ...patch,
+        qualityMode: 'auto',
+        autoDetectedPresetApplied: true,
+      };
       set({ graphics: next });
       persistCurrent({
         graphics: next,
@@ -134,4 +176,3 @@ export const settingsStore = createStore<SettingsStoreState>()(
 export function useSettingsStore<T>(selector: (state: SettingsStoreState) => T): T {
   return useStore(settingsStore, selector);
 }
-

@@ -41,6 +41,7 @@ import { WorldChunkManager } from '@/src/world/WorldChunkManager';
 import { CombatDebugRenderer } from './CombatDebugRenderer';
 import { engineLifecycleMachine } from './EngineLifecycle';
 import { GameLoop } from './GameLoop';
+import { detectGpuCapability, GpuCapabilityReport } from './GpuCapabilityDetector';
 import { InputManager } from './InputManager';
 import { PerformanceGovernor } from './PerformanceGovernor';
 import { PerformanceMonitor } from './PerformanceMonitor';
@@ -87,6 +88,9 @@ export class GameEngine {
   private hudDecayAccum = 0;
   private debugPublishAccum = 0;
   private suppressAutoPauseOnUnlock = false;
+  private gpuReport: GpuCapabilityReport | null = null;
+  private initialProbeFrames: number[] = [];
+  private initialProbeSettled = false;
   private readonly _audioDir = new THREE.Vector3();
   private readonly cachedExplosiveCallbacks: ExplosiveCallbacks = {
     onEnemyKilled: (unit, weaponLabel) => {
@@ -103,7 +107,7 @@ export class GameEngine {
     },
     onAirKilled: (unit, weaponLabel) => {
       gameSessionStore.getState().triggerHit(false, true, 180);
-      this.missionDirector?.onAirUnitKilled(350);
+      this.missionDirector?.onAirUnitKilled(350, unit.type);
       gameSessionStore.getState().pushKillFeed({
         id: `${unit.id}_${Date.now()}`,
         killer: 'VANGUARD-1',
@@ -127,7 +131,6 @@ export class GameEngine {
   private unsubscribers: Array<() => void> = [];
 
   constructor(private readonly container: HTMLElement) {
-    const settings = settingsStore.getState();
     const audioSettings = audioSettingsStore.getState();
 
     this.assetManager = new AssetManager(this.resourceManager);
@@ -142,11 +145,21 @@ export class GameEngine {
     );
     this.assetManager.configureRenderer(this.renderer.renderer);
 
+    this.gpuReport = detectGpuCapability(this.renderer.renderer);
+    const initialGraphics = settingsStore.getState().graphics;
+    if (!initialGraphics.autoDetectedPresetApplied && initialGraphics.qualityMode === 'auto') {
+      settingsStore.getState().applyAutoDetectedGraphics(this.gpuReport.recommendedSettings);
+    }
+
+    const settings = settingsStore.getState();
     this.governor = new PerformanceGovernor(settings.graphics.quality, settings.graphics.adaptiveGovernor);
+    this.governor.configureFromSettings(settings.graphics);
+    this.assetManager.setTextureQuality(settings.graphics.textureQuality);
     this.renderer.applyGovernorProfile(
       this.governor.getProfile(),
       settings.graphics.shadowsEnabled,
-      settings.graphics.bloomEnabled
+      settings.graphics.bloomEnabled,
+      this.lights
     );
 
     this.audio = new AudioManager(this.resourceManager, audioSettings);
@@ -236,6 +249,7 @@ export class GameEngine {
       publishUiSnapshot: this.publishHudSnapshot,
       onFrameMeasured: this.onFrameMeasured,
     });
+    this.loop.setFpsCap(settings.graphics.fpsCap);
 
     this.bindReactiveSettings();
 
@@ -248,16 +262,40 @@ export class GameEngine {
     this.loop.start();
   }
 
+  getInputManager(): InputManager {
+    return this.input;
+  }
+
+  getGpuCapabilityReport(): GpuCapabilityReport | null {
+    return this.gpuReport;
+  }
+
+  reapplyAutoGraphics(): GpuCapabilityReport {
+    const probeAvg =
+      this.initialProbeFrames.length > 8
+        ? this.initialProbeFrames.slice(5).reduce((a, b) => a + b, 0) /
+          Math.max(1, this.initialProbeFrames.length - 5)
+        : null;
+    const report = detectGpuCapability(this.renderer.renderer, probeAvg);
+    this.gpuReport = report;
+    settingsStore.getState().applyAutoDetectedGraphics(report.recommendedSettings);
+    return report;
+  }
+
   private bindReactiveSettings(): void {
     this.unsubscribers.push(
       settingsStore.subscribe((state) => {
         this.input.updateSettings(state.input);
-        this.governor.setBaseTier(state.graphics.quality);
-        this.governor.setAdaptiveEnabled(state.graphics.adaptiveGovernor);
+        this.governor.configureFromSettings(state.graphics);
+        this.assetManager.setTextureQuality(state.graphics.textureQuality);
+        this.loop.setFpsCap(state.graphics.fpsCap);
+        const effProf = this.governor.getProfile();
+        this.vfx.setBudgetRatio(effProf.particleBudgetRatio);
         this.renderer.applyGovernorProfile(
-          this.governor.getProfile(),
+          effProf,
           state.graphics.shadowsEnabled,
-          state.graphics.bloomEnabled
+          state.graphics.bloomEnabled,
+          this.lights
         );
       }),
       audioSettingsStore.subscribe((state) => {
@@ -341,6 +379,30 @@ export class GameEngine {
       }) as EventListener,
       'shared'
     );
+
+    const handleLifecycleHide = () => {
+      this.input.exitPointerLock();
+      this.input.clearAllInputs();
+      this.audio.suspend();
+      if (uiStore.getState().screen === 'playing') {
+        this.pauseMission();
+      }
+    };
+
+    this.resourceManager.trackEventListener(
+      document,
+      'visibilitychange',
+      () => {
+        if (document.hidden) {
+          handleLifecycleHide();
+        } else if (uiStore.getState().screen !== 'paused') {
+          this.audio.resume();
+        }
+      },
+      'shared'
+    );
+
+    this.resourceManager.trackEventListener(window, 'pagehide', handleLifecycleHide, 'shared');
   }
 
   private setupMenuDiorama(): void {
@@ -348,12 +410,19 @@ export class GameEngine {
     const scope: ResourceScope = 'mission:diorama';
     this.activeScope = scope;
     const profile = this.governor.getProfile();
+    const gSettings = settingsStore.getState().graphics;
     this.lights = setupLightingRig(
       this.renderer.scene,
       'sunset',
       profile.shadowMapSize,
       profile.shadowDistance,
       this.resourceManager
+    );
+    this.renderer.applyGovernorProfile(
+      profile,
+      gSettings.shadowsEnabled,
+      gSettings.bloomEnabled,
+      this.lights
     );
     this.worldData = buildWorldMap(
       'warzone_city',
@@ -370,6 +439,7 @@ export class GameEngine {
 
   async startMission(missionId: number, difficulty: Difficulty, preferredWeapon?: WeaponId): Promise<void> {
     this.audio.unlock();
+    this.input.clearAllInputs();
     const mission = getMissionById(missionId);
     missionSelectionStore.getState().setSelectedMission(mission.id);
     missionSelectionStore.getState().setDifficulty(difficulty);
@@ -443,12 +513,19 @@ export class GameEngine {
     preferredWeapon?: WeaponId
   ): void {
     const profile = this.governor.getProfile();
+    const gSettings = settingsStore.getState().graphics;
     this.lights = setupLightingRig(
       this.renderer.scene,
       mission.lighting,
       profile.shadowMapSize,
       profile.shadowDistance,
       this.resourceManager
+    );
+    this.renderer.applyGovernorProfile(
+      profile,
+      gSettings.shadowsEnabled,
+      gSettings.bloomEnabled,
+      this.lights
     );
 
     this.worldData = buildWorldMap(
@@ -529,6 +606,7 @@ export class GameEngine {
 
   resumeMission(): void {
     if (uiStore.getState().screen !== 'paused') return;
+    this.audio.resume();
     this.audio.unlock();
     this.suppressAutoPauseOnUnlock = false;
     uiStore.getState().setDebugSimPaused(false);
@@ -547,8 +625,10 @@ export class GameEngine {
     const currentWeaponId = this.weapons.getActiveState().config.id;
     const scope: ResourceScope = `mission:${mission.id}`;
 
+    this.audio.resume();
     this.audio.unlock();
     this.audio.stopMissionLoops();
+    this.input.clearAllInputs();
     this.workerBridge?.dispose();
     this.workerBridge = null;
     this.clearWorldState();
@@ -602,6 +682,7 @@ export class GameEngine {
   }
 
   private unloadToMenu(targetScreen: 'title' | 'campaign' = 'title'): void {
+    this.input.clearAllInputs();
     this.unloadCurrentWorld();
     const curState = this.lifecycle.getSnapshot().value;
     if (curState === 'error') {
@@ -672,8 +753,17 @@ export class GameEngine {
     const sandboxAuthorized = devActive && settings.developer.sandboxOrdnanceAuthorized;
     const req = progressionStore.getState().save.requisitionPoints;
 
-    // [C] / [Shift+C] Place or Remotely Detonate C4
-    if (!inVehicle && this.input.wasActionPressed('c4')) {
+    // [C] / [Shift+C] / Touch C4 Detonate
+    if (!inVehicle && this.input.wasActionPressed('c4Detonate')) {
+      this.explosives.handleC4Action(
+        this.renderer.camera,
+        this.collisionWorld,
+        this.vehicles,
+        this.activeScope,
+        true,
+        (msg, dur) => this.missionDirector?.showAlert(msg, dur)
+      );
+    } else if (!inVehicle && this.input.wasActionPressed('c4')) {
       const shiftHeld = this.input.isKeyHeld('ShiftLeft') || this.input.isKeyHeld('ShiftRight');
       this.explosives.handleC4Action(
         this.renderer.camera,
@@ -686,7 +776,14 @@ export class GameEngine {
     }
 
     // [V] Call Selected Conventional Bomb Strike / [Shift+V] Cycle Bomb Type
-    if (this.input.wasActionPressed('bombStrike')) {
+    if (this.input.wasActionPressed('cycleBomb')) {
+      const nextId = this.explosives.cycleBombType();
+      const prof = EXPLOSIVE_BY_ID[nextId];
+      this.missionDirector.showAlert(
+        `ORDNANCE SELECTED: ${prof.shortName} (${prof.requisitionCost} REQ)`,
+        2.0
+      );
+    } else if (this.input.wasActionPressed('bombStrike')) {
       const shiftHeld = this.input.isKeyHeld('ShiftLeft') || this.input.isKeyHeld('ShiftRight');
       if (shiftHeld) {
         const nextId = this.explosives.cycleBombType();
@@ -717,7 +814,7 @@ export class GameEngine {
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
     }
-    if (this.input.wasKeyPressed('Enter')) {
+    if (this.input.wasKeyPressed('Enter') || this.input.wasActionPressed('confirmNuke')) {
       this.explosives.confirmStrategicNuke(
         (cost) => progressionStore.getState().spendRequisition(cost),
         sandboxAuthorized,
@@ -725,7 +822,7 @@ export class GameEngine {
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
     }
-    if (this.input.wasKeyPressed('Backspace')) {
+    if (this.input.wasKeyPressed('Backspace') || this.input.wasActionPressed('cancelNuke')) {
       this.explosives.cancelStrategicNuke();
     }
   };
@@ -823,7 +920,7 @@ export class GameEngine {
       gameSessionStore.getState().triggerHit(false, killed, 25);
       this.audio.play2D('hit_marker', 8, 0.5);
       if (killed) {
-        this.missionDirector?.onAirUnitKilled(350);
+        this.missionDirector?.onAirUnitKilled(350, unit.type);
         gameSessionStore.getState().pushKillFeed({
           id: `${unit.id}_${Date.now()}`,
           killer: 'VANGUARD-1',
@@ -1244,11 +1341,36 @@ export class GameEngine {
 
   private onFrameMeasured = (frameMs: number): void => {
     const dt = 1 / 60;
+
+    if (!this.initialProbeSettled) {
+      this.initialProbeFrames.push(frameMs);
+      if (this.initialProbeFrames.length >= 45) {
+        this.initialProbeSettled = true;
+        const steady = this.initialProbeFrames.slice(5);
+        const avgProbeMs = steady.reduce((a, b) => a + b, 0) / Math.max(1, steady.length);
+        const refined = detectGpuCapability(this.renderer.renderer, avgProbeMs);
+        this.gpuReport = refined;
+        const currentGraphics = settingsStore.getState().graphics;
+        const tierOrder = ['low', 'medium', 'high', 'ultra'] as const;
+        if (
+          currentGraphics.qualityMode === 'auto' &&
+          tierOrder.indexOf(refined.recommendedTier) < tierOrder.indexOf(currentGraphics.quality)
+        ) {
+          settingsStore.getState().applyAutoDetectedGraphics(refined.recommendedSettings);
+        }
+      }
+    }
+
     const changed = this.governor.recordSample(frameMs, this.monitor.getCpuTimeMs(), dt);
     if (changed) {
       const settings = settingsStore.getState();
       const prof = this.governor.getProfile();
-      this.renderer.applyGovernorProfile(prof, settings.graphics.shadowsEnabled, settings.graphics.bloomEnabled);
+      this.renderer.applyGovernorProfile(
+        prof,
+        settings.graphics.shadowsEnabled,
+        settings.graphics.bloomEnabled,
+        this.lights
+      );
       this.vfx.setBudgetRatio(prof.particleBudgetRatio);
     }
 

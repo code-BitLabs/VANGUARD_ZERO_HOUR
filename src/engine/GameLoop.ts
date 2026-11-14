@@ -18,16 +18,23 @@ export class GameLoop {
   private paused = false;
   private rafId = 0;
   private lastTimeMs = 0;
+  private lastRenderTickMs = 0;
+  private fpsCap: 0 | 30 | 60 | 120 = 0;
   private accumulator = 0;
   private uiAccumulator = 0;
   private readonly uiInterval = 1 / 18; // ~18 Hz throttled HUD telemetry
 
   constructor(private readonly callbacks: GameLoopCallbacks) {}
 
+  setFpsCap(fpsCap: 0 | 30 | 60 | 120): void {
+    this.fpsCap = fpsCap;
+  }
+
   start(): void {
     if (this.running) return;
     this.running = true;
     this.lastTimeMs = performance.now();
+    this.lastRenderTickMs = 0;
     this.accumulator = 0;
     this.rafId = requestAnimationFrame(this.tick);
   }
@@ -51,6 +58,14 @@ export class GameLoop {
   private tick = (nowMs: number): void => {
     if (!this.running) return;
     this.rafId = requestAnimationFrame(this.tick);
+
+    if (this.fpsCap > 0 && this.lastRenderTickMs > 0) {
+      const minIntervalMs = 1000 / this.fpsCap - 1.2;
+      if (nowMs - this.lastRenderTickMs < minIntervalMs) {
+        return;
+      }
+    }
+    this.lastRenderTickMs = nowMs;
 
     const frameStart = performance.now();
     const rawDt = Math.min(Math.max((nowMs - this.lastTimeMs) * 0.001, 0), this.maxRawDt);
