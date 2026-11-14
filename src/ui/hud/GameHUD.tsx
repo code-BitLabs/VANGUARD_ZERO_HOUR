@@ -1,6 +1,7 @@
 import React from 'react';
 import { Crosshair, Shield, Heart, Radio, Compass, Bomb, AlertTriangle, BarChart3 } from 'lucide-react';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
+import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { useUIStore } from '@/src/stores/uiStore';
@@ -399,7 +400,7 @@ export function GameHUD({ onRequestPointerLock }: { onRequestPointerLock: () => 
         {hud.inVehicle ? (
           <>
             <div className="font-mono text-[10px] uppercase tracking-widest text-emerald-400">
-              VEHICLE CONTROL // LMB TURRET
+              CAM: {VEHICLE_CAMERA_MODE_LABELS[hud.vehicleCameraMode]} [F]
             </div>
             <div className="font-display text-lg font-bold uppercase text-zinc-100 mt-0.5">
               {hud.vehicleName}
@@ -407,6 +408,9 @@ export function GameHUD({ onRequestPointerLock }: { onRequestPointerLock: () => 
             <div className="flex items-baseline gap-4 mt-1 font-mono tabular-nums">
               <span className="text-2xl font-bold text-amber-400">{hud.vehicleSpeedKmh} KM/H</span>
               <span className="text-xs text-zinc-400">HULL {hud.vehicleHealth}%</span>
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-400">
+              LMB TURRET · [E] EXIT VEHICLE
             </div>
           </>
         ) : (

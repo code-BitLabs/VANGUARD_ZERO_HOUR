@@ -16,6 +16,7 @@ export const ControlBindingsSchema = z.object({
   c4: z.string().min(1).default('KeyC'),
   bombStrike: z.string().min(1).default('KeyV'),
   strategicNuke: z.string().min(1).default('KeyN'),
+  vehicleCamera: z.string().min(1).default('KeyF'),
 });
 export type ControlBindings = z.infer<typeof ControlBindingsSchema>;
 
@@ -62,6 +63,7 @@ export const DeveloperSettingsSchema = z.object({
   combatDebugCollapsed: z.boolean().default(false),
   debugShow3DGizmos: z.boolean().default(true),
   debugShowFlightPaths: z.boolean().default(true),
+  debugShowPhysicsColliders: z.boolean().default(false),
   debugOverlayOpacity: z.number().min(0.4).max(0.98).default(0.9),
   debugDockSide: z.enum(['left', 'right']).default('left'),
   sandboxOrdnanceAuthorized: z.boolean().default(false),

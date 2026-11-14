@@ -831,27 +831,53 @@ export class ExplosiveManager {
 
     const checkOcclusion = (tx: number, ty: number, tz: number): number => {
       if (isStrategic) return 1.0; // Strategic shockwave wraps around light cover
-      const dx = tx - ev.x;
-      const dy = ty - ev.y;
-      const dz = tz - ev.z;
-      const len = Math.hypot(dx, dy, dz);
-      if (len < 0.6) return 1.0;
-      const blocked = collision.sweptSegmentTest(
-        ev.x,
-        ev.y + 0.4,
-        ev.z,
-        dx / len,
-        dy / len,
-        dz / len,
-        Math.max(0.1, len - 0.35),
-        COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER,
-        this._occHit
-      );
-      if (blocked) {
-        occludedCount++;
-        return 0.28;
+      const sampleOffsets = [-0.45, 0.0, 0.55];
+      let totalFactor = 0;
+      let anyBlocked = false;
+
+      for (let s = 0; s < sampleOffsets.length; s++) {
+        const sy = ty + sampleOffsets[s];
+        const dx = tx - ev.x;
+        const dy = sy - (ev.y + 0.35);
+        const dz = tz - ev.z;
+        const len = Math.hypot(dx, dy, dz);
+        if (len < 0.6) {
+          totalFactor += 1.0;
+          continue;
+        }
+        const blocked = collision.sweptSegmentTest(
+          ev.x,
+          ev.y + 0.35,
+          ev.z,
+          dx / len,
+          dy / len,
+          dz / len,
+          Math.max(0.1, len - 0.35),
+          COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER | COLLISION_LAYER.WINDOW_SILL,
+          this._occHit
+        );
+        if (blocked) {
+          anyBlocked = true;
+          const hitCollider = this._occHit.collider;
+          // Solid building walls and interior walls completely block blast rays (0.0);
+          // low cover barriers and window sills attenuate blast waves (0.30).
+          const isSolidBuildingWall =
+            hitCollider &&
+            (hitCollider.tag === 'building_wall' ||
+              hitCollider.tag === 'building_interior_wall' ||
+              hitCollider.tag === 'building_ceiling' ||
+              ((hitCollider.layer & COLLISION_LAYER.WORLD) !== 0 &&
+                hitCollider.maxY - hitCollider.minY >= 2.2));
+          totalFactor += isSolidBuildingWall ? 0.0 : 0.3;
+        } else {
+          totalFactor += 1.0;
+        }
       }
-      return 1.0;
+
+      if (anyBlocked) {
+        occludedCount++;
+      }
+      return totalFactor / sampleOffsets.length;
     };
 
     const shakeRange = Math.max(26, ev.radius * 1.8);
@@ -864,7 +890,7 @@ export class ExplosiveManager {
       player.addCameraShake(Math.max(0.15, (isStrategic ? 1.0 : 0.78) * (1 - distToPlayer / shakeRange)));
     }
 
-    // 1. Player radial splash (guarded by explosionId)
+    // 1. Player radial splash & physical blast impulse (guarded by explosionId)
     if (distToPlayer <= ev.radius && player.alive) {
       if (damagedIds.has('player')) {
         this.telemetry?.recordDuplicateDamageBlocked();
@@ -872,6 +898,14 @@ export class ExplosiveManager {
         damagedIds.add('player');
         const falloff = computeFalloff(distToPlayer);
         const occ = checkOcclusion(player.position.x, player.position.y + 1.0, player.position.z);
+        if (occ > 0.05 && distToPlayer > 0.1) {
+          const pushStrength = Math.min(8.5, (ev.damage / 120) * 5.2 * falloff * occ);
+          const pdx = (player.position.x - ev.x) / distToPlayer;
+          const pdz = (player.position.z - ev.z) / distToPlayer;
+          player.velocity.x += pdx * pushStrength;
+          player.velocity.z += pdz * pushStrength;
+          player.velocity.y = Math.max(player.velocity.y, Math.min(4.2, pushStrength * 0.45));
+        }
         const selfScale = ev.fromPlayer && !isStrategic ? 0.35 : 0.48;
         const dmg = ev.damage * selfScale * falloff * occ;
         const applied = player.applyValidatedExplosionDamage(explosionId, dmg, ev.x, ev.z);
@@ -930,7 +964,8 @@ export class ExplosiveManager {
       }
       damagedIds.add(v.id);
       const falloff = Math.max(0.2, computeFalloff(Math.max(0, dist - 1.5)));
-      const dmg = ev.damage * ev.vehicleDamageMultiplier * falloff;
+      const occ = checkOcclusion(v.position.x, v.position.y + 1.2, v.position.z);
+      const dmg = ev.damage * ev.vehicleDamageMultiplier * falloff * occ;
       if (dmg > 0.5) {
         entitiesHit++;
         totalDamageDealt += dmg;

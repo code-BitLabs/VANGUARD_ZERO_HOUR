@@ -124,54 +124,296 @@ export function buildWorldMap(
       const bridge = buildCompositeBridge(assetManager, resourceManager, scope);
       bridge.position.set(bx, 0, 16);
       chunkManager.registerObject(bridge, bx, 16, scene);
+      // Bridge deck (within stepHeight so walking onto bridge is smooth)
       collisionWorld.addStaticBox({
-        id: `bridge_${bx}`,
-        minX: bx - 4.5,
+        id: `bridge_deck_${bx}`,
+        minX: bx - 4.3,
         minY: -0.5,
         minZ: 8,
-        maxX: bx + 4.5,
-        maxY: 0.35,
+        maxX: bx + 4.3,
+        maxY: 0.28,
         maxZ: 24,
         layer: COLLISION_LAYER.WORLD,
+        tag: 'bridge',
       });
+      // Bridge left & right steel guardrails
+      for (const side of [-1, 1]) {
+        const rx = bx + side * 4.1;
+        collisionWorld.addStaticBox({
+          id: `bridge_rail_${bx}_${side > 0 ? 'R' : 'L'}`,
+          minX: rx - 0.22,
+          minY: 0.25,
+          minZ: 8,
+          maxX: rx + 0.22,
+          maxY: 1.35,
+          maxZ: 24,
+          layer: COLLISION_LAYER.COVER,
+          tag: 'cover_barrier',
+        });
+      }
     }
   }
 
-  // Helper to place composite structures with AABB collider + occluder
-  const placeStructure = (
+  // Helper to place enterable ground-floor buildings with compound wall, doorway, window, interior, and ceiling colliders
+  const placeEnterableBuilding = (
     id: string,
     x: number,
     z: number,
     w: number,
     h: number,
     d: number,
-    builder: () => THREE.Group,
-    isOccluder = true
+    style: 'city' | 'bunker' | 'warehouse',
+    damagedTop = false
   ) => {
     const y = Math.max(0, heightFn(x, z));
-    const grp = builder();
+    const groundH = Math.min(h, 4.0);
+    const wallT = 0.5;
+    const doorW = Math.min(2.6, w * 0.34);
+    const doorH = Math.min(2.6, groundH - 0.45);
+    const winW = Math.min(3.4, d * 0.36);
+    const sillH = 1.12;
+    const winTopY = Math.min(2.45, groundH - 0.4);
+
+    const grp = buildEnterableBuildingMesh(
+      w,
+      h,
+      d,
+      groundH,
+      wallT,
+      doorW,
+      doorH,
+      winW,
+      sillH,
+      winTopY,
+      style,
+      damagedTop,
+      assetManager,
+      resourceManager,
+      scope
+    );
     grp.position.set(x, y, z);
     chunkManager.registerObject(grp, x, z, scene);
-    collisionWorld.addStaticBox({
-      id,
-      minX: x - w * 0.5,
-      minY: y,
-      minZ: z - d * 0.5,
-      maxX: x + w * 0.5,
-      maxY: y + h,
-      maxZ: z + d * 0.5,
-      layer: COLLISION_LAYER.WORLD,
-    });
-    if (isOccluder && h >= 6) {
-      chunkManager.registerOccluder({
-        minX: x - w * 0.45,
+    collisionWorld.physicsWorld.registerBvhMesh(grp.children[0] as THREE.Mesh);
+
+    const halfW = w * 0.5;
+    const halfD = d * 0.5;
+    const halfDoor = doorW * 0.5;
+    const halfWin = winW * 0.5;
+
+    // 1. Front (+Z) and Back (-Z) Walls with Centered Doorway Openings + Overhead Door Lintels
+    for (const [faceLabel, zSign] of [
+      ['front', 1],
+      ['back', -1],
+    ] as const) {
+      const wallMinZ = zSign > 0 ? z + halfD - wallT : z - halfD;
+      const wallMaxZ = zSign > 0 ? z + halfD : z - halfD + wallT;
+
+      // Left wall segment
+      collisionWorld.addStaticBox({
+        id: `${id}_${faceLabel}_wall_L`,
+        minX: x - halfW,
         minY: y,
-        minZ: z - d * 0.45,
-        maxX: x + w * 0.45,
-        maxY: y + h * 0.9,
-        maxZ: z + d * 0.45,
+        minZ: wallMinZ,
+        maxX: x - halfDoor,
+        maxY: y + groundH,
+        maxZ: wallMaxZ,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_wall',
+        entityId: id,
+      });
+      // Right wall segment
+      collisionWorld.addStaticBox({
+        id: `${id}_${faceLabel}_wall_R`,
+        minX: x + halfDoor,
+        minY: y,
+        minZ: wallMinZ,
+        maxX: x + halfW,
+        maxY: y + groundH,
+        maxZ: wallMaxZ,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_wall',
+        entityId: id,
+      });
+      // Doorway header lintel above door opening
+      collisionWorld.addStaticBox({
+        id: `${id}_${faceLabel}_door_lintel`,
+        minX: x - halfDoor,
+        minY: y + doorH,
+        minZ: wallMinZ,
+        maxX: x + halfDoor,
+        maxY: y + groundH,
+        maxZ: wallMaxZ,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_door_lintel',
+        entityId: id,
       });
     }
+
+    // 2. Left (-X) and Right (+X) Walls with Tactical Window Sills & Lintels
+    for (const [sideLabel, xSign] of [
+      ['left', -1],
+      ['right', 1],
+    ] as const) {
+      const wallMinX = xSign > 0 ? x + halfW - wallT : x - halfW;
+      const wallMaxX = xSign > 0 ? x + halfW : x - halfW + wallT;
+
+      // Rear wall segment (-Z side of window)
+      collisionWorld.addStaticBox({
+        id: `${id}_${sideLabel}_wall_B`,
+        minX: wallMinX,
+        minY: y,
+        minZ: z - halfD + wallT,
+        maxX: wallMaxX,
+        maxY: y + groundH,
+        maxZ: z - halfWin,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_wall',
+        entityId: id,
+      });
+      // Front wall segment (+Z side of window)
+      collisionWorld.addStaticBox({
+        id: `${id}_${sideLabel}_wall_F`,
+        minX: wallMinX,
+        minY: y,
+        minZ: z + halfWin,
+        maxX: wallMaxX,
+        maxY: y + groundH,
+        maxZ: z + halfD - wallT,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_wall',
+        entityId: id,
+      });
+      // Window lower sill (blocks walking/vehicles, provides crouch/chest cover, open above 1.12m for shooting)
+      collisionWorld.addStaticBox({
+        id: `${id}_${sideLabel}_window_sill`,
+        minX: wallMinX,
+        minY: y,
+        minZ: z - halfWin,
+        maxX: wallMaxX,
+        maxY: y + sillH,
+        maxZ: z + halfWin,
+        layer: COLLISION_LAYER.WORLD | COLLISION_LAYER.WINDOW_SILL,
+        tag: 'building_window_sill',
+        entityId: id,
+      });
+      // Window upper lintel
+      collisionWorld.addStaticBox({
+        id: `${id}_${sideLabel}_window_lintel`,
+        minX: wallMinX,
+        minY: y + winTopY,
+        minZ: z - halfWin,
+        maxX: wallMaxX,
+        maxY: y + groundH,
+        maxZ: z + halfWin,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_window_lintel',
+        entityId: id,
+      });
+    }
+
+    // 3. Interior Partition Wall & Tactical Cover Nodes for medium/large buildings
+    if (w >= 14 && d >= 12) {
+      collisionWorld.addStaticBox({
+        id: `${id}_interior_partition`,
+        minX: x - w * 0.22,
+        minY: y,
+        minZ: z - 0.24,
+        maxX: x + w * 0.08,
+        maxY: y + groundH - 0.1,
+        maxZ: z + 0.24,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_interior_wall',
+        entityId: id,
+      });
+      coverNodes.push(
+        new THREE.Vector3(x - w * 0.15, y, z + 1.6),
+        new THREE.Vector3(x + w * 0.2, y, z - 1.6)
+      );
+    } else {
+      coverNodes.push(new THREE.Vector3(x, y, z));
+    }
+
+    // 4. Ceiling / Upper Stories Collider (starts at y + groundH - 0.15 up to full building roof y + h)
+    const ceilingMinY = y + groundH - 0.15;
+    const roofMaxY = Math.max(ceilingMinY + 0.5, y + h);
+    collisionWorld.addStaticBox({
+      id: `${id}_ceiling_upper`,
+      minX: x - halfW,
+      minY: ceilingMinY,
+      minZ: z - halfD,
+      maxX: x + halfW,
+      maxY: roofMaxY,
+      maxZ: z + halfD,
+      layer: COLLISION_LAYER.WORLD,
+      tag: 'building_ceiling',
+      entityId: id,
+    });
+
+    // Only register upper stories as frustum occluder so ground-floor doorway sightlines are never culled
+    if (h >= 8) {
+      chunkManager.registerOccluder({
+        minX: x - w * 0.44,
+        minY: y + groundH,
+        minZ: z - d * 0.44,
+        maxX: x + w * 0.44,
+        maxY: y + h * 0.9,
+        maxZ: z + d * 0.44,
+      });
+    }
+  };
+
+  // Helper to place open-leg watchtowers with 4 corner pillar colliders and an elevated deck
+  const placeWatchtower = (id: string, x: number, z: number) => {
+    const y = Math.max(0, heightFn(x, z));
+    const grp = buildWatchtower(assetManager, resourceManager, scope);
+    grp.position.set(x, y, z);
+    chunkManager.registerObject(grp, x, z, scene);
+
+    for (const [lx, lz, tagIdx] of [
+      [-1.4, -1.4, 'NW'],
+      [1.4, -1.4, 'NE'],
+      [-1.4, 1.4, 'SW'],
+      [1.4, 1.4, 'SE'],
+    ] as const) {
+      collisionWorld.addStaticBox({
+        id: `${id}_leg_${tagIdx}`,
+        minX: x + lx - 0.3,
+        minY: y,
+        minZ: z + lz - 0.3,
+        maxX: x + lx + 0.3,
+        maxY: y + 9.0,
+        maxZ: z + lz + 0.3,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_pillar',
+        entityId: id,
+      });
+    }
+
+    // Elevated platform deck at y = 8.8..9.2m and roof at y = 10.6..12.2m
+    collisionWorld.addStaticBox({
+      id: `${id}_deck`,
+      minX: x - 2.1,
+      minY: y + 8.8,
+      minZ: z - 2.1,
+      maxX: x + 2.1,
+      maxY: y + 9.25,
+      maxZ: z + 2.1,
+      layer: COLLISION_LAYER.WORLD,
+      tag: 'building_ceiling',
+      entityId: id,
+    });
+    collisionWorld.addStaticBox({
+      id: `${id}_roof`,
+      minX: x - 2.2,
+      minY: y + 10.6,
+      minZ: z - 2.2,
+      maxX: x + 2.2,
+      maxY: y + 12.2,
+      maxZ: z + 2.2,
+      layer: COLLISION_LAYER.WORLD,
+      tag: 'building_roof',
+      entityId: id,
+    });
   };
 
   // Map-specific primary architecture & landmarks
@@ -187,9 +429,7 @@ export function buildWorldMap(
       [56, 6, 18, 25, 20],
     ];
     buildings.forEach(([bx, bz, bw, bh, bd], idx) => {
-      placeStructure(`city_bldg_${idx}`, bx, bz, bw, bh, bd, () =>
-        buildRuinedBuilding(bw, bh, bd, assetManager, resourceManager, scope, idx % 2 === 0)
-      );
+      placeEnterableBuilding(`city_bldg_${idx}`, bx, bz, bw, bh, bd, 'city', idx % 2 === 0);
     });
 
     // Night searchlights for Mission 3
@@ -255,20 +495,16 @@ export function buildWorldMap(
       [0, -64, 24, 9, 14],
     ];
     bunkers.forEach(([bx, bz, bw, bh, bd], i) => {
-      placeStructure(`bunker_${i}`, bx, bz, bw, bh, bd, () =>
-        buildMilitaryBunker(bw, bh, bd, assetManager, resourceManager, scope)
-      );
+      placeEnterableBuilding(`bunker_${i}`, bx, bz, bw, bh, bd, 'bunker');
     });
-    // Watchtowers
+    // Watchtowers with open physical leg pillars
     for (const [tx, tz] of [
       [-24, 14],
       [24, 12],
       [-34, -56],
       [34, -56],
     ]) {
-      placeStructure(`tower_${tx}_${tz}`, tx, tz, 4.5, 11, 4.5, () =>
-        buildWatchtower(assetManager, resourceManager, scope)
-      );
+      placeWatchtower(`tower_${tx}_${tz}`, tx, tz);
     }
     // 3 Destructible Fuel Storage Tanks
     [
@@ -300,9 +536,7 @@ export function buildWorldMap(
       [22, -18],
       [0, -46],
     ]) {
-      placeStructure(`camp_${cx}_${cz}`, cx, cz, 10, 5, 8, () =>
-        buildMilitaryBunker(10, 5, 8, assetManager, resourceManager, scope)
-      );
+      placeEnterableBuilding(`camp_${cx}_${cz}`, cx, cz, 10, 5, 8, 'bunker');
     }
     // Instanced dense canopy trees (64 trees in 1 InstancedMesh pair = 2 draw calls!)
     buildInstancedJungleTrees(scene, heightFn, resourceManager, collisionWorld, scope);
@@ -338,16 +572,27 @@ export function buildWorldMap(
       [30, -26, 20, 14, 24],
     ];
     warehouses.forEach(([wx, wz, ww, wh, wd], i) => {
-      placeStructure(`warehouse_${i}`, wx, wz, ww, wh, wd, () =>
-        buildIndustrialWarehouse(ww, wh, wd, assetManager, resourceManager, scope)
-      );
+      placeEnterableBuilding(`warehouse_${i}`, wx, wz, ww, wh, wd, 'warehouse');
     });
 
-    // Moving overhead industrial gantry crane
+    // Moving overhead industrial gantry crane with physical support pillars
     const gantry = buildMovingGantry(assetManager, resourceManager, scope);
     gantry.position.set(0, 14, -4);
     scene.add(gantry);
     resourceManager.register('object3d', scope, () => scene.remove(gantry));
+    for (const gx of [-20.5, 20.5]) {
+      collisionWorld.addStaticBox({
+        id: `gantry_pillar_${gx > 0 ? 'E' : 'W'}`,
+        minX: gx - 0.6,
+        minY: 0,
+        minZ: -4.8,
+        maxX: gx + 0.6,
+        maxY: 14.5,
+        maxZ: -3.2,
+        layer: COLLISION_LAYER.WORLD,
+        tag: 'building_pillar',
+      });
+    }
     animatedProps.push({
       update: (elapsed) => {
         const trolley = gantry.getObjectByName('gantry_trolley');
@@ -380,7 +625,7 @@ export function buildWorldMap(
     });
   }
 
-  // Tactical Cover Barriers & Cover Nodes (shared across all 4 maps)
+  // Tactical Cover Barriers & Cover Nodes (shared across all 4 maps) with oriented OBB collision
   const coverPositions: Array<[number, number, number]> = [
     [-8, 36, 0],
     [9, 28, 0.2],
@@ -400,15 +645,27 @@ export function buildWorldMap(
     barrier.position.set(cx, cy, cz);
     barrier.rotation.y = rot;
     chunkManager.registerObject(barrier, cx, cz, scene);
+    const cos = Math.abs(Math.cos(rot));
+    const sin = Math.abs(Math.sin(rot));
+    const hx = 2.1;
+    const hz = 0.7;
+    const aabbHx = hx * cos + hz * sin;
+    const aabbHz = hx * sin + hz * cos;
     collisionWorld.addStaticBox({
       id: `cover_${i}`,
-      minX: cx - 2.2,
+      minX: cx - aabbHx,
       minY: cy,
-      minZ: cz - 0.85,
-      maxX: cx + 2.2,
+      minZ: cz - aabbHz,
+      maxX: cx + aabbHx,
       maxY: cy + 1.45,
-      maxZ: cz + 0.85,
+      maxZ: cz + aabbHz,
+      yaw: rot,
+      centerX: cx,
+      centerZ: cz,
+      halfExtX: hx,
+      halfExtZ: hz,
       layer: COLLISION_LAYER.COVER,
+      tag: 'cover_barrier',
     });
     coverNodes.push(new THREE.Vector3(cx, cy, cz + (cz > 0 ? -1.8 : 1.8)));
   });
@@ -471,7 +728,7 @@ export function buildWorldMap(
     });
   });
 
-  // Resupply Ammo & Armor Crates (Interact [E])
+  // Resupply Ammo & Armor Crates (Interact [E]) — registered with physical colliders
   const crateCoords: Array<[number, number]> = [
     [-6, 46],
     [12, 2],
@@ -482,6 +739,17 @@ export function buildWorldMap(
     const crate = buildSupplyCrate(assetManager, resourceManager, scope);
     crate.position.set(kx, ky, kz);
     chunkManager.registerObject(crate, kx, kz, scene);
+    collisionWorld.addStaticBox({
+      id: `supply_${i}`,
+      minX: kx - 0.78,
+      minY: ky,
+      minZ: kz - 0.54,
+      maxX: kx + 0.78,
+      maxY: ky + 0.92,
+      maxZ: kz + 0.54,
+      layer: COLLISION_LAYER.COVER,
+      tag: 'supply_crate',
+    });
     supplyCrates.push({
       id: `supply_${i}`,
       position: new THREE.Vector3(kx, ky, kz),
@@ -507,109 +775,149 @@ export function buildWorldMap(
   return { coverNodes, roadWaypoints, supplyCrates, animatedProps, extractionBeacon };
 }
 
-function buildRuinedBuilding(
+function buildEnterableBuildingMesh(
   w: number,
   h: number,
   d: number,
-  assets: AssetManager,
-  res: ResourceManager,
-  scope: ResourceScope,
-  damagedTop: boolean
-): THREE.Group {
-  const g = new THREE.Group();
-  const concrete = assets.getSharedMaterial('bldg_concrete', {
-    pattern: 'concrete',
-    repeat: [3, 4],
-    roughness: 0.88,
-    metalness: 0.08,
-    color: 0x6c727a,
-  });
-  const trim = assets.getSharedMaterial('bldg_steel', {
-    pattern: 'metal_plate',
-    repeat: [2, 2],
-    roughness: 0.45,
-    metalness: 0.72,
-    color: 0x333b44,
-  });
-  const glass = assets.getSharedMaterial('bldg_glass', {
-    color: 0x1e293b,
-    roughness: 0.15,
-    metalness: 0.85,
-  });
-
-  const bodyGeo = new THREE.BoxGeometry(w, h, d);
-  res.registerGeometry(bodyGeo, scope);
-  const body = new THREE.Mesh(bodyGeo, concrete);
-  body.position.y = h * 0.5;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  g.add(body);
-
-  // Base plinth & rooftop parapet
-  const plinthGeo = new THREE.BoxGeometry(w + 0.6, 1.4, d + 0.6);
-  res.registerGeometry(plinthGeo, scope);
-  const plinth = new THREE.Mesh(plinthGeo, trim);
-  plinth.position.y = 0.7;
-  g.add(plinth);
-
-  const roofGeo = new THREE.BoxGeometry(w + 0.4, 0.9, d + 0.4);
-  res.registerGeometry(roofGeo, scope);
-  const roof = new THREE.Mesh(roofGeo, trim);
-  roof.position.y = h;
-  if (damagedTop) roof.rotation.z = 0.06;
-  g.add(roof);
-
-  // Recessed window bands
-  const winGeo = new THREE.BoxGeometry(w * 0.75, h * 0.12, d + 0.12);
-  res.registerGeometry(winGeo, scope);
-  for (let row = 0.28; row <= 0.78; row += 0.24) {
-    const win = new THREE.Mesh(winGeo, glass);
-    win.position.y = h * row;
-    g.add(win);
-  }
-  return g;
-}
-
-function buildMilitaryBunker(
-  w: number,
-  h: number,
-  d: number,
+  groundH: number,
+  wallT: number,
+  doorW: number,
+  doorH: number,
+  winW: number,
+  sillH: number,
+  winTopY: number,
+  style: 'city' | 'bunker' | 'warehouse',
+  damagedTop: boolean,
   assets: AssetManager,
   res: ResourceManager,
   scope: ResourceScope
 ): THREE.Group {
   const g = new THREE.Group();
-  const wallMat = assets.getSharedMaterial('bunker_sand_concrete', {
-    pattern: 'concrete',
-    repeat: [2, 1],
-    roughness: 0.92,
-    color: 0x8c7b65,
-  });
-  const roofMat = assets.getSharedMaterial('bunker_roof_steel', {
-    pattern: 'metal_plate',
-    roughness: 0.5,
-    metalness: 0.6,
-    color: 0x3b4248,
-  });
-  const bodyGeo = new THREE.BoxGeometry(w, h, d);
-  res.registerGeometry(bodyGeo, scope);
-  const body = new THREE.Mesh(bodyGeo, wallMat);
-  body.position.y = h * 0.5;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  g.add(body);
 
-  const capGeo = new THREE.BoxGeometry(w + 0.8, 0.7, d + 0.8);
-  res.registerGeometry(capGeo, scope);
-  const cap = new THREE.Mesh(capGeo, roofMat);
-  cap.position.y = h + 0.25;
-  g.add(cap);
+  const wallMat =
+    style === 'bunker'
+      ? assets.getSharedMaterial('bunker_sand_concrete', {
+          pattern: 'concrete',
+          repeat: [2, 1],
+          roughness: 0.92,
+          color: 0x8c7b65,
+        })
+      : style === 'warehouse'
+        ? assets.getSharedMaterial('ind_metal', {
+            pattern: 'metal_plate',
+            repeat: [3, 2],
+            roughness: 0.45,
+            metalness: 0.72,
+            color: 0x4b5560,
+          })
+        : assets.getSharedMaterial('bldg_concrete', {
+            pattern: 'concrete',
+            repeat: [3, 4],
+            roughness: 0.88,
+            metalness: 0.08,
+            color: 0x6c727a,
+          });
 
-  const slitGeo = new THREE.BoxGeometry(w * 0.65, 0.75, d + 0.15);
-  res.registerGeometry(slitGeo, scope);
-  const slit = new THREE.Mesh(slitGeo, roofMat);
-  slit.position.y = h * 0.68;
-  g.add(slit);
+  const trimMat =
+    style === 'warehouse'
+      ? assets.getSharedMaterial('ind_stripe', {
+          pattern: 'warning_stripe',
+          repeat: [4, 1],
+          roughness: 0.65,
+          metalness: 0.25,
+        })
+      : assets.getSharedMaterial('bldg_steel', {
+          pattern: 'metal_plate',
+          repeat: [2, 2],
+          roughness: 0.45,
+          metalness: 0.72,
+          color: 0x333b44,
+        });
+
+  const glassMat = assets.getSharedMaterial('bldg_glass', {
+    color: 0x1e293b,
+    roughness: 0.15,
+    metalness: 0.85,
+  });
+
+  const addBox = (
+    bx: number,
+    by: number,
+    bz: number,
+    bw: number,
+    bh: number,
+    bd: number,
+    mat: THREE.Material
+  ) => {
+    const geo = new THREE.BoxGeometry(bw, bh, bd);
+    res.registerGeometry(geo, scope);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(bx, by, bz);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+
+  const halfW = w * 0.5;
+  const halfD = d * 0.5;
+  const halfDoor = doorW * 0.5;
+  const halfWin = winW * 0.5;
+
+  // Interior floor slab
+  addBox(0, 0.04, 0, w - 0.1, 0.08, d - 0.1, trimMat);
+
+  // Front (+Z) & Back (-Z) ground-floor walls with doorway openings
+  const frontBackSegW = Math.max(0.4, halfW - halfDoor);
+  const lintelH = Math.max(0.25, groundH - doorH);
+  for (const zSign of [-1, 1]) {
+    const wz = zSign * (halfD - wallT * 0.5);
+    addBox(-halfDoor - frontBackSegW * 0.5, groundH * 0.5, wz, frontBackSegW, groundH, wallT, wallMat);
+    addBox(halfDoor + frontBackSegW * 0.5, groundH * 0.5, wz, frontBackSegW, groundH, wallT, wallMat);
+    addBox(0, doorH + lintelH * 0.5, wz, doorW, lintelH, wallT, wallMat);
+    // Door frame trim posts
+    addBox(-halfDoor + 0.06, doorH * 0.5, wz, 0.12, doorH, wallT + 0.08, trimMat);
+    addBox(halfDoor - 0.06, doorH * 0.5, wz, 0.12, doorH, wallT + 0.08, trimMat);
+  }
+
+  // Left (-X) & Right (+X) ground-floor walls with tactical window openings
+  const sideSegD = Math.max(0.4, halfD - wallT - halfWin);
+  const winLintelH = Math.max(0.25, groundH - winTopY);
+  for (const xSign of [-1, 1]) {
+    const wx = xSign * (halfW - wallT * 0.5);
+    addBox(wx, groundH * 0.5, -halfWin - sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
+    addBox(wx, groundH * 0.5, halfWin + sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
+    addBox(wx, sillH * 0.5, 0, wallT, sillH, winW, wallMat);
+    addBox(wx, sillH - 0.05, 0, wallT + 0.1, 0.1, winW + 0.1, trimMat);
+    addBox(wx, winTopY + winLintelH * 0.5, 0, wallT, winLintelH, winW, wallMat);
+  }
+
+  // Interior partition wall for larger buildings
+  if (w >= 14 && d >= 12) {
+    const partW = w * 0.3;
+    addBox(-w * 0.07, (groundH - 0.1) * 0.5, 0, partW, groundH - 0.1, 0.46, wallMat);
+  }
+
+  // Upper stories (above groundH) + roof parapet
+  const upperH = Math.max(0.6, h - groundH);
+  addBox(0, groundH + upperH * 0.5, 0, w, upperH, d, wallMat);
+
+  const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat);
+  if (damagedTop) {
+    roof.rotation.z = 0.05;
+  }
+
+  // Upper-story window bands for tall buildings
+  if (h >= 10) {
+    const winGeo = new THREE.BoxGeometry(w * 0.76, 1.35, d + 0.12);
+    res.registerGeometry(winGeo, scope);
+    for (let yRow = groundH + 2.4; yRow <= h - 2.2; yRow += 3.8) {
+      const win = new THREE.Mesh(winGeo, glassMat);
+      win.position.y = yRow;
+      g.add(win);
+    }
+  }
+
   return g;
 }
 
@@ -646,50 +954,6 @@ function buildWatchtower(assets: AssetManager, res: ResourceManager, scope: Reso
   roof.position.y = 11.4;
   roof.rotation.y = Math.PI / 4;
   g.add(roof);
-  return g;
-}
-
-function buildIndustrialWarehouse(
-  w: number,
-  h: number,
-  d: number,
-  assets: AssetManager,
-  res: ResourceManager,
-  scope: ResourceScope
-): THREE.Group {
-  const g = new THREE.Group();
-  const metal = assets.getSharedMaterial('ind_metal', {
-    pattern: 'metal_plate',
-    repeat: [3, 2],
-    roughness: 0.45,
-    metalness: 0.72,
-    color: 0x4b5560,
-  });
-  const stripe = assets.getSharedMaterial('ind_stripe', {
-    pattern: 'warning_stripe',
-    repeat: [4, 1],
-    roughness: 0.65,
-    metalness: 0.25,
-  });
-  const bodyGeo = new THREE.BoxGeometry(w, h, d);
-  res.registerGeometry(bodyGeo, scope);
-  const body = new THREE.Mesh(bodyGeo, metal);
-  body.position.y = h * 0.5;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  g.add(body);
-
-  const bandGeo = new THREE.BoxGeometry(w + 0.16, 1.1, d + 0.16);
-  res.registerGeometry(bandGeo, scope);
-  const band = new THREE.Mesh(bandGeo, stripe);
-  band.position.y = 1.8;
-  g.add(band);
-
-  const ventGeo = new THREE.CylinderGeometry(0.9, 0.9, 2.2, 10);
-  res.registerGeometry(ventGeo, scope);
-  const vent = new THREE.Mesh(ventGeo, metal);
-  vent.position.set(0, h + 1.0, 0);
-  g.add(vent);
   return g;
 }
 

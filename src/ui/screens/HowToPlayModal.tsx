@@ -28,6 +28,7 @@ const SECTIONS = [
     title: 'Vehicles, Guided Missiles & Systems',
     items: [
       ['E', 'Enter/Exit Vehicle, Collect Supply Crate, Sabotage Target'],
+      ['F', 'Cycle Vehicle Camera (Chase / Driver FPV / Turret / Orbit)'],
       ['Slot 8 (FIM-92X)', 'Hold aim on Helicopters, Drones, Jets or APCs to Lock On'],
       ['Esc', 'Pause Operation / Unlock Cursor'],
       ['F3', 'Toggle Engine Diagnostics Telemetry'],

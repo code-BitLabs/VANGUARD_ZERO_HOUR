@@ -20,6 +20,7 @@ const BINDING_LABELS: Array<{ key: keyof ControlBindings; label: string }> = [
   { key: 'crouch', label: 'Crouch / Slide' },
   { key: 'reload', label: 'Reload' },
   { key: 'interact', label: 'Interact / Vehicle' },
+  { key: 'vehicleCamera', label: 'Cycle Vehicle Camera' },
   { key: 'grenade', label: 'Throw Grenade' },
   { key: 'fireMode', label: 'Cycle Fire Mode' },
   { key: 'c4', label: 'Place / Detonate C4' },

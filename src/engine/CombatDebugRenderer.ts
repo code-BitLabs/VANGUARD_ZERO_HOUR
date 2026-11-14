@@ -1,14 +1,17 @@
 import * as THREE from 'three';
 import { ResourceManager } from '@/src/core/ResourceManager';
+import { PhysicsWorldDiagnosticsSnapshot } from '@/src/engine/physics/PhysicsTypes';
 import {
   EnemyDebugInspectorRow,
   ExplosionTelemetryRecord,
   FlightTelemetrySample,
   ShotTelemetryRecord,
 } from '@/src/gameplay/CombatTelemetryRecorder';
+import type { CameraSpringDebugRay } from '@/src/gameplay/VehicleCameraRig';
 
 const MAX_DEBUG_UNITS = 36;
 const MAX_LINE_VERTICES = 1024;
+const MAX_COLLIDER_VERTICES = 4096;
 
 export class CombatDebugRenderer {
   private readonly root = new THREE.Group();
@@ -20,6 +23,10 @@ export class CombatDebugRenderer {
   private readonly shotCoverGeo: THREE.BufferGeometry;
   private readonly flightVecGeo: THREE.BufferGeometry;
   private readonly blastRingGeo: THREE.BufferGeometry;
+  private readonly colliderWireGeo: THREE.BufferGeometry;
+  private readonly contactNormalGeo: THREE.BufferGeometry;
+  private readonly blockedMoveGeo: THREE.BufferGeometry;
+  private readonly cameraRayGeo: THREE.BufferGeometry;
 
   private readonly tokenMarkers: THREE.Mesh[] = [];
   private readonly lkpMarkers: THREE.Mesh[] = [];
@@ -43,6 +50,10 @@ export class CombatDebugRenderer {
     this.shotCoverGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.flightVecGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.blastRingGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
+    this.colliderWireGeo = this.createDynamicLineGeo(MAX_COLLIDER_VERTICES);
+    this.contactNormalGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
+    this.blockedMoveGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
+    this.cameraRayGeo = this.createDynamicLineGeo(16);
 
     const greenMat = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.78 });
     const redMat = new THREE.LineBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.55 });
@@ -52,10 +63,25 @@ export class CombatDebugRenderer {
     const shotCoverMat = new THREE.LineBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.8 });
     const flightVecMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.88 });
     const blastRingMat = new THREE.LineBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.65 });
+    const colliderWireMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.55 });
+    const contactNormalMat = new THREE.LineBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.95 });
+    const blockedMoveMat = new THREE.LineBasicMaterial({ color: 0xfb7185, transparent: true, opacity: 0.95 });
+    const cameraRayMat = new THREE.LineBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.95 });
 
-    [greenMat, redMat, fovMat, lkpMat, shotHitMat, shotCoverMat, flightVecMat, blastRingMat].forEach((m) =>
-      this.resources.registerMaterial(m, 'shared')
-    );
+    [
+      greenMat,
+      redMat,
+      fovMat,
+      lkpMat,
+      shotHitMat,
+      shotCoverMat,
+      flightVecMat,
+      blastRingMat,
+      colliderWireMat,
+      contactNormalMat,
+      blockedMoveMat,
+      cameraRayMat,
+    ].forEach((m) => this.resources.registerMaterial(m, 'shared'));
 
     this.root.add(new THREE.LineSegments(this.losGreenGeo, greenMat));
     this.root.add(new THREE.LineSegments(this.losRedGeo, redMat));
@@ -65,6 +91,10 @@ export class CombatDebugRenderer {
     this.root.add(new THREE.LineSegments(this.shotCoverGeo, shotCoverMat));
     this.root.add(new THREE.LineSegments(this.flightVecGeo, flightVecMat));
     this.root.add(new THREE.LineSegments(this.blastRingGeo, blastRingMat));
+    this.root.add(new THREE.LineSegments(this.colliderWireGeo, colliderWireMat));
+    this.root.add(new THREE.LineSegments(this.contactNormalGeo, contactNormalMat));
+    this.root.add(new THREE.LineSegments(this.blockedMoveGeo, blockedMoveMat));
+    this.root.add(new THREE.LineSegments(this.cameraRayGeo, cameraRayMat));
 
     const crownGeo = new THREE.OctahedronGeometry(0.32, 0);
     const lkpBoxGeo = new THREE.BoxGeometry(0.55, 1.5, 0.55);
@@ -121,9 +151,12 @@ export class CombatDebugRenderer {
     playerPos: THREE.Vector3,
     showFlightPaths = false,
     flightSamples: FlightTelemetrySample[] = [],
-    recentExplosions: ExplosionTelemetryRecord[] = []
+    recentExplosions: ExplosionTelemetryRecord[] = [],
+    showPhysicsColliders = false,
+    physicsSnap?: PhysicsWorldDiagnosticsSnapshot,
+    cameraSpringRay?: CameraSpringDebugRay
   ): void {
-    if (!enabled && !showFlightPaths) {
+    if (!enabled && !showFlightPaths && !showPhysicsColliders) {
       if (this.root.visible) {
         this.root.visible = false;
       }
@@ -139,6 +172,10 @@ export class CombatDebugRenderer {
     const shotCoverVerts: number[] = [];
     const flightVerts: number[] = [];
     const blastVerts: number[] = [];
+    const colliderVerts: number[] = [];
+    const contactNormalVerts: number[] = [];
+    const blockedMoveVerts: number[] = [];
+    const cameraRayVerts: number[] = [];
 
     const playerChestY = playerPos.y + 1.15;
 
@@ -148,97 +185,96 @@ export class CombatDebugRenderer {
     }
 
     if (enabled) {
+      const count = Math.min(units.length, MAX_DEBUG_UNITS);
+      for (let i = 0; i < count; i++) {
+        const u = units[i];
+        const eyeY = u.domain === 'air' ? u.y : u.y + 1.55;
 
-    const count = Math.min(units.length, MAX_DEBUG_UNITS);
-    for (let i = 0; i < count; i++) {
-      const u = units[i];
-      const eyeY = u.domain === 'air' ? u.y : u.y + 1.55;
-
-      // 1. LOS ray to player
-      if (u.hasLos) {
-        greenVerts.push(u.x, eyeY, u.z, playerPos.x, playerChestY, playerPos.z);
-      } else {
-        redVerts.push(u.x, eyeY, u.z, playerPos.x, playerChestY, playerPos.z);
-      }
-
-      // 2. Ground unit FOV cone wedges (110 deg / 140 deg when alerted)
-      if (u.domain === 'ground') {
-        const halfFovRad = ((u.fovDeg * 0.5) * Math.PI) / 180;
-        const coneLen = 11.0;
-        const leftAng = u.yaw - halfFovRad;
-        const rightAng = u.yaw + halfFovRad;
-        const midAng = u.yaw;
-
-        const lx = u.x + Math.sin(leftAng) * coneLen;
-        const lz = u.z + Math.cos(leftAng) * coneLen;
-        const rx = u.x + Math.sin(rightAng) * coneLen;
-        const rz = u.z + Math.cos(rightAng) * coneLen;
-        const mx = u.x + Math.sin(midAng) * coneLen;
-        const mz = u.z + Math.cos(midAng) * coneLen;
-        const wy = u.y + 0.25;
-
-        fovVerts.push(
-          u.x,
-          wy,
-          u.z,
-          lx,
-          wy,
-          lz,
-          u.x,
-          wy,
-          u.z,
-          rx,
-          wy,
-          rz,
-          lx,
-          wy,
-          lz,
-          mx,
-          wy,
-          mz,
-          mx,
-          wy,
-          mz,
-          rx,
-          wy,
-          rz
-        );
-      }
-
-      // 3. Last Known Position wireframe box + tether
-      if (u.lkpX !== null && u.lkpY !== null && u.lkpZ !== null && u.lkpAgeSec < 10) {
-        const marker = this.lkpMarkers[i];
-        marker.position.set(u.lkpX, u.lkpY + 0.75, u.lkpZ);
-        marker.visible = true;
-        lkpVerts.push(u.x, eyeY, u.z, u.lkpX, u.lkpY + 0.9, u.lkpZ);
-      }
-
-      // 4. Active Coordinator Lease Token Crown
-      if (u.tokenStatus === 'DIRECT' || u.tokenStatus === 'HEAVY' || u.tokenStatus === 'SUPPRESS') {
-        const crown = this.tokenMarkers[i];
-        crown.position.set(u.x, eyeY + 0.95, u.z);
-        crown.rotation.y += 0.08;
-        const mat = crown.material as THREE.MeshBasicMaterial;
-        if (u.tokenStatus === 'DIRECT') {
-          mat.color.setHex(0x06b6d4); // Cyan: Direct Attack Token
-        } else if (u.tokenStatus === 'HEAVY') {
-          mat.color.setHex(0xf97316); // Orange: Heavy Attack Token
+        // 1. LOS ray to player
+        if (u.hasLos) {
+          greenVerts.push(u.x, eyeY, u.z, playerPos.x, playerChestY, playerPos.z);
         } else {
-          mat.color.setHex(0xa855f7); // Purple: Suppression Lease
+          redVerts.push(u.x, eyeY, u.z, playerPos.x, playerChestY, playerPos.z);
         }
-        crown.visible = true;
-      }
-    }
 
-    // 5. Recent ballistic shot trajectories
-    const recentSlice = recentShots.slice(-28);
-    for (const s of recentSlice) {
-      if (s.outcome === 'hit_player') {
-        shotHitVerts.push(s.originX, s.originY, s.originZ, s.endX, s.endY, s.endZ);
-      } else if (s.outcome === 'blocked_cover') {
-        shotCoverVerts.push(s.originX, s.originY, s.originZ, s.endX, s.endY, s.endZ);
+        // 2. Ground unit FOV cone wedges (110 deg / 140 deg when alerted)
+        if (u.domain === 'ground') {
+          const halfFovRad = ((u.fovDeg * 0.5) * Math.PI) / 180;
+          const coneLen = 11.0;
+          const leftAng = u.yaw - halfFovRad;
+          const rightAng = u.yaw + halfFovRad;
+          const midAng = u.yaw;
+
+          const lx = u.x + Math.sin(leftAng) * coneLen;
+          const lz = u.z + Math.cos(leftAng) * coneLen;
+          const rx = u.x + Math.sin(rightAng) * coneLen;
+          const rz = u.z + Math.cos(rightAng) * coneLen;
+          const mx = u.x + Math.sin(midAng) * coneLen;
+          const mz = u.z + Math.cos(midAng) * coneLen;
+          const wy = u.y + 0.25;
+
+          fovVerts.push(
+            u.x,
+            wy,
+            u.z,
+            lx,
+            wy,
+            lz,
+            u.x,
+            wy,
+            u.z,
+            rx,
+            wy,
+            rz,
+            lx,
+            wy,
+            lz,
+            mx,
+            wy,
+            mz,
+            mx,
+            wy,
+            mz,
+            rx,
+            wy,
+            rz
+          );
+        }
+
+        // 3. Last Known Position wireframe box + tether
+        if (u.lkpX !== null && u.lkpY !== null && u.lkpZ !== null && u.lkpAgeSec < 10) {
+          const marker = this.lkpMarkers[i];
+          marker.position.set(u.lkpX, u.lkpY + 0.75, u.lkpZ);
+          marker.visible = true;
+          lkpVerts.push(u.x, eyeY, u.z, u.lkpX, u.lkpY + 0.9, u.lkpZ);
+        }
+
+        // 4. Active Coordinator Lease Token Crown
+        if (u.tokenStatus === 'DIRECT' || u.tokenStatus === 'HEAVY' || u.tokenStatus === 'SUPPRESS') {
+          const crown = this.tokenMarkers[i];
+          crown.position.set(u.x, eyeY + 0.95, u.z);
+          crown.rotation.y += 0.08;
+          const mat = crown.material as THREE.MeshBasicMaterial;
+          if (u.tokenStatus === 'DIRECT') {
+            mat.color.setHex(0x06b6d4); // Cyan: Direct Attack Token
+          } else if (u.tokenStatus === 'HEAVY') {
+            mat.color.setHex(0xf97316); // Orange: Heavy Attack Token
+          } else {
+            mat.color.setHex(0xa855f7); // Purple: Suppression Lease
+          }
+          crown.visible = true;
+        }
       }
-    }
+
+      // 5. Recent ballistic shot trajectories
+      const recentSlice = recentShots.slice(-28);
+      for (const s of recentSlice) {
+        if (s.outcome === 'hit_player') {
+          shotHitVerts.push(s.originX, s.originY, s.originZ, s.endX, s.endY, s.endZ);
+        } else if (s.outcome === 'blocked_cover') {
+          shotCoverVerts.push(s.originX, s.originY, s.originZ, s.endX, s.endY, s.endZ);
+        }
+      }
     }
 
     // 6. Active Flight Vectors & Recent Explosion Perimeter Rings
@@ -272,6 +308,110 @@ export class CombatDebugRenderer {
       }
     }
 
+    // 7. 3D Physics Collider Wireframes, Contact Surface Normals, Camera Spring Ray & Blocked Movement Vectors
+    if (showPhysicsColliders && physicsSnap) {
+      for (const box of physicsSnap.staticColliderBoxes.slice(0, 140)) {
+        const y0 = box.minY;
+        const y1 = box.maxY;
+        if (
+          Math.abs(box.yaw) > 0.001 &&
+          box.centerX !== undefined &&
+          box.centerZ !== undefined &&
+          box.halfExtX !== undefined &&
+          box.halfExtZ !== undefined
+        ) {
+          const cos = Math.cos(box.yaw);
+          const sin = Math.sin(box.yaw);
+          const cx = box.centerX;
+          const cz = box.centerZ;
+          const hx = box.halfExtX;
+          const hz = box.halfExtZ;
+
+          // Local corners transformed by Y-axis rotation: worldX = cx + lx*cos + lz*sin, worldZ = cz - lx*sin + lz*cos
+          const xA = cx - hx * cos - hz * sin;
+          const zA = cz + hx * sin - hz * cos;
+          const xB = cx + hx * cos - hz * sin;
+          const zB = cz - hx * sin - hz * cos;
+          const xC = cx + hx * cos + hz * sin;
+          const zC = cz - hx * sin + hz * cos;
+          const xD = cx - hx * cos + hz * sin;
+          const zD = cz + hx * sin + hz * cos;
+
+          colliderVerts.push(
+            xA, y0, zA, xB, y0, zB,
+            xB, y0, zB, xC, y0, zC,
+            xC, y0, zC, xD, y0, zD,
+            xD, y0, zD, xA, y0, zA,
+            xA, y1, zA, xB, y1, zB,
+            xB, y1, zB, xC, y1, zC,
+            xC, y1, zC, xD, y1, zD,
+            xD, y1, zD, xA, y1, zA,
+            xA, y0, zA, xA, y1, zA,
+            xB, y0, zB, xB, y1, zB,
+            xC, y0, zC, xC, y1, zC,
+            xD, y0, zD, xD, y1, zD
+          );
+        } else {
+          const x0 = box.minX;
+          const z0 = box.minZ;
+          const x1 = box.maxX;
+          const z1 = box.maxZ;
+          colliderVerts.push(
+            // Bottom face
+            x0, y0, z0, x1, y0, z0,
+            x1, y0, z0, x1, y0, z1,
+            x1, y0, z1, x0, y0, z1,
+            x0, y0, z1, x0, y0, z0,
+            // Top face
+            x0, y1, z0, x1, y1, z0,
+            x1, y1, z0, x1, y1, z1,
+            x1, y1, z1, x0, y1, z1,
+            x0, y1, z1, x0, y1, z0,
+            // Vertical pillars
+            x0, y0, z0, x0, y1, z0,
+            x1, y0, z0, x1, y1, z0,
+            x1, y0, z1, x1, y1, z1,
+            x0, y0, z1, x0, y1, z1
+          );
+        }
+      }
+
+      for (const c of physicsSnap.recentContacts.slice(0, 48)) {
+        const len = 1.35;
+        contactNormalVerts.push(
+          c.pointX,
+          c.pointY,
+          c.pointZ,
+          c.pointX + c.normalX * len,
+          c.pointY + c.normalY * len,
+          c.pointZ + c.normalZ * len
+        );
+      }
+
+      for (const b of physicsSnap.blockedVectors.slice(0, 32)) {
+        const scale = 14.0;
+        blockedMoveVerts.push(
+          b.originX,
+          b.originY + 0.9,
+          b.originZ,
+          b.originX + b.desiredDx * scale,
+          b.originY + 0.9,
+          b.originZ + b.desiredDz * scale
+        );
+      }
+
+      if (cameraSpringRay?.active) {
+        cameraRayVerts.push(
+          cameraSpringRay.originX,
+          cameraSpringRay.originY,
+          cameraSpringRay.originZ,
+          cameraSpringRay.endX,
+          cameraSpringRay.endY,
+          cameraSpringRay.endZ
+        );
+      }
+    }
+
     this.uploadLines(this.losGreenGeo, greenVerts);
     this.uploadLines(this.losRedGeo, redVerts);
     this.uploadLines(this.fovConeGeo, fovVerts);
@@ -280,6 +420,10 @@ export class CombatDebugRenderer {
     this.uploadLines(this.shotCoverGeo, shotCoverVerts);
     this.uploadLines(this.flightVecGeo, flightVerts);
     this.uploadLines(this.blastRingGeo, blastVerts);
+    this.uploadLines(this.colliderWireGeo, colliderVerts);
+    this.uploadLines(this.contactNormalGeo, contactNormalVerts);
+    this.uploadLines(this.blockedMoveGeo, blockedMoveVerts);
+    this.uploadLines(this.cameraRayGeo, cameraRayVerts);
   }
 
   private uploadLines(geo: THREE.BufferGeometry, coords: number[]): void {

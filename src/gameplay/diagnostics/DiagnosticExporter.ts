@@ -16,7 +16,9 @@ export type CsvExportKind =
   | 'projectiles_flight'
   | 'performance'
   | 'resources'
-  | 'warnings';
+  | 'warnings'
+  | 'collision_events'
+  | 'object_movement';
 
 function escapeCsv(val: unknown): string {
   const s = val === null || val === undefined ? '' : String(val);
@@ -241,6 +243,103 @@ export function buildCsvExport(snapshot: CombatDebugSnapshot, kind: CsvExportKin
           w.suggestedInvestigation,
         ])
       );
+
+    case 'collision_events': {
+      const rows: Array<Array<unknown>> = [];
+      for (const c of snapshot.physics.recentContacts) {
+        rows.push([
+          'CONTACT',
+          c.timestampSec,
+          c.entityId,
+          c.colliderId,
+          c.colliderTag,
+          c.pointX,
+          c.pointY,
+          c.pointZ,
+          c.normalX,
+          c.normalY,
+          c.normalZ,
+          c.penetrationDepth,
+        ]);
+      }
+      for (const b of snapshot.physics.blockedVectors) {
+        rows.push([
+          'BLOCKED_MOVE',
+          b.timestampSec,
+          b.entityId,
+          b.blockerId,
+          'blocked',
+          b.originX,
+          b.originY,
+          b.originZ,
+          b.resolvedDx - b.desiredDx,
+          0,
+          b.resolvedDz - b.desiredDz,
+          0,
+        ]);
+      }
+      return toCsv(
+        [
+          'eventType',
+          'timestampSec',
+          'entityId',
+          'colliderId',
+          'colliderTag',
+          'x',
+          'y',
+          'z',
+          'normalOrBlockedDx',
+          'normalOrBlockedDy',
+          'normalOrBlockedDz',
+          'penetrationDepth',
+        ],
+        rows
+      );
+    }
+
+    case 'object_movement':
+      return toCsv(
+        [
+          'id',
+          'entityType',
+          'classification',
+          'shape',
+          'layerLabel',
+          'maskLabel',
+          'physicalState',
+          'x',
+          'y',
+          'z',
+          'vx',
+          'vy',
+          'vz',
+          'speed',
+          'dimensions',
+          'contactCount',
+          'lastCollisionId',
+          'massKg',
+        ],
+        snapshot.physics.bodies.map((b) => [
+          b.id,
+          b.entityType,
+          b.classification,
+          b.shape,
+          b.layerLabel,
+          b.maskLabel,
+          b.physicalState,
+          b.x,
+          b.y,
+          b.z,
+          b.vx,
+          b.vy,
+          b.vz,
+          b.speed,
+          b.dimensions,
+          b.contactCount,
+          b.lastCollisionId ?? '',
+          b.massKg,
+        ])
+      );
   }
 }
 
@@ -281,7 +380,13 @@ export function buildMarkdownDiagnosticReport(snapshot: CombatDebugSnapshot): st
     `- **Resources (Geo / Mat / Tex / Listeners / Timers)**: ${r.geometries} / ${r.materials} / ${r.textures} / ${r.listeners} / ${r.timers}`,
     `- **Mission Leak Detected**: ${r.hasMissionLeak ? 'YES' : 'NO'}`,
     ``,
-    `## 5. Automated Diagnostic Warnings (${snapshot.warnings.length})`,
+    `## 5. Physics & Collision Integrity`,
+    `- **Solver Architecture**: ${snapshot.physics.solverBackend} (${Math.round(1 / snapshot.physics.fixedTimestepSec)}Hz)`,
+    `- **Bodies (Total / Static / Dynamic / Character)**: ${snapshot.physics.totalBodies} / ${snapshot.physics.staticBodiesCount} / ${snapshot.physics.dynamicBodiesCount} / ${snapshot.physics.characterBodiesCount}`,
+    `- **Per-Frame Queries (Collisions / Raycasts / Swept Casts)**: ${snapshot.physics.collisionChecksPerFrame} / ${snapshot.physics.raycastsPerFrame} / ${snapshot.physics.shapeCastsPerFrame}`,
+    `- **Cumulative Guards (Penetrations / Blocked Moves / Ceiling Blocks / Boundary Clamps / CCD Tunneling / Vehicle Impacts)**: ${snapshot.physics.penetrationCorrectionsTotal} / ${snapshot.physics.blockedMovementsTotal} / ${snapshot.physics.ceilingStandupBlocksTotal} / ${snapshot.physics.worldBoundaryClampsTotal} / ${snapshot.physics.tunnelingPreventedTotal} / ${snapshot.physics.vehicleBuildingImpactsTotal}`,
+    ``,
+    `## 6. Automated Diagnostic Warnings (${snapshot.warnings.length})`,
   ];
 
   if (snapshot.warnings.length === 0) {
@@ -290,6 +395,72 @@ export function buildMarkdownDiagnosticReport(snapshot: CombatDebugSnapshot): st
     for (const w of snapshot.warnings.slice(0, 20)) {
       lines.push(
         `- **[${w.severity}] ${w.ruleId}** (${w.subsystem} @ ${w.timestampSec}s) — ${w.measuredEvidence} | Investigation: ${w.suggestedInvestigation}`
+      );
+    }
+  }
+
+  return lines.join('\n');
+}
+
+export function buildPhysicsJsonReport(snapshot: CombatDebugSnapshot): string {
+  const payload = {
+    schemaVersion: 'vanguard.physics.diagnostics.v1',
+    generatedAtIso: new Date().toISOString(),
+    missionId: snapshot.missionId,
+    elapsedSec: snapshot.metrics.elapsedSec,
+    physics: snapshot.physics,
+    playerMovement: snapshot.playerMovement,
+    flightSamples: snapshot.flightSamples,
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+export function buildPhysicsMarkdownAuditReport(snapshot: CombatDebugSnapshot): string {
+  const phys = snapshot.physics;
+  const lines: string[] = [
+    `# VANGUARD: ZERO HOUR — Physics & Collision Integrity Audit Report`,
+    ``,
+    `- **Generated**: ${new Date().toISOString()}`,
+    `- **Mission**: #${snapshot.missionId} | **Elapsed**: ${snapshot.metrics.elapsedSec}s`,
+    `- **Solver Backend**: ${phys.solverBackend} (Rapier WASM Ready: ${phys.rapierInitialized ? 'YES' : 'FALLBACK'})`,
+    `- **Fixed Step**: ${(phys.fixedTimestepSec * 1000).toFixed(2)}ms (${Math.round(1 / phys.fixedTimestepSec)} Hz)`,
+    `- **World Boundary**: [${phys.worldBoundsMin}m .. ${phys.worldBoundsMax}m]`,
+    ``,
+    `## 1. Body & Collider Registry`,
+    `- **Total Physics Bodies**: ${phys.totalBodies}`,
+    `- **Static World/Building Colliders**: ${phys.staticBodiesCount}`,
+    `- **Dynamic Rigid/Kinematic Bodies**: ${phys.dynamicBodiesCount + phys.kinematicBodiesCount}`,
+    `- **Character Capsule Bodies**: ${phys.characterBodiesCount}`,
+    ``,
+    `## 2. Collision & Guard Counters`,
+    `- **Collision Checks (This Frame)**: ${phys.collisionChecksPerFrame}`,
+    `- **Raycasts (This Frame)**: ${phys.raycastsPerFrame}`,
+    `- **Swept Shape-Casts (This Frame)**: ${phys.shapeCastsPerFrame}`,
+    `- **Penetration Corrections (Total)**: ${phys.penetrationCorrectionsTotal}`,
+    `- **Blocked Wall Movements (Total)**: ${phys.blockedMovementsTotal}`,
+    `- **Ceiling Stand-Up Blocks (Total)**: ${phys.ceilingStandupBlocksTotal}`,
+    `- **World Boundary Clamps (Total)**: ${phys.worldBoundaryClampsTotal}`,
+    `- **Anti-Tunneling CCD Intercepts (Total)**: ${phys.tunnelingPreventedTotal}`,
+    `- **Vehicle Collisions (Total)**: ${phys.vehicleBuildingImpactsTotal}`,
+    ``,
+    `## 3. Active Physics Bodies (${phys.bodies.length})`,
+    `| ID | Entity Type | Classification | Shape | Layer | State | Speed (m/s) | Contacts | Last Collider Hit |`,
+    `|---|---|---|---|---|---|---|---|---|`,
+  ];
+
+  for (const b of phys.bodies.slice(0, 40)) {
+    lines.push(
+      `| ${b.id} | ${b.entityType} | ${b.classification} | ${b.shape} | ${b.layerLabel} | ${b.physicalState} | ${b.speed} | ${b.contactCount} | ${b.lastCollisionId ?? 'None'} |`
+    );
+  }
+
+  lines.push(``, `## 4. Physics Warnings (${phys.physicsWarnings.length})`);
+  if (phys.physicsWarnings.length === 0) {
+    lines.push(`- Zero physics anomalies detected.`);
+  } else {
+    for (const w of phys.physicsWarnings) {
+      lines.push(
+        `- **[${w.classification}] [${w.severity}] ${w.ruleId}** (${w.entityId} @ ${w.timestampSec}s): ${w.description} — Expected: ${w.expectedBehavior} | Action: ${w.suggestedInvestigation}`
       );
     }
   }

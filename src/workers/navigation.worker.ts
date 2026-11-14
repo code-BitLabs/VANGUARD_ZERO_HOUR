@@ -63,7 +63,7 @@ function computeNextWaypoint(
   let bestNode = startIdx;
   let bestDist = Math.hypot(tcx - scx, tcz - scz);
   let iterations = 0;
-  const maxIter = 180;
+  const maxIter = 420;
 
   while (open.length > 0 && iterations < maxIter) {
     iterations++;
@@ -87,12 +87,21 @@ function computeNextWaypoint(
     }
 
     for (let d = 0; d < dirs.length; d++) {
-      const nx = cx + dirs[d][0];
-      const nz = cz + dirs[d][1];
+      const dx = dirs[d][0];
+      const dz = dirs[d][1];
+      const nx = cx + dx;
+      const nz = cz + dz;
       if (nx < 0 || nx >= g.width || nz < 0 || nz >= g.height) continue;
       const nIdx = nz * g.width + nx;
       if (closed[nIdx]) continue;
       if (g.blocked[nIdx] === 1 && nIdx !== goalIdx) continue;
+
+      // Prevent diagonal corner-cutting across building wall corners
+      if (dx !== 0 && dz !== 0) {
+        const adj1 = cz * g.width + (cx + dx);
+        const adj2 = (cz + dz) * g.width + cx;
+        if (g.blocked[adj1] === 1 || g.blocked[adj2] === 1) continue;
+      }
 
       const tentativeG = gScore[curr] + dirs[d][2];
       if (tentativeG < gScore[nIdx]) {

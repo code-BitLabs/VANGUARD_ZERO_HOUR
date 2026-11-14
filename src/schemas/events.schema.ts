@@ -71,6 +71,9 @@ export const TacticalOrdnanceHudSchema = z.object({
 });
 export type TacticalOrdnanceHud = z.infer<typeof TacticalOrdnanceHudSchema>;
 
+export const VehicleCameraModeSchema = z.enum(['chase', 'driver_fpv', 'turret', 'orbit']);
+export type VehicleCameraMode = z.infer<typeof VehicleCameraModeSchema>;
+
 export const HudSnapshotSchema = z.object({
   health: z.number().min(0).max(100),
   maxHealth: z.number().positive(),
@@ -99,6 +102,7 @@ export const HudSnapshotSchema = z.object({
   vehicleHealth: z.number().min(0).max(100),
   vehicleMaxHealth: z.number().positive(),
   vehicleSpeedKmh: z.number().nonnegative(),
+  vehicleCameraMode: VehicleCameraModeSchema.default('chase'),
   interactPrompt: z.string().nullable(),
   subtitleText: z.string().nullable(),
   missionAlert: z.string().nullable(),

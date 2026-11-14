@@ -4,6 +4,7 @@ import {
   EnemyWeaponClass,
   PlayerHitZone,
 } from '@/src/schemas/combat.schema';
+import { PhysicsWorldDiagnosticsSnapshot } from '@/src/engine/physics/PhysicsTypes';
 
 export type CombatEventKind =
   | 'DETECTED'
@@ -368,6 +369,7 @@ export interface CombatDebugSnapshot {
   performance: PerformanceTelemetrySnapshot;
   resources: ResourceTelemetrySnapshot;
   warnings: DiagnosticWarning[];
+  physics: PhysicsWorldDiagnosticsSnapshot;
 }
 
 const VALID_STATE_TRANSITIONS = new Set<string>([
@@ -592,6 +594,35 @@ export class CombatTelemetryRecorder {
     sharedDelta: 0,
   };
 
+  private latestPhysics: PhysicsWorldDiagnosticsSnapshot = {
+    solverBackend: 'Hybrid Rapier3D + Custom FPS Controller + SpatialHash/BVH',
+    rapierInitialized: false,
+    fixedTimestepSec: 0.0167,
+    worldBoundsMin: -106,
+    worldBoundsMax: 106,
+    totalBodies: 0,
+    staticBodiesCount: 0,
+    dynamicBodiesCount: 0,
+    kinematicBodiesCount: 0,
+    characterBodiesCount: 0,
+    activeCollisionPairs: 0,
+    collisionChecksPerFrame: 0,
+    raycastsPerFrame: 0,
+    shapeCastsPerFrame: 0,
+    blockedMovementsTotal: 0,
+    penetrationCorrectionsTotal: 0,
+    ceilingStandupBlocksTotal: 0,
+    tunnelingPreventedTotal: 0,
+    worldBoundaryClampsTotal: 0,
+    vehicleBuildingImpactsTotal: 0,
+    invalidLayerMaskCount: 0,
+    bodies: [],
+    recentContacts: [],
+    blockedVectors: [],
+    physicsWarnings: [],
+    staticColliderBoxes: [],
+  };
+
   setMissionId(missionId: number): void {
     this.missionId = missionId;
   }
@@ -763,6 +794,13 @@ export class CombatTelemetryRecorder {
 
   setWarnings(warnings: DiagnosticWarning[]): void {
     this.warningsList = warnings;
+  }
+
+  setPhysicsDiagnostics(physics: PhysicsWorldDiagnosticsSnapshot): void {
+    this.latestPhysics = physics;
+    if (physics.tunnelingPreventedTotal > this.tunnelingBlockedCount) {
+      this.tunnelingBlockedCount = physics.tunnelingPreventedTotal;
+    }
   }
 
   recordEvent(
@@ -1079,6 +1117,7 @@ export class CombatTelemetryRecorder {
       },
       resources: { ...this.latestResources },
       warnings: [...this.warningsList],
+      physics: this.latestPhysics,
     };
   }
 

@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { VFXPool } from '@/src/effects/VFXPool';
+import { formatCollisionLayer } from '@/src/engine/physics/PhysicsLayers';
+import type { PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
   AUTHORITATIVE_COMBAT_CONFIG,
   DIFFICULTY_COMBAT_PROFILES,
@@ -333,10 +336,13 @@ export class AirCombatManager {
         u.meshRoot.position.copy(u.position);
         u.meshRoot.rotation.z += dt * 2.2;
         u.meshRoot.rotation.x += dt * 1.4;
-        if (u.position.y <= 0.5) {
+        const crashFloorY = collision
+          ? Math.max(0.5, collision.getMaxObstacleHeightInArea(u.position.x, u.position.z, 2.2) + 0.5)
+          : 0.5;
+        if (u.position.y <= crashFloorY) {
           u.crashing = false;
           u.meshRoot.visible = false;
-          this.vfx.spawnExplosion(u.position.x, 0.5, u.position.z, 2.0);
+          this.vfx.spawnExplosion(u.position.x, crashFloorY, u.position.z, 2.0);
         }
         continue;
       }
@@ -344,7 +350,7 @@ export class AirCombatManager {
       if (!u.alive) continue;
 
       u.flightTimeSec += dt;
-      this.stepAircraftKinematics(u, dt, player);
+      this.stepAircraftKinematics(u, dt, player, collision);
 
       if (u.type === 'transport') continue;
 
@@ -552,7 +558,12 @@ export class AirCombatManager {
     }
   }
 
-  private stepAircraftKinematics(u: AirUnit, dt: number, player: PlayerController): void {
+  private stepAircraftKinematics(
+    u: AirUnit,
+    dt: number,
+    player: PlayerController,
+    collision?: CollisionWorld
+  ): void {
     const prof = u.profile;
     u.phaseTimerSec -= dt;
 
@@ -744,7 +755,26 @@ export class AirCombatManager {
       u.flightPhase === 'HOVER_LOITER' || u.flightPhase === 'STANDOFF_HOVER'
         ? Math.sin(u.flightTimeSec * 2.2) * 0.22 * dt
         : 0;
-    u.position.y = Math.max(8, u.position.y + hoverBob);
+
+    let minSafeY = 8;
+    if (collision) {
+      const localRoofY = collision.getMaxObstacleHeightInArea(u.position.x, u.position.z, 6);
+      const lookaheadRoofY = collision.getMaxObstacleHeightInArea(
+        u.position.x + u.velocity.x * 1.2,
+        u.position.z + u.velocity.z * 1.2,
+        6
+      );
+      minSafeY = Math.max(8, Math.max(localRoofY, lookaheadRoofY) + 5.5);
+      if (u.waypoint.y < minSafeY) {
+        u.waypoint.y = minSafeY + 1.5;
+      }
+    }
+    if (u.position.y + hoverBob < minSafeY) {
+      u.position.y = THREE.MathUtils.lerp(u.position.y, minSafeY, Math.min(1, dt * 6));
+      if (u.velocity.y < 0) u.velocity.y = 0;
+    } else {
+      u.position.y = u.position.y + hoverBob;
+    }
 
     // Smooth roll banking & nose pitch based on turn rate and forward speed
     const turnSign = Math.sign(yawDiff);
@@ -865,6 +895,45 @@ export class AirCombatManager {
 
   clear(): void {
     this.units = [];
+  }
+
+  getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
+    const out: PhysicsBodyInspectorRow[] = [];
+    for (const u of this.units) {
+      if (!u.alive && !u.crashing) continue;
+      const spd = u.velocity.length();
+      const r = u.type === 'attack_drone' ? 1.5 : u.type === 'gunship' ? 4.4 : 3.2;
+      out.push({
+        id: u.id,
+        entityType: 'aircraft',
+        classification: 'kinematic',
+        shape: 'sphere',
+        dimensions: `r=${r}m`,
+        x: Number(u.position.x.toFixed(2)),
+        y: Number(u.position.y.toFixed(2)),
+        z: Number(u.position.z.toFixed(2)),
+        yaw: Number(u.meshRoot.rotation.y.toFixed(2)),
+        vx: Number(u.velocity.x.toFixed(2)),
+        vy: Number(u.velocity.y.toFixed(2)),
+        vz: Number(u.velocity.z.toFixed(2)),
+        ax: 0,
+        ay: 0,
+        az: 0,
+        speed: Number(spd.toFixed(2)),
+        massKg: u.type === 'attack_drone' ? 140 : 4200,
+        layer: COLLISION_LAYER.ENEMY,
+        layerLabel: formatCollisionLayer(COLLISION_LAYER.ENEMY),
+        mask: COLLISION_LAYER.WORLD | COLLISION_LAYER.PROJECTILE,
+        maskLabel: formatCollisionLayer(COLLISION_LAYER.WORLD | COLLISION_LAYER.PROJECTILE),
+        physicalState: 'HOVERING',
+        lastCollisionId: null,
+        lastNormalX: 0,
+        lastNormalY: 1,
+        lastNormalZ: 0,
+        contactCount: 0,
+      });
+    }
+    return out;
   }
 
   private buildAirRig(type: AirUnitType, scope: ResourceScope): { root: THREE.Group; rotor: THREE.Object3D | null } {

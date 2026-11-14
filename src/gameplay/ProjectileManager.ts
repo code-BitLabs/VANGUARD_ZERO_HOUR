@@ -3,6 +3,8 @@ import { AudioManager } from '@/src/audio/AudioManager';
 import { ObjectPool, Poolable } from '@/src/core/ObjectPool';
 import { ResourceManager } from '@/src/core/ResourceManager';
 import { VFXPool } from '@/src/effects/VFXPool';
+import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
+import type { PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
@@ -439,29 +441,57 @@ export class ProjectileManager {
           }
         }
 
-        // 4. Swept segment collision test (prevents high-speed tunneling)
+        // 4. Continuous Collision Detection (swept-sphere for fuse grenades, swept-ray for fast ordnance)
         const stepDist = p.vel.length() * dt;
         if (stepDist > 0.0001) {
           this._dir.copy(p.vel).normalize();
-          const hitWorld = collision.sweptSegmentTest(
-            p.pos.x,
-            p.pos.y,
-            p.pos.z,
-            this._dir.x,
-            this._dir.y,
-            this._dir.z,
-            stepDist + kin.collisionRadius,
-            COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER | COLLISION_LAYER.DESTRUCTIBLE | COLLISION_LAYER.VEHICLE,
-            this.rayHit
-          );
+          const isFuseGrenade = p.profile.detonation.triggerMode === 'fuse' && p.fuseSec > 0;
+          const castRadius = isFuseGrenade ? Math.min(0.14, kin.collisionRadius) : 0;
+          const hitWorld =
+            castRadius > 0
+              ? collision.sweptSphereTest(
+                  p.pos.x,
+                  p.pos.y,
+                  p.pos.z,
+                  this._dir.x,
+                  this._dir.y,
+                  this._dir.z,
+                  stepDist + 0.02,
+                  castRadius,
+                  PHYSICS_MASKS.PROJECTILE_SOLID,
+                  this.rayHit
+                )
+              : collision.sweptSegmentTest(
+                  p.pos.x,
+                  p.pos.y,
+                  p.pos.z,
+                  this._dir.x,
+                  this._dir.y,
+                  this._dir.z,
+                  stepDist + kin.collisionRadius,
+                  PHYSICS_MASKS.PROJECTILE_SOLID,
+                  this.rayHit
+                );
 
           if (hitWorld) {
-            if (p.profile.detonation.triggerMode === 'fuse' && p.fuseSec > 0) {
-              // 3D surface-normal reflection + tangential friction for grenades
+            if (stepDist > 1.1) {
+              collision.physicsWorld.debugSystem.recordTunnelingPrevented(
+                p.id,
+                this.rayHit.pointX,
+                this.rayHit.pointY,
+                this.rayHit.pointZ,
+                newSpeed,
+                this.rayHit.collider?.id ?? 'world'
+              );
+            }
+
+            if (isFuseGrenade) {
+              // 3D surface-normal reflection + tangential friction for grenades against walls, floors & sills
+              const pushOut = Math.max(0.08, castRadius + 0.01);
               p.pos.set(
-                this.rayHit.pointX + this.rayHit.normalX * kin.collisionRadius,
-                this.rayHit.pointY + this.rayHit.normalY * kin.collisionRadius,
-                this.rayHit.pointZ + this.rayHit.normalZ * kin.collisionRadius
+                this.rayHit.pointX + this.rayHit.normalX * pushOut,
+                this.rayHit.pointY + this.rayHit.normalY * pushOut,
+                this.rayHit.pointZ + this.rayHit.normalZ * pushOut
               );
               const vn =
                 p.vel.x * this.rayHit.normalX +
@@ -472,9 +502,13 @@ export class ProjectileManager {
                 p.vel.x -= bounceFactor * vn * this.rayHit.normalX;
                 p.vel.y -= bounceFactor * vn * this.rayHit.normalY;
                 p.vel.z -= bounceFactor * vn * this.rayHit.normalZ;
-                // Apply tangential friction
-                p.vel.x *= kin.friction;
-                p.vel.z *= kin.friction;
+                // Apply tangential friction along surface plane
+                if (Math.abs(this.rayHit.normalY) > 0.65) {
+                  p.vel.x *= kin.friction;
+                  p.vel.z *= kin.friction;
+                } else {
+                  p.vel.y *= kin.friction;
+                }
                 if (Math.abs(p.vel.y) < 0.8 && this.rayHit.normalY > 0.7) {
                   p.vel.y = 0;
                 }
@@ -486,6 +520,20 @@ export class ProjectileManager {
             }
           } else {
             p.pos.addScaledVector(p.vel, dt);
+          }
+
+          // Enforce world floor & perimeter boundary for fuse grenades
+          if (isFuseGrenade) {
+            const floorY = collision.getGroundHeightAt(p.pos.x, p.pos.z) + 0.14;
+            if (p.pos.y < floorY) {
+              p.pos.y = floorY;
+              if (p.vel.y < 0) {
+                p.vel.y = -p.vel.y * kin.restitution;
+                if (Math.abs(p.vel.y) < 0.8) p.vel.y = 0;
+                p.vel.x *= kin.friction;
+                p.vel.z *= kin.friction;
+              }
+            }
           }
         }
 
@@ -650,5 +698,43 @@ export class ProjectileManager {
 
   getPoolCapacity(): number {
     return POOL_CAPACITY;
+  }
+
+  getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
+    const out: PhysicsBodyInspectorRow[] = [];
+    this.pool.forEachActive((p) => {
+      const spd = p.vel.length();
+      const r = p.profile.kinematics.collisionRadius;
+      out.push({
+        id: p.id,
+        entityType: 'projectile',
+        classification: 'dynamic',
+        shape: 'sphere',
+        dimensions: `r=${r}m`,
+        x: Number(p.pos.x.toFixed(2)),
+        y: Number(p.pos.y.toFixed(2)),
+        z: Number(p.pos.z.toFixed(2)),
+        yaw: 0,
+        vx: Number(p.vel.x.toFixed(2)),
+        vy: Number(p.vel.y.toFixed(2)),
+        vz: Number(p.vel.z.toFixed(2)),
+        ax: 0,
+        ay: -9.81 * p.profile.kinematics.gravityScale,
+        az: 0,
+        speed: Number(spd.toFixed(2)),
+        massKg: 2.5,
+        layer: COLLISION_LAYER.PROJECTILE,
+        layerLabel: formatCollisionLayer(COLLISION_LAYER.PROJECTILE),
+        mask: PHYSICS_MASKS.PROJECTILE_SOLID,
+        maskLabel: formatCollisionLayer(PHYSICS_MASKS.PROJECTILE_SOLID),
+        physicalState: 'BALLISTIC',
+        lastCollisionId: null,
+        lastNormalX: 0,
+        lastNormalY: 1,
+        lastNormalZ: 0,
+        contactCount: 0,
+      });
+    });
+    return out;
   }
 }

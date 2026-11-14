@@ -1,3 +1,25 @@
+export type CollisionTag =
+  | 'building_wall'
+  | 'building_door_lintel'
+  | 'building_window_sill'
+  | 'building_window_lintel'
+  | 'building_floor'
+  | 'building_ceiling'
+  | 'building_roof'
+  | 'building_pillar'
+  | 'building_interior_wall'
+  | 'stair_ramp'
+  | 'terrain_slope'
+  | 'bridge'
+  | 'perimeter_wall'
+  | 'cover_barrier'
+  | 'supply_crate'
+  | 'prop'
+  | 'destructible'
+  | 'vehicle'
+  | 'enemy'
+  | 'player';
+
 export interface SpatialAABB {
   id: string;
   minX: number;
@@ -8,6 +30,17 @@ export interface SpatialAABB {
   maxZ: number;
   layer: number;
   userData?: unknown;
+  /** Optional Y-axis rotation in radians for oriented box (OBB) narrow-phase */
+  yaw?: number;
+  /** Center and half-extents for OBB narrow-phase when yaw is non-zero */
+  centerX?: number;
+  centerZ?: number;
+  halfExtX?: number;
+  halfExtZ?: number;
+  /** Semantic tag for diagnostics, material response, and 3D collider visualization */
+  tag?: CollisionTag;
+  /** Parent structure or entity ID */
+  entityId?: string;
 }
 
 export const COLLISION_LAYER = {
@@ -17,10 +50,14 @@ export const COLLISION_LAYER = {
   VEHICLE: 1 << 3,
   DESTRUCTIBLE: 1 << 4,
   PLAYER: 1 << 5,
+  PROJECTILE: 1 << 6,
+  WINDOW_SILL: 1 << 7,
+  TRIGGER: 1 << 8,
 } as const;
 
 export class SpatialHash {
   private cells = new Map<number, SpatialAABB[]>();
+  private allBoxes = new Map<string, SpatialAABB>();
   private visitedStamp = new Map<string, number>();
   private stamp = 0;
 
@@ -32,6 +69,16 @@ export class SpatialHash {
   }
 
   insert(box: SpatialAABB): void {
+    if (this.allBoxes.has(box.id)) {
+      const existing = this.allBoxes.get(box.id)!;
+      if (existing !== box) {
+        this.remove(existing);
+      } else {
+        this.removeFromCells(box);
+      }
+    }
+    this.allBoxes.set(box.id, box);
+
     const minCx = Math.floor(box.minX / this.cellSize);
     const maxCx = Math.floor(box.maxX / this.cellSize);
     const minCz = Math.floor(box.minZ / this.cellSize);
@@ -50,7 +97,7 @@ export class SpatialHash {
     }
   }
 
-  remove(box: SpatialAABB): void {
+  private removeFromCells(box: SpatialAABB): void {
     const minCx = Math.floor(box.minX / this.cellSize);
     const maxCx = Math.floor(box.maxX / this.cellSize);
     const minCz = Math.floor(box.minZ / this.cellSize);
@@ -67,8 +114,18 @@ export class SpatialHash {
     }
   }
 
+  remove(box: SpatialAABB): void {
+    this.removeFromCells(box);
+    this.allBoxes.delete(box.id);
+  }
+
   update(box: SpatialAABB): void {
-    this.remove(box);
+    // Since minX/maxX may have changed since insertion, sweep any cell containing box if bounds shifted
+    for (const list of this.cells.values()) {
+      const idx = list.indexOf(box);
+      if (idx !== -1) list.splice(idx, 1);
+    }
+    this.allBoxes.delete(box.id);
     this.insert(box);
   }
 
@@ -104,12 +161,27 @@ export class SpatialHash {
     return out;
   }
 
-  queryRadius(cxWorld: number, czWorld: number, radius: number, layerMask: number, out: SpatialAABB[]): SpatialAABB[] {
+  queryRadius(
+    cxWorld: number,
+    czWorld: number,
+    radius: number,
+    layerMask: number,
+    out: SpatialAABB[]
+  ): SpatialAABB[] {
     return this.queryAABB(cxWorld - radius, czWorld - radius, cxWorld + radius, czWorld + radius, layerMask, out);
+  }
+
+  getAllBoxes(): SpatialAABB[] {
+    return Array.from(this.allBoxes.values());
+  }
+
+  getBoxCount(): number {
+    return this.allBoxes.size;
   }
 
   clear(): void {
     this.cells.clear();
+    this.allBoxes.clear();
     this.visitedStamp.clear();
     this.stamp = 0;
   }

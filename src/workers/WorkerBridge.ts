@@ -59,28 +59,33 @@ export class WorkerBridge {
   uploadCollisionGrid(spatialHash: SpatialHash): void {
     if (!this.worker || !this.healthy) return;
 
-    const gridWidth = 60;
-    const gridHeight = 60;
-    const cellSize = 4;
+    const gridWidth = 120;
+    const gridHeight = 120;
+    const cellSize = 2;
     const originX = -120;
     const originZ = -120;
     const blocked = new Uint8Array(gridWidth * gridHeight);
     const scratch: ReturnType<SpatialHash['queryAABB']> = [];
+    const navMask =
+      COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER | COLLISION_LAYER.WINDOW_SILL;
 
     for (let cz = 0; cz < gridHeight; cz++) {
       for (let cx = 0; cx < gridWidth; cx++) {
         const wx = originX + (cx + 0.5) * cellSize;
         const wz = originZ + (cz + 0.5) * cellSize;
         const hits = spatialHash.queryAABB(
-          wx - 1.2,
-          wz - 1.2,
-          wx + 1.2,
-          wz + 1.2,
-          COLLISION_LAYER.WORLD,
+          wx - 0.55,
+          wz - 0.55,
+          wx + 0.55,
+          wz + 0.55,
+          navMask,
           scratch
         );
         for (let i = 0; i < hits.length; i++) {
-          if (hits[i].maxY > 1.2) {
+          const box = hits[i];
+          // Block navigation only if the obstacle occupies pedestrian height [0.48m .. 1.85m].
+          // Doorway lintels (minY >= 2.4m) and ground floor slabs (maxY <= 0.45m) remain walkable!
+          if (box.minY < 1.85 && box.maxY > 0.48) {
             blocked[cz * gridWidth + cx] = 1;
             break;
           }

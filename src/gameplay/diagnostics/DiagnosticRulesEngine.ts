@@ -186,6 +186,24 @@ export class DiagnosticRulesEngine {
       );
     }
 
+    // Rule 8: Physics & Collision Integrity Warnings ([CONFIRMED] vs [HEURISTIC])
+    if (snapshot.physics && snapshot.physics.physicsWarnings.length > 0) {
+      for (const pw of snapshot.physics.physicsWarnings.slice(0, 8)) {
+        const prefix = pw.classification === 'CONFIRMED' ? '[CONFIRMED]' : '[HEURISTIC]';
+        pushWarning(
+          pw.ruleId,
+          pw.severity,
+          pw.subsystem,
+          pw.entityId,
+          `${prefix} ${pw.description}`,
+          pw.expectedBehavior,
+          pw.actualBehavior,
+          pw.suggestedInvestigation,
+          2.5
+        );
+      }
+    }
+
     return [...this.activeWarnings];
   }
 

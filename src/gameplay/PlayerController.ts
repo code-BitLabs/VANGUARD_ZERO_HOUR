@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { InputManager } from '@/src/engine/InputManager';
+import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
+import type { CharacterMoveResult, PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import { PlayerHitZone } from '@/src/schemas/combat.schema';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import type { PlayerMovementTelemetry } from './CombatTelemetryRecorder';
@@ -66,6 +69,7 @@ export class PlayerController {
   private accelState: PlayerMovementTelemetry['accelState'] = 'IDLE';
   private lastArmorAbsorbed = 0;
   private lastHealthLost = 0;
+  private lastMoveResult: CharacterMoveResult | null = null;
 
   private readonly standingEyeHeight = 1.66;
   private readonly crouchEyeHeight = 1.05;
@@ -123,6 +127,7 @@ export class PlayerController {
     this.lastLandImpulse = 0;
     this.landCompressionOffset = 0;
     this.accelState = 'IDLE';
+    this.lastMoveResult = null;
   }
 
   addRecoilKick(pitchKick: number, yawKick: number): void {
@@ -356,15 +361,19 @@ export class PlayerController {
       return;
     }
 
-    // Crouch & Slide triggers
+    // Crouch & Slide triggers with overhead ceiling clearance verification
     if (input.wasActionPressed('crouch')) {
       if (this.isSprinting && this.grounded && !this.isSliding) {
         this.isSliding = true;
         this.slideTimer = 0.62;
         this.slideDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)).normalize();
         this.isCrouching = true;
+      } else if (this.isCrouching) {
+        if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+          this.isCrouching = false;
+        }
       } else {
-        this.isCrouching = !this.isCrouching;
+        this.isCrouching = true;
       }
     }
 
@@ -372,13 +381,21 @@ export class PlayerController {
       this.slideTimer -= dt;
       if (this.slideTimer <= 0) {
         this.isSliding = false;
+        if (!collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+          this.isCrouching = true;
+        }
       }
     }
 
     const axes = input.getMoveAxes();
-    const wantsSprint = input.isActionHeld('sprint') && axes.forward > 0.25 && !isAds && !this.isSliding;
+    let wantsSprint =
+      input.isActionHeld('sprint') && axes.forward > 0.25 && !isAds && !this.isSliding;
     if (wantsSprint && this.isCrouching) {
-      this.isCrouching = false;
+      if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+        this.isCrouching = false;
+      } else {
+        wantsSprint = false;
+      }
     }
     this.isSprinting = wantsSprint;
 
@@ -422,13 +439,15 @@ export class PlayerController {
     this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, targetVx, Math.min(1, dt * accel));
     this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, targetVz, Math.min(1, dt * accel));
 
-    // Jump
+    // Jump (only if overhead clearance allows standing/jumping)
     if (input.wasActionPressed('jump') && this.grounded) {
-      this.velocity.y = 7.4;
-      this.lastJumpImpulse = 7.4;
-      this.grounded = false;
-      this.isCrouching = false;
-      this.isSliding = false;
+      if (collision.canStandUp(this.position, this.capsuleRadius, 1.85, 'player')) {
+        this.velocity.y = 7.4;
+        this.lastJumpImpulse = 7.4;
+        this.grounded = false;
+        this.isCrouching = false;
+        this.isSliding = false;
+      }
     }
 
     const wasGrounded = this.grounded;
@@ -444,9 +463,11 @@ export class PlayerController {
       this.capsuleRadius,
       capsuleHeight,
       this.stepHeight,
-      dt
+      dt,
+      'player'
     );
     this.grounded = res.grounded;
+    this.lastMoveResult = res;
 
     if (!wasGrounded && this.grounded) {
       const impactVy = Math.abs(preStepVy);
@@ -491,8 +512,13 @@ export class PlayerController {
       : THREE.MathUtils.lerp(this.standingEyeHeight, this.crouchEyeHeight, this.crouchBlend);
     const bobOffset = this.grounded && this.currentSpeed > 1.2 && !isAds ? Math.sin(this.bobTime) * 0.045 : 0;
     const shake = this.trauma * this.trauma * 0.035;
-    const sx = (Math.random() - 0.5) * shake;
+    let sx = (Math.random() - 0.5) * shake;
     const sy = (Math.random() - 0.5) * shake;
+
+    // Prevent camera shake from pushing the near-plane into an adjacent wall
+    if (this.lastMoveResult?.hitHorizontal) {
+      sx = 0;
+    }
 
     camera.position.set(
       this.position.x + sx,
@@ -554,6 +580,47 @@ export class PlayerController {
       equipTimerSec: Number(equipTimerSec.toFixed(2)),
       reloadStage,
       reloadProgress: Number(reloadProgress.toFixed(2)),
+    };
+  }
+
+  getPhysicsInspectorRow(): PhysicsBodyInspectorRow {
+    const stanceH = this.isSliding ? 0.95 : this.isCrouching ? 1.15 : 1.8;
+    const physicalState = !this.grounded
+      ? 'AIRBORNE'
+      : this.isSliding
+        ? 'SLIDING'
+        : this.isCrouching
+          ? 'CROUCHED'
+          : 'GROUNDED';
+
+    return {
+      id: 'player',
+      entityType: 'player',
+      classification: 'character',
+      shape: 'capsule',
+      dimensions: `r=${this.capsuleRadius}m h=${stanceH}m`,
+      x: Number(this.position.x.toFixed(2)),
+      y: Number(this.position.y.toFixed(2)),
+      z: Number(this.position.z.toFixed(2)),
+      yaw: Number(this.yaw.toFixed(2)),
+      vx: Number(this.velocity.x.toFixed(2)),
+      vy: Number(this.velocity.y.toFixed(2)),
+      vz: Number(this.velocity.z.toFixed(2)),
+      ax: 0,
+      ay: -21.5,
+      az: 0,
+      speed: Number(this.currentSpeed.toFixed(2)),
+      massKg: 85,
+      layer: COLLISION_LAYER.PLAYER,
+      layerLabel: formatCollisionLayer(COLLISION_LAYER.PLAYER),
+      mask: PHYSICS_MASKS.CHARACTER_SOLID,
+      maskLabel: formatCollisionLayer(PHYSICS_MASKS.CHARACTER_SOLID),
+      physicalState,
+      lastCollisionId: this.lastMoveResult?.lastBlockerId ?? null,
+      lastNormalX: Number((this.lastMoveResult?.wallNormalX ?? 0).toFixed(2)),
+      lastNormalY: Number((this.lastMoveResult?.wallNormalY ?? 1).toFixed(2)),
+      lastNormalZ: Number((this.lastMoveResult?.wallNormalZ ?? 0).toFixed(2)),
+      contactCount: this.lastMoveResult?.activeContacts ?? (this.grounded ? 1 : 0),
     };
   }
 }

@@ -8,7 +8,7 @@ import { getMissionById } from '@/src/data/missions';
 import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
-import { BallisticSolver } from '@/src/gameplay/BallisticSolver';
+import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from '@/src/gameplay/BallisticSolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { DiagnosticRulesEngine } from '@/src/gameplay/diagnostics/DiagnosticRulesEngine';
@@ -17,9 +17,11 @@ import { ExplosiveCallbacks, ExplosiveManager } from '@/src/gameplay/ExplosiveMa
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
 import { PlayerController } from '@/src/gameplay/PlayerController';
 import { ExplosionEvent, ProjectileManager } from '@/src/gameplay/ProjectileManager';
+import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
 import { VehicleManager } from '@/src/gameplay/VehicleManager';
 import { HitscanTarget, WeaponSystem } from '@/src/gameplay/WeaponSystem';
-import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
+import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { EXPLOSIVE_BY_ID } from '@/src/schemas/explosive.schema';
 import { MiniMapBlip } from '@/src/schemas/events.schema';
@@ -192,7 +194,7 @@ export class GameEngine {
       this.projectiles,
       this.telemetry
     );
-    this.destruction = new DestructionSystem(this.collisionWorld.spatialHash, this.vfx, this.audio);
+    this.destruction = new DestructionSystem(this.collisionWorld.physicsWorld, this.vfx, this.audio);
     this.player = new PlayerController(this.audio);
     this.weapons = new WeaponSystem(this.renderer.viewModelScene, this.audio, this.vfx, this.projectiles);
     this.enemies = new EnemyManager(
@@ -620,11 +622,16 @@ export class GameEngine {
     if (this.input.wasActionPressed('interact')) {
       const handledInteract = this.tryContextualInteract();
       if (!handledInteract) {
-        this.vehicles.togglePlayerVehicle(this.player);
+        this.vehicles.togglePlayerVehicle(this.player, this.collisionWorld);
       }
     }
 
     const inVehicle = this.vehicles.getPlayerVehicle() !== null;
+    if (inVehicle && this.input.wasActionPressed('vehicleCamera')) {
+      const nextCam = this.vehicles.cycleCameraMode();
+      this.audio.play2D('ui_click', 3, 0.35);
+      this.missionDirector.showAlert(`CAMERA: ${VEHICLE_CAMERA_MODE_LABELS[nextCam]}`, 1.4);
+    }
     const settings = settingsStore.getState();
     const devActive = isDeveloperModeActiveForSetting(settings.developer.devModeEnabled);
     const sandboxAuthorized = devActive && settings.developer.sandboxOrdnanceAuthorized;
@@ -735,6 +742,7 @@ export class GameEngine {
     }
 
     const tPhys0 = performance.now();
+    this.collisionWorld.physicsWorld.beginFrame(dt);
     const inVehicle = this.vehicles.getPlayerVehicle() !== null;
     const weaponCfg = this.weapons.getActiveState().config;
     const settings = settingsStore.getState();
@@ -844,8 +852,33 @@ export class GameEngine {
       this.collisionWorld,
       this.worldData?.roadWaypoints ?? [],
       (origin, dir) => {
-        // Vehicle roof turret hitscan check
-        let bestDist = 110;
+        // Check solid world/building/cover/destructible obstruction before scoring hits
+        const playerVehicleId = this.vehicles.getPlayerVehicle()?.collider.id;
+        const wallHit: RayHit = {
+          hit: false,
+          distance: 110,
+          pointX: 0,
+          pointY: 0,
+          pointZ: 0,
+          normalX: 0,
+          normalY: 1,
+          normalZ: 0,
+          collider: null,
+        };
+        const hitWall = this.collisionWorld.sweptSegmentTest(
+          origin.x,
+          origin.y,
+          origin.z,
+          dir.x,
+          dir.y,
+          dir.z,
+          110,
+          SOLID_OBSTRUCTION_MASK,
+          wallHit,
+          playerVehicleId
+        );
+
+        let bestDist = hitWall ? wallHit.distance : 110;
         let hitTarget: HitscanTarget | null = null;
         for (const t of allHitscan) {
           if (!t.alive) continue;
@@ -860,9 +893,24 @@ export class GameEngine {
             hitTarget = t;
           }
         }
-        if (hitTarget) hitTarget.onHit(26, false, hitTarget.position);
+        if (hitTarget) {
+          hitTarget.onHit(26, false, hitTarget.position);
+        } else if (hitWall && wallHit.collider) {
+          if (wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) {
+            this.destruction.applyDamage(
+              wallHit.collider.id,
+              26,
+              this.handleExplosion,
+              () => this.missionDirector?.onDestructibleTargetDestroyed(300)
+            );
+            this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
+          } else {
+            this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'concrete');
+          }
+        }
       },
-      () => this.missionDirector?.onConvoyVehicleDestroyed(400)
+      () => this.missionDirector?.onConvoyVehicleDestroyed(400),
+      settings.graphics.fov
     );
 
     // Pooled projectiles (rockets, guided missiles, grenades, aerial bombs, TRIDENT-X)
@@ -988,6 +1036,18 @@ export class GameEngine {
           sharedDelta: audit.sharedDelta,
         });
 
+        const dynamicPhysicsBodies = [
+          this.player.getPhysicsInspectorRow(),
+          ...this.enemies.getPhysicsInspectorRows(),
+          ...this.vehicles.getPhysicsInspectorRows(),
+          ...this.airCombat.getPhysicsInspectorRows(),
+          ...this.projectiles.getPhysicsInspectorRows(),
+        ];
+        const physSnap = this.collisionWorld.physicsWorld.buildDiagnosticsSnapshot(
+          dynamicPhysicsBodies
+        );
+        this.telemetry.setPhysicsDiagnostics(physSnap);
+
         const coordSnap = this.coordinator.getSnapshot();
         const prelimSnap = this.telemetry.buildSnapshot(
           coordSnap,
@@ -1007,7 +1067,10 @@ export class GameEngine {
             this.player.position,
             settings.developer.debugShowFlightPaths,
             prelimSnap.flightSamples,
-            prelimSnap.recentExplosions
+            prelimSnap.recentExplosions,
+            settings.developer.debugShowPhysicsColliders,
+            prelimSnap.physics,
+            this.vehicles.getCameraDebugRay()
           );
         } else {
           this.debugRenderer.setVisible(false);
@@ -1203,6 +1266,7 @@ export class GameEngine {
       vehicleHealth: veh ? Math.round((veh.health / veh.maxHealth) * 100) : 100,
       vehicleMaxHealth: 100,
       vehicleSpeedKmh: veh ? Math.round(Math.abs(veh.speed) * 3.6) : 0,
+      vehicleCameraMode: this.vehicles.getCameraMode(),
       interactPrompt,
       subtitleText: settingsStore.getState().accessibility.subtitles ? this.missionDirector.subtitleText : null,
       missionAlert: this.missionDirector.alertText,

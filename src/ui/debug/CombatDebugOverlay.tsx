@@ -12,6 +12,7 @@ import {
   FileText,
   Gauge,
   HardDrive,
+  Layers,
   Maximize2,
   Minimize2,
   Navigation,
@@ -22,6 +23,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import {
   CombatDebugSnapshot,
   CombatEventRecord,
@@ -32,6 +34,8 @@ import {
   buildCsvExport,
   buildJsonDiagnosticReport,
   buildMarkdownDiagnosticReport,
+  buildPhysicsJsonReport,
+  buildPhysicsMarkdownAuditReport,
   compareDiagnosticSnapshots,
   ComparisonVerdict,
   CsvExportKind,
@@ -44,6 +48,7 @@ import { useUIStore } from '@/src/stores/uiStore';
 
 type DebugTabId =
   | 'overview'
+  | 'physics'
   | 'enemy_ai'
   | 'squad'
   | 'combat'
@@ -59,6 +64,7 @@ type DebugTabId =
 
 const TABS: Array<{ id: DebugTabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'overview', label: 'Overview', icon: Compass },
+  { id: 'physics', label: 'Physics', icon: Layers },
   { id: 'enemy_ai', label: 'Enemy AI', icon: Users },
   { id: 'squad', label: 'Squad', icon: Target },
   { id: 'combat', label: 'Combat', icon: ShieldAlert },
@@ -94,6 +100,8 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
   const [activeTab, setActiveTab] = useState<DebugTabId>('overview');
   const [selectedEnemyId, setSelectedEnemyId] = useState<string | null>(null);
   const [selectedShotId, setSelectedShotId] = useState<number | null>(null);
+  const [selectedPhysicsBodyId, setSelectedPhysicsBodyId] = useState<string | null>(null);
+  const [physicsBodyFilter, setPhysicsBodyFilter] = useState('');
   const [enemyFilter, setEnemyFilter] = useState('');
   const [timelinePaused, setTimelinePaused] = useState(false);
   const [frozenEvents, setFrozenEvents] = useState<CombatEventRecord[]>([]);
@@ -121,6 +129,8 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
     snapshot?.enemies.find((e) => e.id === selectedEnemyId) ?? null;
   const selectedShot: ShotTelemetryRecord | null =
     snapshot?.recentShots.find((s) => s.shotId === selectedShotId) ?? null;
+  const selectedPhysicsBody: PhysicsBodyInspectorRow | null =
+    snapshot?.physics?.bodies.find((b) => b.id === selectedPhysicsBodyId) ?? null;
 
   const handleTogglePauseTimeline = () => {
     if (!timelinePaused && snapshot) {
@@ -308,6 +318,20 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
           <button
             type="button"
             onClick={() =>
+              updateDeveloper({ debugShowPhysicsColliders: !developer.debugShowPhysicsColliders })
+            }
+            className={`px-2 py-0.5 border text-[10px] uppercase transition-colors ${
+              developer.debugShowPhysicsColliders
+                ? 'border-purple-500/80 bg-purple-950/60 text-purple-300'
+                : 'border-zinc-700 bg-zinc-900 text-zinc-400'
+            }`}
+            title="Render 3D Physics Collider Wireframes, Surface Contact Normals & Blocked Movement Vectors"
+          >
+            Colliders: {developer.debugShowPhysicsColliders ? 'ON' : 'OFF'}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
               updateDeveloper({ sandboxOrdnanceAuthorized: !developer.sandboxOrdnanceAuthorized })
             }
             className={`px-2 py-0.5 border text-[10px] uppercase transition-colors ${
@@ -438,6 +462,208 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 1B: UNIFIED PHYSICS WORLD & BODY INSPECTOR */}
+          {activeTab === 'physics' && snapshot.physics && (
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <MetricTile
+                  label="Physics Solver"
+                  value={snapshot.physics.rapierInitialized ? 'Rapier3D WASM + BVH' : 'PhysicsWorld + BVH'}
+                  sub={`Fixed Step: ${Math.round(1 / snapshot.physics.fixedTimestepSec)}Hz (${(snapshot.physics.fixedTimestepSec * 1000).toFixed(1)}ms)`}
+                />
+                <MetricTile
+                  label="Bodies (Tot / Stat / Dyn)"
+                  value={`${snapshot.physics.totalBodies} (${snapshot.physics.staticBodiesCount}S / ${snapshot.physics.dynamicBodiesCount + snapshot.physics.kinematicBodiesCount + snapshot.physics.characterBodiesCount}D)`}
+                  sub={`Chars: ${snapshot.physics.characterBodiesCount} · Bounds: ±${snapshot.physics.worldBoundsMax}m`}
+                />
+                <MetricTile
+                  label="Per-Frame Queries"
+                  value={`Col:${snapshot.physics.collisionChecksPerFrame} Ray:${snapshot.physics.raycastsPerFrame}`}
+                  sub={`Swept Casts: ${snapshot.physics.shapeCastsPerFrame} · Pairs: ${snapshot.physics.activeCollisionPairs}`}
+                />
+                <MetricTile
+                  label="Collision Guards"
+                  value={`Pen:${snapshot.physics.penetrationCorrectionsTotal} Blk:${snapshot.physics.blockedMovementsTotal}`}
+                  sub={`Ceil:${snapshot.physics.ceilingStandupBlocksTotal} Bnd:${snapshot.physics.worldBoundaryClampsTotal} CCD:${snapshot.physics.tunnelingPreventedTotal} Veh:${snapshot.physics.vehicleBuildingImpactsTotal}`}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  type="text"
+                  value={physicsBodyFilter}
+                  onChange={(e) => setPhysicsBodyFilter(e.target.value)}
+                  placeholder="Filter bodies by ID, entityType, classification, shape, or layer..."
+                  className="flex-1 bg-[#0B0E11] border border-zinc-800 px-2 py-1 text-[10px] text-zinc-100"
+                />
+                <span className="text-[10px] text-zinc-400">Click row to inspect</span>
+              </div>
+
+              <div className="overflow-x-auto max-h-52 overflow-y-auto border border-zinc-800 bg-[#0B0E11]">
+                <table className="w-full text-left border-collapse text-[10px]">
+                  <thead className="sticky top-0 bg-[#141920] text-zinc-400 uppercase border-b border-zinc-800">
+                    <tr>
+                      <th className="py-1 px-1.5">Body</th>
+                      <th className="py-1 px-1.5">Class / Shape</th>
+                      <th className="py-1 px-1.5">Layer</th>
+                      <th className="py-1 px-1.5">State</th>
+                      <th className="py-1 px-1.5">Speed</th>
+                      <th className="py-1 px-1.5">Contacts / Hit</th>
+                      <th className="py-1 px-1.5">Mass</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/70">
+                    {snapshot.physics.bodies
+                      .filter((b) => {
+                        if (!physicsBodyFilter.trim()) return true;
+                        const q = physicsBodyFilter.toLowerCase();
+                        return (
+                          b.id.toLowerCase().includes(q) ||
+                          b.entityType.toLowerCase().includes(q) ||
+                          b.classification.toLowerCase().includes(q) ||
+                          b.shape.toLowerCase().includes(q) ||
+                          b.layerLabel.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((b) => (
+                        <tr
+                          key={b.id}
+                          onClick={() =>
+                            setSelectedPhysicsBodyId(b.id === selectedPhysicsBodyId ? null : b.id)
+                          }
+                          className={`cursor-pointer hover:bg-zinc-900/80 ${
+                            selectedPhysicsBodyId === b.id ? 'bg-purple-950/40' : ''
+                          }`}
+                        >
+                          <td className="py-1 px-1.5 font-semibold text-zinc-200">
+                            <div>{b.id}</div>
+                            <div className="text-[9px] text-zinc-500">{b.entityType.toUpperCase()}</div>
+                          </td>
+                          <td className="py-1 px-1.5">
+                            <span className="text-cyan-300 font-bold">{b.classification}</span>
+                            <div className="text-[9px] text-zinc-500">
+                              {b.shape} ({b.dimensions})
+                            </div>
+                          </td>
+                          <td className="py-1 px-1.5 text-zinc-300">{b.layerLabel}</td>
+                          <td className="py-1 px-1.5">
+                            <span
+                              className={
+                                b.physicalState === 'GROUNDED' || b.physicalState === 'STATIC'
+                                  ? 'text-emerald-400'
+                                  : 'text-amber-300'
+                              }
+                            >
+                              {b.physicalState}
+                            </span>
+                          </td>
+                          <td className="py-1 px-1.5 text-zinc-200">{b.speed} m/s</td>
+                          <td className="py-1 px-1.5">
+                            <span className={b.contactCount > 0 ? 'text-amber-300 font-bold' : 'text-zinc-500'}>
+                              {b.contactCount}
+                            </span>
+                            {b.lastCollisionId && (
+                              <span className="text-[9px] text-zinc-400 ml-1">[{b.lastCollisionId}]</span>
+                            )}
+                          </td>
+                          <td className="py-1 px-1.5 text-zinc-300">{b.massKg}kg</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {selectedPhysicsBody && (
+                <div className="bg-[#141920] border border-purple-500/60 p-2.5 space-y-1 text-[10px]">
+                  <div className="flex justify-between font-bold text-purple-300">
+                    <span>
+                      PHYSICS BODY INSPECTOR: {selectedPhysicsBody.id} ({selectedPhysicsBody.entityType})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPhysicsBodyId(null)}
+                      className="text-zinc-400 hover:text-zinc-200"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-zinc-300">
+                    <div>
+                      Class/Shape: {selectedPhysicsBody.classification} · {selectedPhysicsBody.shape}
+                    </div>
+                    <div>Dimensions: {selectedPhysicsBody.dimensions}</div>
+                    <div>Layer: {selectedPhysicsBody.layerLabel}</div>
+                    <div>Collides With: {selectedPhysicsBody.maskLabel}</div>
+                    <div>
+                      Pos: ({selectedPhysicsBody.x}, {selectedPhysicsBody.y}, {selectedPhysicsBody.z})
+                    </div>
+                    <div>
+                      Vel: ({selectedPhysicsBody.vx}, {selectedPhysicsBody.vy}, {selectedPhysicsBody.vz}) ·{' '}
+                      {selectedPhysicsBody.speed} m/s
+                    </div>
+                    <div>
+                      State: {selectedPhysicsBody.physicalState} · Mass: {selectedPhysicsBody.massKg}kg
+                    </div>
+                    <div>
+                      Contacts: {selectedPhysicsBody.contactCount} · Last Hit:{' '}
+                      {selectedPhysicsBody.lastCollisionId ?? 'None'}
+                    </div>
+                    <div>
+                      Last Normal: ({selectedPhysicsBody.lastNormalX}, {selectedPhysicsBody.lastNormalY},{' '}
+                      {selectedPhysicsBody.lastNormalZ})
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="bg-[#0B0E11] border border-zinc-800 p-2 max-h-36 overflow-y-auto">
+                  <div className="text-[10px] uppercase text-zinc-400 mb-1">
+                    Recent Surface Contacts ({snapshot.physics.recentContacts.length})
+                  </div>
+                  {snapshot.physics.recentContacts.length === 0 ? (
+                    <div className="text-[10px] text-zinc-500">No recent surface contacts recorded.</div>
+                  ) : (
+                    snapshot.physics.recentContacts.slice(0, 12).map((c, idx) => (
+                      <div key={`${c.entityId}_${idx}`} className="text-[10px] py-0.5 border-b border-zinc-900">
+                        <span className="text-zinc-200 font-bold">{c.entityId}</span> →{' '}
+                        <span className="text-cyan-400">{c.colliderId}</span> ({c.colliderTag}) · n=(
+                        {c.normalX},{c.normalY},{c.normalZ}) pen={c.penetrationDepth}m
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="bg-[#0B0E11] border border-zinc-800 p-2 max-h-36 overflow-y-auto">
+                  <div className="text-[10px] uppercase text-zinc-400 mb-1">
+                    Physics Warnings ({snapshot.physics.physicsWarnings.length})
+                  </div>
+                  {snapshot.physics.physicsWarnings.length === 0 ? (
+                    <div className="text-[10px] text-emerald-400">
+                      Zero physics overlap, tunneling, or boundary anomalies.
+                    </div>
+                  ) : (
+                    snapshot.physics.physicsWarnings.slice(0, 10).map((pw) => (
+                      <div key={pw.id} className="text-[10px] py-0.5 border-b border-zinc-900">
+                        <span
+                          className={
+                            pw.classification === 'CONFIRMED'
+                              ? 'text-red-400 font-bold'
+                              : 'text-amber-300 font-bold'
+                          }
+                        >
+                          [{pw.classification}]
+                        </span>{' '}
+                        <span className="text-zinc-200 font-semibold">{pw.ruleId}</span> ({pw.entityId}):{' '}
+                        <span className="text-zinc-400">{pw.description}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1180,8 +1406,38 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                     <FileText className="w-3 h-3 inline mr-1" />
                     Markdown Report
                   </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      triggerBrowserDownload(
+                        `vanguard_physics_diag_m${snapshot.missionId}.json`,
+                        buildPhysicsJsonReport(snapshot),
+                        'application/json'
+                      )
+                    }
+                    className="px-2.5 py-1 bg-purple-950/60 border border-purple-500/80 text-purple-300 font-bold uppercase text-[10px]"
+                  >
+                    <Layers className="w-3 h-3 inline mr-1" />
+                    Physics JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      triggerBrowserDownload(
+                        `vanguard_physics_audit_m${snapshot.missionId}.md`,
+                        buildPhysicsMarkdownAuditReport(snapshot),
+                        'text/markdown'
+                      )
+                    }
+                    className="px-2.5 py-1 bg-emerald-950/60 border border-emerald-500/80 text-emerald-300 font-bold uppercase text-[10px]"
+                  >
+                    <FileText className="w-3 h-3 inline mr-1" />
+                    Physics Audit MD
+                  </button>
                   {(
                     [
+                      ['collision_events', 'CSV: Collisions'],
+                      ['object_movement', 'CSV: Movement'],
                       ['enemy_ai', 'CSV: Enemy AI'],
                       ['damage', 'CSV: Damage'],
                       ['projectiles_flight', 'CSV: Flight'],

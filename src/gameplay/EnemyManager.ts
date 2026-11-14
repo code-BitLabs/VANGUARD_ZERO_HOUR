@@ -3,7 +3,10 @@ import { AudioManager } from '@/src/audio/AudioManager';
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { ENEMY_BY_ARCHETYPE } from '@/src/data/enemies';
 import { VFXPool } from '@/src/effects/VFXPool';
+import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
+import type { PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
   AUTHORITATIVE_COMBAT_CONFIG,
   DIFFICULTY_COMBAT_PROFILES,
@@ -35,6 +38,7 @@ export interface EnemyUnit {
   armor: number;
   state: EnemyAwarenessState;
   position: THREE.Vector3;
+  velocity: THREE.Vector3;
   bodyCenter: THREE.Vector3;
   headPosition: THREE.Vector3;
   yaw: number;
@@ -71,6 +75,9 @@ export interface EnemyUnit {
   lastSpreadRad: number;
   lastDamageDealt: number;
   lastDamageTimeSec: number | null;
+  lastColliderHit: string | null;
+  activeContacts: number;
+  maxPenetrationDepth: number;
   meshRoot: THREE.Group;
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
@@ -152,9 +159,14 @@ export class EnemyManager {
       const x = Math.max(-105, Math.min(105, center.x + Math.cos(a) * r));
       const z = Math.max(-105, Math.min(105, center.z + Math.sin(a) * r));
       const y = collision.getGroundHeightAt(x, z);
+      const spawnPos = new THREE.Vector3(x, y, z);
+      const spawnVel = new THREE.Vector3(0, 0, 0);
+      const unitId = `enemy_${++this.seq}`;
+      // Push spawn position out of any solid walls or barriers immediately
+      collision.resolvePlayerCapsule(spawnPos, spawnVel, 0.4, 1.75, 0.45, 0.016, unitId);
 
       const rig = this.buildSoldierRig(cfg.accentColor, archetype, scope);
-      rig.root.position.set(x, y, z);
+      rig.root.position.copy(spawnPos);
       this.scene.add(rig.root);
       this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
 
@@ -167,7 +179,6 @@ export class EnemyManager {
       const patrolYaw = ((i * 1.618 + this.seq * 0.7) % 1) * Math.PI * 2 - Math.PI;
       rig.root.rotation.y = patrolYaw;
 
-      const unitId = `enemy_${++this.seq}`;
       this.coordinator?.registerUnit(unitId, squadId);
 
       this.enemies.push({
@@ -182,14 +193,15 @@ export class EnemyManager {
         maxHealth: hp,
         armor,
         state: 'UNAWARE',
-        position: new THREE.Vector3(x, y, z),
-        bodyCenter: new THREE.Vector3(x, y + 1.0, z),
-        headPosition: new THREE.Vector3(x, y + 1.65, z),
+        position: spawnPos,
+        velocity: spawnVel,
+        bodyCenter: new THREE.Vector3(spawnPos.x, spawnPos.y + 1.0, spawnPos.z),
+        headPosition: new THREE.Vector3(spawnPos.x, spawnPos.y + 1.65, spawnPos.z),
         yaw: patrolYaw,
-        patrolOrigin: new THREE.Vector3(x, y, z),
+        patrolOrigin: spawnPos.clone(),
         patrolYaw,
         patrolTimer: 1.5 + (i % 4) * 0.9,
-        waypoint: new THREE.Vector3(x, y, z),
+        waypoint: spawnPos.clone(),
         coverTarget: null,
         hasLos: false,
         losBlockerId: null,
@@ -219,6 +231,9 @@ export class EnemyManager {
         lastSpreadRad: weaponProf.baseSpreadRad,
         lastDamageDealt: 0,
         lastDamageTimeSec: null,
+        lastColliderHit: null,
+        activeContacts: 0,
+        maxPenetrationDepth: 0,
         meshRoot: rig.root,
         leftLeg: rig.leftLeg,
         rightLeg: rig.rightLeg,
@@ -855,6 +870,7 @@ export class EnemyManager {
     let moveZ = 0;
     const preferredRange =
       u.archetype === 'sniper' ? 52 : u.archetype === 'rocket_trooper' ? 40 : 22;
+    const hasWaypoint = Math.hypot(u.waypoint.x - u.position.x, u.waypoint.z - u.position.z) > 0.6;
 
     if (u.state === 'UNAWARE') {
       u.patrolTimer -= dt;
@@ -863,8 +879,8 @@ export class EnemyManager {
         u.patrolYaw = this.normalizeAngle(u.patrolYaw + Math.PI * 0.65);
       }
     } else if (u.state === 'RETREATING' && u.coverTarget) {
-      moveX = u.coverTarget.x - u.position.x;
-      moveZ = u.coverTarget.z - u.position.z;
+      moveX = (hasWaypoint ? u.waypoint.x : u.coverTarget.x) - u.position.x;
+      moveZ = (hasWaypoint ? u.waypoint.z : u.coverTarget.z) - u.position.z;
     } else if (u.state === 'REPOSITIONING') {
       if (u.role === 'flanker' && u.lastKnownPosition) {
         const side = parseInt(u.id.split('_')[1] ?? '1', 10) % 2 === 0 ? 1 : -1;
@@ -873,8 +889,8 @@ export class EnemyManager {
         moveX = dx * 0.35 - dz * side * 0.85;
         moveZ = dz * 0.35 + dx * side * 0.85;
       } else if (u.coverTarget) {
-        moveX = u.coverTarget.x - u.position.x;
-        moveZ = u.coverTarget.z - u.position.z;
+        moveX = (hasWaypoint ? u.waypoint.x : u.coverTarget.x) - u.position.x;
+        moveZ = (hasWaypoint ? u.waypoint.z : u.coverTarget.z) - u.position.z;
       }
     } else if (
       (u.state === 'INVESTIGATING' || u.state === 'SEARCHING') &&
@@ -885,27 +901,57 @@ export class EnemyManager {
         u.lastKnownPosition.z - u.position.z
       );
       if (distToLkp > 4.5) {
-        moveX = u.lastKnownPosition.x - u.position.x;
-        moveZ = u.lastKnownPosition.z - u.position.z;
+        moveX = (hasWaypoint ? u.waypoint.x : u.lastKnownPosition.x) - u.position.x;
+        moveZ = (hasWaypoint ? u.waypoint.z : u.lastKnownPosition.z) - u.position.z;
       }
     } else if (u.state === 'ENGAGING' && dist > preferredRange && u.lastKnownPosition) {
-      moveX = u.waypoint.x !== u.position.x ? u.waypoint.x - u.position.x : u.lastKnownPosition.x - u.position.x;
-      moveZ = u.waypoint.z !== u.position.z ? u.waypoint.z - u.position.z : u.lastKnownPosition.z - u.position.z;
+      moveX = (hasWaypoint ? u.waypoint.x : u.lastKnownPosition.x) - u.position.x;
+      moveZ = (hasWaypoint ? u.waypoint.z : u.lastKnownPosition.z) - u.position.z;
     }
 
     const moveLen = Math.hypot(moveX, moveZ);
-    if (moveLen > 1.0 && u.state !== 'SUPPRESSING') {
+    if (moveLen > 0.6 && u.state !== 'SUPPRESSING') {
       u.isMoving = true;
       const spd =
         cfg.moveSpeed *
         (u.state === 'RETREATING' ? 1.15 : u.state === 'INVESTIGATING' ? 0.65 : 0.9);
-      const nextX = Math.max(-106, Math.min(106, u.position.x + (moveX / moveLen) * spd * dt));
-      const nextZ = Math.max(-106, Math.min(106, u.position.z + (moveZ / moveLen) * spd * dt));
-      u.position.x = nextX;
-      u.position.z = nextZ;
-      u.position.y = collision.getGroundHeightAt(nextX, nextZ);
+      let vx = (moveX / moveLen) * spd;
+      let vz = (moveZ / moveLen) * spd;
+
+      // Local enemy-vs-enemy separation force to prevent crowd stacking
+      const minSep = 0.92;
+      for (let j = 0; j < this.enemies.length; j++) {
+        const other = this.enemies[j];
+        if (!other.alive || other.id === u.id) continue;
+        const sdx = u.position.x - other.position.x;
+        const sdz = u.position.z - other.position.z;
+        const sDistSq = sdx * sdx + sdz * sdz;
+        if (sDistSq > 1e-5 && sDistSq < minSep * minSep) {
+          const sDist = Math.sqrt(sDistSq);
+          const push = ((minSep - sDist) / minSep) * 3.5;
+          vx += (sdx / sDist) * push;
+          vz += (sdz / sDist) * push;
+        }
+      }
+
+      u.velocity.set(vx, -12.0 * dt, vz);
+      const moveRes = collision.resolvePlayerCapsule(
+        u.position,
+        u.velocity,
+        0.4,
+        1.75,
+        0.45,
+        dt,
+        u.id
+      );
+      u.lastColliderHit = moveRes.lastBlockerId;
+      u.activeContacts = moveRes.activeContacts ?? 0;
+      u.maxPenetrationDepth = moveRes.maxPenetrationDepth ?? 0;
     } else {
       u.isMoving = false;
+      u.velocity.set(0, 0, 0);
+      u.activeContacts = 0;
+      u.maxPenetrationDepth = 0;
     }
 
     // 7. Controlled Burst Firing & Suppression Execution
@@ -1258,6 +1304,45 @@ export class EnemyManager {
   clear(): void {
     this.enemies = [];
     this.waveSeq = 0;
+  }
+
+  getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
+    const out: PhysicsBodyInspectorRow[] = [];
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      const spd = Math.hypot(u.velocity.x, u.velocity.z);
+      out.push({
+        id: u.id,
+        entityType: 'enemy',
+        classification: 'character',
+        shape: 'capsule',
+        dimensions: 'r=0.40m h=1.75m',
+        x: Number(u.position.x.toFixed(2)),
+        y: Number(u.position.y.toFixed(2)),
+        z: Number(u.position.z.toFixed(2)),
+        yaw: Number(u.yaw.toFixed(2)),
+        vx: Number(u.velocity.x.toFixed(2)),
+        vy: Number(u.velocity.y.toFixed(2)),
+        vz: Number(u.velocity.z.toFixed(2)),
+        ax: 0,
+        ay: 0,
+        az: 0,
+        speed: Number(spd.toFixed(2)),
+        massKg: 80,
+        layer: COLLISION_LAYER.ENEMY,
+        layerLabel: formatCollisionLayer(COLLISION_LAYER.ENEMY),
+        mask: PHYSICS_MASKS.ENEMY_SOLID,
+        maskLabel: formatCollisionLayer(PHYSICS_MASKS.ENEMY_SOLID),
+        physicalState: 'GROUNDED',
+        lastCollisionId: u.lastColliderHit,
+        lastNormalX: 0,
+        lastNormalY: 1,
+        lastNormalZ: 0,
+        contactCount: u.activeContacts,
+      });
+    }
+    return out;
   }
 
   private buildSoldierRig(

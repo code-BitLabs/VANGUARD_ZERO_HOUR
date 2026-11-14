@@ -80,6 +80,7 @@ const DEFAULT_HUD: HudSnapshot = {
   vehicleHealth: 100,
   vehicleMaxHealth: 100,
   vehicleSpeedKmh: 0,
+  vehicleCameraMode: 'chase',
   interactPrompt: null,
   subtitleText: null,
   missionAlert: null,

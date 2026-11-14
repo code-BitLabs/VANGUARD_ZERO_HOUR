@@ -1,7 +1,14 @@
 import * as THREE from 'three';
+import type { PhysicsWorld } from '@/src/engine/physics/PhysicsWorld';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { AudioManager } from '@/src/audio/AudioManager';
+
+export type DestructionColliderBackend = PhysicsWorld | SpatialHash;
+
+function isPhysicsWorld(backend: DestructionColliderBackend): backend is PhysicsWorld {
+  return 'addStaticCollider' in backend && typeof backend.addStaticCollider === 'function';
+}
 
 export type DestructibleKind =
   | 'barrel'
@@ -32,14 +39,38 @@ export class DestructionSystem {
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
 
   constructor(
-    private readonly spatialHash: SpatialHash,
+    private readonly colliderBackend: DestructionColliderBackend,
     private readonly vfx: VFXPool,
     private readonly audio: AudioManager
   ) {}
 
+  private insertCollider(box: SpatialAABB): void {
+    if (isPhysicsWorld(this.colliderBackend)) {
+      this.colliderBackend.addStaticCollider(box);
+    } else {
+      this.colliderBackend.insert(box);
+    }
+  }
+
+  private syncUpdatedCollider(box: SpatialAABB): void {
+    if (isPhysicsWorld(this.colliderBackend)) {
+      this.colliderBackend.updateCollider(box);
+    } else {
+      this.colliderBackend.update(box);
+    }
+  }
+
+  private removeSyncedCollider(box: SpatialAABB): void {
+    if (isPhysicsWorld(this.colliderBackend)) {
+      this.colliderBackend.removeCollider(box);
+    } else {
+      this.colliderBackend.remove(box);
+    }
+  }
+
   register(entity: DestructibleEntity): void {
     this.entities.set(entity.id, entity);
-    this.spatialHash.insert(entity.collider);
+    this.insertCollider(entity.collider);
   }
 
   applyDamage(
@@ -60,7 +91,7 @@ export class DestructionSystem {
       if (ent.kind === 'destructible_barrier' || ent.kind === 'sandbag') {
         const origH = ent.collider.maxY - ent.collider.minY;
         ent.collider.maxY = ent.collider.minY + origH * 0.65;
-        this.spatialHash.update(ent.collider);
+        this.syncUpdatedCollider(ent.collider);
         ent.meshGroup.scale.y = 0.65;
       }
       return false;
@@ -71,16 +102,16 @@ export class DestructionSystem {
       ent.state = 'DESTROYED';
 
       if (ent.kind === 'glass_panel' || ent.kind === 'destructible_barrier') {
-        this.spatialHash.remove(ent.collider);
+        this.removeSyncedCollider(ent.collider);
         ent.meshGroup.visible = false;
         this.vfx.spawnImpact(ent.position.x, ent.position.y + 1, ent.position.z, 'concrete');
       } else if (ent.kind === 'sandbag') {
-        this.spatialHash.remove(ent.collider);
+        this.removeSyncedCollider(ent.collider);
         ent.meshGroup.scale.y = 0.25;
         this.vfx.spawnImpact(ent.position.x, ent.position.y + 0.6, ent.position.z, 'dirt');
       } else {
         // Explosive barrels, fuel tanks, radars, and weapons caches
-        this.spatialHash.remove(ent.collider);
+        this.removeSyncedCollider(ent.collider);
         ent.meshGroup.scale.set(1.05, 0.28, 1.05);
         if (!this.charredMaterial) {
           this.charredMaterial = new THREE.MeshStandardMaterial({
@@ -124,7 +155,7 @@ export class DestructionSystem {
 
   clear(): void {
     for (const ent of this.entities.values()) {
-      this.spatialHash.remove(ent.collider);
+      this.removeSyncedCollider(ent.collider);
     }
     this.entities.clear();
   }
@@ -154,5 +185,6 @@ export function createDestructibleCollider(
     maxY: y + hy,
     maxZ: z + hz,
     layer: COLLISION_LAYER.DESTRUCTIBLE,
+    tag: 'destructible',
   };
 }
