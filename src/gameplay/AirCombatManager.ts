@@ -312,16 +312,16 @@ export class AirCombatManager {
     if (!boss) return null;
 
     if (context) {
+      const nowSec = this.telemetry?.getElapsedSec() ?? 0;
       const damaged = boss.health < boss.maxHealth;
-      const engaged = boss.detectedPlayer || boss.hasLos;
+      const activelyAttackingPlayer =
+        boss.lastDamageDealt > 0 &&
+        boss.lastDamageTimeSec !== null &&
+        nowSec - boss.lastDamageTimeSec <= 8;
       const lockedOn = context.lockStatus === 'acquiring' || context.lockStatus === 'locked';
       const primaryObj = Boolean(context.isPrimaryObjective);
-      const closeEncounter =
-        boss.initialGraceTimerSec <= 0 &&
-        context.playerPosition !== undefined &&
-        boss.position.distanceTo(context.playerPosition) <= 58;
 
-      if (!damaged && !engaged && !lockedOn && !primaryObj && !closeEncounter) {
+      if (!damaged && !activelyAttackingPlayer && !lockedOn && !primaryObj) {
         return null;
       }
     }

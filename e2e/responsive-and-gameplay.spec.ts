@@ -117,43 +117,73 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await expect(page.getByTestId('touch-btn-weapon-next')).toHaveCount(0);
   await expect(page.getByTestId('touch-btn-sprint')).toHaveCount(0);
 
-  // Verify >=44px touch targets and zero overlap between touch controls and center crosshair / landscape bounds
-  const layoutCheck = await page.evaluate(() => {
-    const ids = [
-      'touch-move-stick',
-      'touch-btn-fire',
-      'touch-btn-ads',
-      'touch-btn-reload',
-      'touch-btn-jump',
-      'touch-btn-crouch',
-      'touch-btn-weapon-switch',
-    ];
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cx = vw / 2;
-    const cy = vh / 2;
-    const violations: string[] = [];
-    for (const id of ids) {
-      const el = document.querySelector(`[data-testid="${id}"]`);
-      if (!el) {
-        violations.push(`missing:${id}`);
-        continue;
+  // Verify >=44px touch targets, zero clipping, zero crosshair overlap, AND zero pairwise control overlap
+  const verifyZeroControlOverlap = async () =>
+    page.evaluate(() => {
+      const ids = [
+        'touch-move-stick',
+        'touch-btn-fire',
+        'touch-btn-ads',
+        'touch-btn-reload',
+        'touch-btn-jump',
+        'touch-btn-crouch',
+        'touch-weapon-bar',
+      ];
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const cx = vw / 2;
+      const cy = vh / 2;
+      const violations: string[] = [];
+      const rects: Array<{ id: string; r: DOMRect }> = [];
+
+      for (const id of ids) {
+        const el = document.querySelector(`[data-testid="${id}"]`);
+        if (!el) {
+          violations.push(`missing:${id}`);
+          continue;
+        }
+        const r = el.getBoundingClientRect();
+        rects.push({ id, r });
+        if (r.width < 44 || r.height < 44) {
+          violations.push(`small:${id}:${Math.round(r.width)}x${Math.round(r.height)}`);
+        }
+        if (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1) {
+          violations.push(`clipped:${id}`);
+        }
+        // Must not overlap central crosshair zone (36px box at viewport center)
+        if (r.left < cx + 18 && r.right > cx - 18 && r.top < cy + 18 && r.bottom > cy - 18) {
+          violations.push(`crosshair-overlap:${id}`);
+        }
       }
-      const r = el.getBoundingClientRect();
-      if (r.width < 44 || r.height < 44) {
-        violations.push(`small:${id}:${Math.round(r.width)}x${Math.round(r.height)}`);
+
+      // Pairwise intersection check across all primary HUD controls (zero overlap allowed)
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i];
+          const b = rects[j];
+          const intersects = !(
+            a.r.right <= b.r.left + 1 ||
+            a.r.left >= b.r.right - 1 ||
+            a.r.bottom <= b.r.top + 1 ||
+            a.r.top >= b.r.bottom - 1
+          );
+          if (intersects) {
+            violations.push(`overlap:${a.id}<->${b.id}`);
+          }
+        }
       }
-      if (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1) {
-        violations.push(`clipped:${id}`);
-      }
-      // Must not overlap central crosshair zone (40px box at viewport center)
-      if (r.left < cx + 20 && r.right > cx - 20 && r.top < cy + 20 && r.bottom > cy - 20) {
-        violations.push(`crosshair-overlap:${id}`);
-      }
-    }
-    return violations;
-  });
-  expect(layoutCheck).toEqual([]);
+
+      return violations;
+    });
+
+  expect(await verifyZeroControlOverlap()).toEqual([]);
+
+  // Simulate Instagram / in-app browser reduced landscape height (844x315) and verify zero control overlap
+  await page.setViewportSize({ width: 844, height: 315 });
+  await expect(page.getByTestId('mobile-touch-controls')).toHaveAttribute('data-viewport', '844x315');
+  expect(await verifyZeroControlOverlap()).toEqual([]);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.getByTestId('mobile-touch-controls')).toHaveAttribute('data-viewport', '844x390');
 
   // Exercise live multitouch movement (forward/backward/left/right) + continuous 360° camera rotation + 3rd-finger fire
   const multitouchResult = await page.evaluate(async () => {
@@ -208,17 +238,27 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   });
   expect(multitouchResult.ok).toBe(true);
 
-  // Switch to Three-Finger Claw Mode from Pause -> Settings -> Resume & Test Controls
+  // Switch to Three-Finger Claw Mode from Pause -> Settings -> Open 1:1 Full-Screen HUD Editor -> Save -> Resume & Test Controls
   await page.getByRole('button', { name: /Pause Mission/i }).click();
   await expect(page.getByRole('heading', { name: /Mission Paused/i })).toBeVisible();
   await page.getByRole('button', { name: /Settings/i }).click();
   await page.getByRole('tab', { name: /Controls & Keys/i }).click();
   await expect(page.getByTestId('control-layout-preview')).toBeVisible();
   await page.getByTestId('profile-three-finger').click();
+
+  // Launch 1:1 Full-Screen HUD Editor, verify nodes, and save/close
+  await page.getByTestId('open-fullscreen-hud-editor').click();
+  await expect(page.getByTestId('fullscreen-hud-editor')).toBeVisible();
+  await expect(page.getByTestId('editor-handle-fire_left')).toBeVisible();
+  await page.getByTestId('close-fullscreen-hud-editor').click();
+  await expect(page.getByTestId('fullscreen-hud-editor')).toHaveCount(0);
+
   await page.getByTestId('test-controls-in-mission').click();
   await expect(page.getByTestId('touch-btn-fire')).toBeVisible();
 
-  // Verify Three-Finger Claw Mode places Fire button in upper-left without overlapping hud-top-left-cluster
+  // Verify Three-Finger Claw Mode places Fire button in upper-left without overlapping hud-top-left-cluster or any other control
+  expect(await verifyZeroControlOverlap()).toEqual([]);
+
   const clawOverlapCheck = await page.evaluate(() => {
     const fireEl = document.querySelector('[data-testid="touch-btn-fire"]');
     const clusterEl = document.querySelector('[data-testid="hud-top-left-cluster"]');

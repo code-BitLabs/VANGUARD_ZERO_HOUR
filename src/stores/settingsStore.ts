@@ -105,7 +105,61 @@ export const settingsStore = createStore<SettingsStoreState>()(
       });
     },
     updateInput: (patch) => {
-      const next = { ...get().input, ...patch };
+      const prev = get().input;
+      const next: InputSettings = { ...prev, ...patch };
+
+      // When switching to Two-Finger or Three-Finger profile, apply recommended Left/Right Fire defaults unless explicitly specified
+      if (patch.touchControlProfile === 'two_finger') {
+        if (patch.leftFireEnabled === undefined) next.leftFireEnabled = false;
+        if (patch.rightFireEnabled === undefined) next.rightFireEnabled = true;
+      } else if (patch.touchControlProfile === 'three_finger') {
+        if (patch.leftFireEnabled === undefined) next.leftFireEnabled = true;
+        if (patch.rightFireEnabled === undefined) next.rightFireEnabled = false;
+      }
+
+      // Synchronize legacy per-profile fire/ads positions into touchCustomLayout so all custom edits and presets stay coherent
+      const baseCustom = { ...(prev.touchCustomLayout ?? {}) };
+      if (patch.touchFirePosTwoFinger) {
+        baseCustom.fire_right = {
+          ...(baseCustom.fire_right ?? { scale: 1.0 }),
+          x: patch.touchFirePosTwoFinger.x,
+          y: patch.touchFirePosTwoFinger.y,
+        };
+      }
+      if (patch.touchFirePosThreeFinger) {
+        baseCustom.fire_left = {
+          ...(baseCustom.fire_left ?? { scale: 1.05 }),
+          x: patch.touchFirePosThreeFinger.x,
+          y: patch.touchFirePosThreeFinger.y,
+        };
+      }
+      if (patch.touchAdsPosTwoFinger && next.touchControlProfile === 'two_finger') {
+        baseCustom.ads = {
+          ...(baseCustom.ads ?? { scale: 1.0 }),
+          x: patch.touchAdsPosTwoFinger.x,
+          y: patch.touchAdsPosTwoFinger.y,
+        };
+      }
+      if (patch.touchAdsPosThreeFinger && next.touchControlProfile === 'three_finger') {
+        baseCustom.ads = {
+          ...(baseCustom.ads ?? { scale: 1.05 }),
+          x: patch.touchAdsPosThreeFinger.x,
+          y: patch.touchAdsPosThreeFinger.y,
+        };
+      }
+      if (!patch.touchCustomLayout) {
+        next.touchCustomLayout = baseCustom as InputSettings['touchCustomLayout'];
+      }
+
+      // Safety invariant: always keep at least one Fire button active for normal gameplay
+      if (!next.leftFireEnabled && !next.rightFireEnabled) {
+        if (patch.rightFireEnabled === false && prev.rightFireEnabled) {
+          next.leftFireEnabled = true;
+        } else {
+          next.rightFireEnabled = true;
+        }
+      }
+
       set({ input: next });
       persistCurrent({
         graphics: get().graphics,

@@ -62,7 +62,7 @@ export type AudioSettings = z.infer<typeof AudioSettingsSchema>;
 export const TouchModeSchema = z.enum(['auto', 'always_on', 'always_off']);
 export type TouchMode = z.infer<typeof TouchModeSchema>;
 
-export const TouchControlProfileSchema = z.enum(['two_finger', 'three_finger']);
+export const TouchControlProfileSchema = z.enum(['two_finger', 'three_finger', 'custom']);
 export type TouchControlProfile = z.infer<typeof TouchControlProfileSchema>;
 
 export const TouchFireBehaviorSchema = z.enum(['dedicated', 'ads_on_fire']);
@@ -72,15 +72,72 @@ export const TouchAdsModeSchema = z.enum(['toggle', 'hold']);
 export type TouchAdsMode = z.infer<typeof TouchAdsModeSchema>;
 
 export const NormalizedTouchPositionSchema = z.object({
-  x: z.number().min(0.04).max(0.95),
-  y: z.number().min(0.08).max(0.92),
+  x: z.number().min(0.04).max(0.96),
+  y: z.number().min(0.08).max(0.94),
 });
 export type NormalizedTouchPosition = z.infer<typeof NormalizedTouchPositionSchema>;
 
-export const DEFAULT_TWO_FINGER_FIRE_POS: NormalizedTouchPosition = { x: 0.88, y: 0.75 };
+export const TouchControlIdSchema = z.enum([
+  'move_joystick',
+  'fire_left',
+  'fire_right',
+  'ads',
+  'reload',
+  'crouch',
+  'jump',
+  'weapon_bar',
+]);
+export type TouchControlId = z.infer<typeof TouchControlIdSchema>;
+
+export const TouchControlNodeConfigSchema = z.object({
+  x: z.number().min(0.04).max(0.96),
+  y: z.number().min(0.08).max(0.94),
+  scale: z.number().min(0.75).max(1.45).default(1.0),
+});
+export type TouchControlNodeConfig = z.infer<typeof TouchControlNodeConfigSchema>;
+
+export const DEFAULT_TWO_FINGER_FIRE_POS: NormalizedTouchPosition = { x: 0.85, y: 0.68 };
 export const DEFAULT_THREE_FINGER_FIRE_POS: NormalizedTouchPosition = { x: 0.1, y: 0.24 };
-export const DEFAULT_TWO_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.76, y: 0.68 };
-export const DEFAULT_THREE_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.87, y: 0.68 };
+export const DEFAULT_TWO_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.73, y: 0.54 };
+export const DEFAULT_THREE_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.84, y: 0.64 };
+
+export const TouchControlLayoutMapSchema = z.object({
+  move_joystick: TouchControlNodeConfigSchema.default({ x: 0.13, y: 0.72, scale: 1.0 }),
+  fire_left: TouchControlNodeConfigSchema.default({ x: 0.1, y: 0.24, scale: 1.0 }),
+  fire_right: TouchControlNodeConfigSchema.default({ x: 0.85, y: 0.68, scale: 1.0 }),
+  ads: TouchControlNodeConfigSchema.default({ x: 0.73, y: 0.54, scale: 1.0 }),
+  reload: TouchControlNodeConfigSchema.default({ x: 0.73, y: 0.84, scale: 1.0 }),
+  crouch: TouchControlNodeConfigSchema.default({ x: 0.86, y: 0.87, scale: 1.0 }),
+  jump: TouchControlNodeConfigSchema.default({ x: 0.94, y: 0.52, scale: 1.0 }),
+  weapon_bar: TouchControlNodeConfigSchema.default({ x: 0.48, y: 0.88, scale: 1.0 }),
+});
+export type TouchControlLayoutMap = z.infer<typeof TouchControlLayoutMapSchema>;
+
+export const DEFAULT_TWO_FINGER_CONTROL_MAP: TouchControlLayoutMap = TouchControlLayoutMapSchema.parse({});
+
+export const DEFAULT_THREE_FINGER_CONTROL_MAP: TouchControlLayoutMap = {
+  move_joystick: { x: 0.13, y: 0.75, scale: 1.0 },
+  fire_left: { x: 0.1, y: 0.24, scale: 1.05 },
+  fire_right: { x: 0.85, y: 0.68, scale: 1.0 },
+  ads: { x: 0.84, y: 0.64, scale: 1.05 },
+  reload: { x: 0.73, y: 0.83, scale: 1.0 },
+  crouch: { x: 0.85, y: 0.86, scale: 1.0 },
+  jump: { x: 0.94, y: 0.52, scale: 1.0 },
+  weapon_bar: { x: 0.48, y: 0.88, scale: 1.0 },
+};
+
+export function cloneControlLayoutMap(map: TouchControlLayoutMap): TouchControlLayoutMap {
+  return {
+    move_joystick: { ...map.move_joystick },
+    fire_left: { ...map.fire_left },
+    fire_right: { ...map.fire_right },
+    ads: { ...map.ads },
+    reload: { ...map.reload },
+    crouch: { ...map.crouch },
+    jump: { ...map.jump },
+    weapon_bar: { ...map.weapon_bar },
+  };
+}
 
 export const InputSettingsSchema = z.object({
   mouseSensitivity: z.number().min(0.1).max(4.0).default(1.0),
@@ -89,6 +146,8 @@ export const InputSettingsSchema = z.object({
   gamepadEnabled: z.boolean().default(true),
   touchMode: TouchModeSchema.default('auto'),
   touchControlProfile: TouchControlProfileSchema.default('two_finger'),
+  leftFireEnabled: z.boolean().default(false),
+  rightFireEnabled: z.boolean().default(true),
   touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
   touchLookSmoothing: z.number().min(0).max(0.6).default(0),
   touchJoystickScale: z.number().min(0.75).max(1.35).default(1.0),
@@ -105,6 +164,9 @@ export const InputSettingsSchema = z.object({
   touchFirePosThreeFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_THREE_FINGER_FIRE_POS })),
   touchAdsPosTwoFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_TWO_FINGER_ADS_POS })),
   touchAdsPosThreeFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_THREE_FINGER_ADS_POS })),
+  touchCustomLayout: TouchControlLayoutMapSchema.default(() =>
+    cloneControlLayoutMap(DEFAULT_TWO_FINGER_CONTROL_MAP)
+  ),
   touchFireOffsetX: z.number().min(-60).max(60).default(0),
   touchFireOffsetY: z.number().min(-60).max(60).default(0),
   touchAdsOffsetX: z.number().min(-60).max(60).default(0),

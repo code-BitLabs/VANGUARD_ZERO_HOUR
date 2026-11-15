@@ -20,6 +20,7 @@ import { ExtendedInputAction, InputManager } from '@/src/engine/InputManager';
 import { HudSnapshot } from '@/src/schemas/events.schema';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { computeMobileHudLayout } from './mobileHudLayoutEngine';
 
 interface MobileTouchControlsProps {
   inputManager: InputManager | null;
@@ -27,25 +28,17 @@ interface MobileTouchControlsProps {
 }
 
 export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsProps) {
-  const touchControlProfile = useSettingsStore((s) => s.input.touchControlProfile);
-  const touchJoystickScale = useSettingsStore((s) => s.input.touchJoystickScale);
-  const touchDeadzone = useSettingsStore((s) => s.input.touchDeadzone);
-  const touchButtonScale = useSettingsStore((s) => s.input.touchButtonScale);
-  const touchFireButtonScale = useSettingsStore((s) => s.input.touchFireButtonScale);
-  const touchOpacity = useSettingsStore((s) => s.input.touchButtonOpacity);
-  const autoSprint = useSettingsStore((s) => s.input.autoSprint);
-  const autoSprintThreshold = useSettingsStore((s) => s.input.touchAutoSprintThreshold);
-  const touchManualSprintButton = useSettingsStore((s) => s.input.touchManualSprintButton);
-  const touchAdsMode = useSettingsStore((s) => s.input.touchAdsMode);
-  const touchFireBehavior = useSettingsStore((s) => s.input.touchFireBehavior);
-  const touchFirePosTwoFinger = useSettingsStore((s) => s.input.touchFirePosTwoFinger);
-  const touchFirePosThreeFinger = useSettingsStore((s) => s.input.touchFirePosThreeFinger);
-  const touchAdsPosTwoFinger = useSettingsStore((s) => s.input.touchAdsPosTwoFinger);
-  const touchAdsPosThreeFinger = useSettingsStore((s) => s.input.touchAdsPosThreeFinger);
-  const touchFireOffsetX = useSettingsStore((s) => s.input.touchFireOffsetX);
-  const touchFireOffsetY = useSettingsStore((s) => s.input.touchFireOffsetY);
-  const touchAdsOffsetX = useSettingsStore((s) => s.input.touchAdsOffsetX);
-  const touchAdsOffsetY = useSettingsStore((s) => s.input.touchAdsOffsetY);
+  const inputSettings = useSettingsStore((s) => s.input);
+  const {
+    touchControlProfile,
+    touchDeadzone,
+    touchButtonOpacity: touchOpacity,
+    autoSprint,
+    touchAutoSprintThreshold: autoSprintThreshold,
+    touchManualSprintButton,
+    touchAdsMode,
+    touchFireBehavior,
+  } = inputSettings;
 
   const viewport = useViewportMode();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -81,13 +74,35 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
   const lookLastPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const heldButtonPointers = useRef<Map<number, ExtendedInputAction[]>>(new Map());
+  const heldFireSides = useRef<Map<number, 'left' | 'right'>>(new Map());
   const [heldActionsUi, setHeldActionsUi] = useState<Set<ExtendedInputAction>>(new Set());
+  const [firingSidesUi, setFiringSidesUi] = useState<{ left: boolean; right: boolean }>({
+    left: false,
+    right: false,
+  });
 
-  const padSize = Math.round(124 * touchJoystickScale);
-  const knobSize = Math.round(48 * touchJoystickScale);
-  const fireSize = Math.max(56, Math.min(112, Math.round(74 * touchButtonScale * touchFireButtonScale)));
-  const primaryBtnSize = Math.max(44, Math.round(50 * touchButtonScale));
-  const compactBtnSize = Math.max(42, Math.round(44 * touchButtonScale));
+  // Compute unified collision-free layout for the active viewport and HUD state
+  const layout = computeMobileHudLayout(
+    inputSettings,
+    { width: viewport.width, height: viewport.height },
+    {
+      inVehicle: hud.inVehicle,
+      grenadeCount: hud.grenades,
+      c4DeployedCount: hud.ordnance?.c4Deployed ?? 0,
+    }
+  );
+
+  const stickRect = layout.controls.move_joystick;
+  const fireLeftRect = layout.controls.fire_left;
+  const fireRightRect = layout.controls.fire_right;
+  const adsRect = layout.controls.ads;
+  const reloadRect = layout.controls.reload;
+  const crouchRect = layout.controls.crouch;
+  const jumpRect = layout.controls.jump;
+  const weaponBarRect = layout.controls.weapon_bar;
+
+  const padSize = stickRect.width;
+  const knobSize = Math.round(padSize * 0.4);
 
   const syncUiHeldSet = useCallback(() => {
     const next = new Set<ExtendedInputAction>();
@@ -95,6 +110,14 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
       for (const a of actions) next.add(a);
     }
     setHeldActionsUi(next);
+
+    let left = false;
+    let right = false;
+    for (const side of heldFireSides.current.values()) {
+      if (side === 'left') left = true;
+      if (side === 'right') right = true;
+    }
+    setFiringSidesUi({ left, right });
   }, []);
 
   const releaseAllVirtual = useCallback(() => {
@@ -119,7 +142,9 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
       im.setVirtualActionState('crouch', false);
     }
     heldButtonPointers.current.clear();
+    heldFireSides.current.clear();
     setHeldActionsUi(new Set());
+    setFiringSidesUi({ left: false, right: false });
   }, []);
 
   const applyStickPosition = useCallback((clientX: number, clientY: number) => {
@@ -146,7 +171,6 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     }
 
     const linearMag = (normMag - deadzone) / Math.max(0.01, 1 - deadzone);
-    // Smooth analog response curve for fine micro-walk near center and full stride at rim
     const curvedMag = Math.min(1, Math.pow(linearMag, 1.2));
     const dirX = dist > 0.001 ? dx / dist : 0;
     const dirY = dist > 0.001 ? dy / dist : 0;
@@ -154,7 +178,7 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     const forward = -dirY * curvedMag;
     im?.setVirtualMoveAxes(forward, right);
 
-    // Auto-sprint ONLY when pushing forward beyond threshold inside a forward cone (never sideways/backward)
+    // Auto-sprint ONLY when pushing forward beyond threshold inside a forward cone
     const threshold = autoSprintThresholdRef.current;
     const forwardSprintEngaged =
       !inVehicleRef.current &&
@@ -208,7 +232,11 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
   const endHoldByPointerId = useCallback(
     (pointerId: number) => {
       const actions = heldButtonPointers.current.get(pointerId);
-      if (!actions) return;
+      heldFireSides.current.delete(pointerId);
+      if (!actions) {
+        syncUiHeldSet();
+        return;
+      }
       heldButtonPointers.current.delete(pointerId);
       const im = inputManagerRef.current;
       for (const a of actions) {
@@ -225,7 +253,7 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     [syncUiHeldSet]
   );
 
-  // Global window pointer tracking so dragging across zone boundaries, buttons, or multi-finger touch-downs never drops movement, camera look, or held Fire
+  // Global window pointer tracking so dragging across zone boundaries or multi-finger touch-downs never drops movement, camera look, or held Fire
   useEffect(() => {
     const onWindowPointerMove = (e: PointerEvent) => {
       if (e.pointerId === stickPointerId.current) {
@@ -414,7 +442,11 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     endLookByPointerId(e.pointerId);
   };
 
-  const startHoldActions = (e: React.PointerEvent<HTMLButtonElement>, actions: ExtendedInputAction[]) => {
+  const startHoldActions = (
+    e: React.PointerEvent<HTMLButtonElement>,
+    actions: ExtendedInputAction[],
+    fireSide?: 'left' | 'right'
+  ) => {
     e.stopPropagation();
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -422,6 +454,9 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
       // Ignore
     }
     heldButtonPointers.current.set(e.pointerId, actions);
+    if (fireSide) {
+      heldFireSides.current.set(e.pointerId, fireSide);
+    }
     for (const a of actions) {
       inputManager?.setVirtualActionState(a, true);
     }
@@ -470,35 +505,22 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     touchFireBehavior === 'ads_on_fire' && !hud.inVehicle ? ['ads', 'fire'] : ['fire'];
 
   const isFiring = heldActionsUi.has('fire');
+  const isLeftFiring = firingSidesUi.left || (isFiring && !fireRightRect.visible);
+  const isRightFiring = firingSidesUi.right || (isFiring && !fireLeftRect.visible);
   const showAdsActive = adsToggled || heldActionsUi.has('ads') || hud.isAds;
-  const isThreeFinger = touchControlProfile === 'three_finger';
 
-  // Compute viewport-clamped normalized button coordinates for Fire & ADS
-  const activeFireNorm = isThreeFinger ? touchFirePosThreeFinger : touchFirePosTwoFinger;
-  const activeAdsNorm = isThreeFinger ? touchAdsPosThreeFinger : touchAdsPosTwoFinger;
-
-  const vw = Math.max(320, viewport.width);
-  const vh = Math.max(240, viewport.height);
-
-  const fireLeftPx = Math.round(
-    Math.max(12, Math.min(vw - fireSize - 12, activeFireNorm.x * vw - fireSize / 2 + touchFireOffsetX))
-  );
-  const fireTopPx = Math.round(
-    Math.max(12, Math.min(vh - fireSize - 12, activeFireNorm.y * vh - fireSize / 2 + touchFireOffsetY))
-  );
-
-  const adsLeftPx = Math.round(
-    Math.max(12, Math.min(vw - primaryBtnSize - 12, activeAdsNorm.x * vw - primaryBtnSize / 2 + touchAdsOffsetX))
-  );
-  const adsTopPx = Math.round(
-    Math.max(12, Math.min(vh - primaryBtnSize - 12, activeAdsNorm.y * vh - primaryBtnSize / 2 + touchAdsOffsetY))
-  );
+  // Assign primary `touch-btn-fire` testid to the active Fire button, and `touch-btn-fire-left` when both are visible
+  const leftFireTestId = fireRightRect.visible ? 'touch-btn-fire-left' : 'touch-btn-fire';
+  const rightFireTestId = 'touch-btn-fire';
 
   return (
     <div
       ref={rootRef}
       data-testid="mobile-touch-controls"
+      data-viewport={`${layout.viewportWidth}x${layout.viewportHeight}`}
       data-control-profile={touchControlProfile}
+      data-left-fire-enabled={fireLeftRect.visible ? 'true' : 'false'}
+      data-right-fire-enabled={fireRightRect.visible ? 'true' : 'false'}
       className="fixed inset-0 z-20 pointer-events-none select-none touch-none touch-none-surface"
       style={{
         opacity: Math.max(0.35, Math.min(0.95, touchOpacity)),
@@ -507,15 +529,15 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
       onClick={(e) => e.stopPropagation()}
     >
       {/* Left Floating Movement Zone:
-          - Two-Finger Mode: full left 40% height
-          - Three-Finger Claw Mode: lower-left 56% height so upper-left claw area stays dedicated to index-finger Fire */}
+          Top boundary automatically shifts below the Left-Index Claw Fire button when active */}
       <div
         data-testid="touch-move-zone"
         aria-label="Movement Touch Zone"
-        style={{ touchAction: 'none' }}
-        className={`pointer-events-auto touch-none touch-none-surface fixed left-0 right-[60%] bottom-0 ${
-          isThreeFinger ? 'top-[44%]' : 'top-0'
-        }`}
+        style={{
+          top: `${layout.leftMoveZoneTopPx}px`,
+          touchAction: 'none',
+        }}
+        className="pointer-events-auto touch-none touch-none-surface fixed left-0 right-[60%] bottom-0"
         onPointerDown={handleLeftZonePointerDown}
         onPointerMove={handleStickPointerMove}
         onPointerUp={handleStickPointerEnd}
@@ -539,10 +561,15 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
         className="pointer-events-none fixed flex flex-col items-center gap-1.5"
         style={
           floatingOrigin
-            ? { left: `${floatingOrigin.left}px`, top: `${floatingOrigin.top}px` }
+            ? {
+                left: `${floatingOrigin.left}px`,
+                top: `${floatingOrigin.top}px`,
+                zIndex: stickRect.zIndex,
+              }
             : {
-                left: 'max(36px, calc(env(safe-area-inset-left, 0px) + 24px))',
-                bottom: 'max(34px, calc(env(safe-area-inset-bottom, 0px) + 22px))',
+                left: `${stickRect.left}px`,
+                top: `${stickRect.top}px`,
+                zIndex: stickRect.zIndex,
               }
         }
       >
@@ -581,6 +608,7 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
         <div
           ref={stickBaseRef}
           data-testid="touch-move-stick"
+          data-control-id="move_joystick"
           aria-label="Movement Analog Stick"
           onPointerDown={handleStickPointerDown}
           onPointerMove={handleStickPointerMove}
@@ -609,10 +637,10 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
         </div>
       </div>
 
-      {/* Center-Bottom Contextual Prompts (Interact / Nuke Auth — appear ONLY when relevant) */}
+      {/* CenterContextual Prompts (Interact / Nuke Auth — appear ONLY when relevant above bottom-center weapon bar) */}
       <div
-        className="pointer-events-none fixed left-1/2 -translate-x-1/2 flex flex-col items-center gap-2"
-        style={{ bottom: 'max(14px, env(safe-area-inset-bottom, 0px))' }}
+        className="pointer-events-none fixed left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-30"
+        style={{ bottom: `${Math.max(66, layout.viewportHeight - weaponBarRect.top + 8)}px` }}
       >
         {hud.ordnance && hud.ordnance.nukePendingConfirmSec > 0 && (
           <div className="pointer-events-auto flex items-center gap-2 bg-[#1b1010]/95 border border-red-500 p-1.5 rounded-sm">
@@ -652,59 +680,103 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
         )}
       </div>
 
-      {/* Dedicated Profile-Positioned FIRE Button:
-          - Two-Finger Mode: Ergonomic bottom-right thumb trigger
-          - Three-Finger Claw Mode: Upper-left index-finger claw trigger
-          - Independent from camera-look surface (never causes camera jump on tap/hold) */}
-      <button
-        type="button"
-        data-testid="touch-btn-fire"
-        data-profile={touchControlProfile}
-        data-pressed={isFiring ? 'true' : 'false'}
-        aria-label={hud.inVehicle ? 'Fire Vehicle Turret' : 'Fire Weapon'}
-        aria-pressed={isFiring}
-        onPointerDown={(e) => startHoldActions(e, hud.inVehicle ? ['fire'] : fireActions)}
-        onPointerUp={endHoldActions}
-        onPointerCancel={endHoldActions}
-        style={{
-          left: `${fireLeftPx}px`,
-          top: `${fireTopPx}px`,
-          width: `${fireSize}px`,
-          height: `${fireSize}px`,
-          touchAction: 'none',
-        }}
-        className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border-2 font-mono text-[11px] font-bold uppercase flex flex-col items-center justify-center transition-transform duration-75 ${
-          isFiring
-            ? 'bg-red-600/90 border-amber-200 text-white scale-94 ring-4 ring-amber-400/35 shadow-[0_0_22px_rgba(239,68,68,0.65)]'
-            : hud.ammoInMag === 0 && !hud.inVehicle
-              ? 'bg-red-950/75 border-red-400/85 text-red-100 shadow-lg'
-              : 'bg-amber-500/38 border-amber-400 text-amber-50 shadow-xl'
-        }`}
-      >
-        <div
-          className={`pointer-events-none absolute inset-1.5 rounded-full border ${
-            isFiring ? 'border-white/50' : 'border-amber-200/25'
+      {/* Dedicated Left-Side Claw FIRE Button (when leftFireEnabled is true) */}
+      {fireLeftRect.visible && (
+        <button
+          type="button"
+          data-testid={leftFireTestId}
+          data-control-id="fire_left"
+          data-fire-side="left"
+          data-profile={touchControlProfile}
+          data-pressed={isLeftFiring ? 'true' : 'false'}
+          aria-label={hud.inVehicle ? 'Left Fire Vehicle Turret' : 'Left Fire Weapon'}
+          aria-pressed={isLeftFiring}
+          onPointerDown={(e) => startHoldActions(e, hud.inVehicle ? ['fire'] : fireActions, 'left')}
+          onPointerUp={endHoldActions}
+          onPointerCancel={endHoldActions}
+          style={{
+            left: `${fireLeftRect.left}px`,
+            top: `${fireLeftRect.top}px`,
+            width: `${fireLeftRect.width}px`,
+            height: `${fireLeftRect.height}px`,
+            zIndex: fireLeftRect.zIndex,
+            touchAction: 'none',
+          }}
+          className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border-2 font-mono text-[10px] font-bold uppercase flex flex-col items-center justify-center transition-transform duration-75 ${
+            isLeftFiring
+              ? 'bg-red-600/90 border-amber-200 text-white scale-94 ring-4 ring-amber-400/35 shadow-[0_0_22px_rgba(239,68,68,0.65)]'
+              : hud.ammoInMag === 0 && !hud.inVehicle
+                ? 'bg-red-950/75 border-red-400/85 text-red-100 shadow-lg'
+                : 'bg-amber-500/42 border-amber-300 text-amber-50 shadow-xl'
           }`}
-        />
-        <Crosshair className={`w-5 h-5 ${isFiring ? 'scale-110' : ''} transition-transform`} />
-        <span className="mt-0.5 leading-none">{hud.inVehicle ? 'GUN' : 'FIRE'}</span>
-      </button>
+        >
+          <div
+            className={`pointer-events-none absolute inset-1.5 rounded-full border ${
+              isLeftFiring ? 'border-white/50' : 'border-amber-200/25'
+            }`}
+          />
+          <Crosshair className={`w-5 h-5 ${isLeftFiring ? 'scale-110' : ''} transition-transform`} />
+          <span className="mt-0.5 leading-none">{hud.inVehicle ? 'GUN' : 'FIRE'}</span>
+        </button>
+      )}
 
-      {/* Dedicated Profile-Positioned ADS Button (when on foot) */}
-      {!hud.inVehicle && (
+      {/* Dedicated Right-Side Thumb FIRE Button (when rightFireEnabled is true) */}
+      {fireRightRect.visible && (
+        <button
+          type="button"
+          data-testid={rightFireTestId}
+          data-control-id="fire_right"
+          data-fire-side="right"
+          data-profile={touchControlProfile}
+          data-pressed={isRightFiring ? 'true' : 'false'}
+          aria-label={hud.inVehicle ? 'Fire Vehicle Turret' : 'Fire Weapon'}
+          aria-pressed={isRightFiring}
+          onPointerDown={(e) => startHoldActions(e, hud.inVehicle ? ['fire'] : fireActions, 'right')}
+          onPointerUp={endHoldActions}
+          onPointerCancel={endHoldActions}
+          style={{
+            left: `${fireRightRect.left}px`,
+            top: `${fireRightRect.top}px`,
+            width: `${fireRightRect.width}px`,
+            height: `${fireRightRect.height}px`,
+            zIndex: fireRightRect.zIndex,
+            touchAction: 'none',
+          }}
+          className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border-2 font-mono text-[11px] font-bold uppercase flex flex-col items-center justify-center transition-transform duration-75 ${
+            isRightFiring
+              ? 'bg-red-600/90 border-amber-200 text-white scale-94 ring-4 ring-amber-400/35 shadow-[0_0_22px_rgba(239,68,68,0.65)]'
+              : hud.ammoInMag === 0 && !hud.inVehicle
+                ? 'bg-red-950/75 border-red-400/85 text-red-100 shadow-lg'
+                : 'bg-amber-500/38 border-amber-400 text-amber-50 shadow-xl'
+          }`}
+        >
+          <div
+            className={`pointer-events-none absolute inset-1.5 rounded-full border ${
+              isRightFiring ? 'border-white/50' : 'border-amber-200/25'
+            }`}
+          />
+          <Crosshair className={`w-5 h-5 ${isRightFiring ? 'scale-110' : ''} transition-transform`} />
+          <span className="mt-0.5 leading-none">{hud.inVehicle ? 'GUN' : 'FIRE'}</span>
+        </button>
+      )}
+
+      {/* Primary ADS Button (when on foot) */}
+      {adsRect.visible && (
         <button
           type="button"
           data-testid="touch-btn-ads"
+          data-control-id="ads"
           aria-label="Aim Down Sights"
           aria-pressed={showAdsActive}
           onPointerDown={handleAdsPointerDown}
           onPointerUp={handleAdsPointerEnd}
           onPointerCancel={handleAdsPointerEnd}
           style={{
-            left: `${adsLeftPx}px`,
-            top: `${adsTopPx}px`,
-            width: `${primaryBtnSize}px`,
-            height: `${primaryBtnSize}px`,
+            left: `${adsRect.left}px`,
+            top: `${adsRect.top}px`,
+            width: `${adsRect.width}px`,
+            height: `${adsRect.height}px`,
+            zIndex: adsRect.zIndex,
             touchAction: 'none',
           }}
           className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border font-mono text-[10px] font-bold flex flex-col items-center justify-center transition-transform duration-75 ${
@@ -718,16 +790,222 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
         </button>
       )}
 
-      {/* Right Secondary Combat Cluster (Reload, Jump, Crouch, Weapon Switch, Kit Drawer — wrappers are pointer-events-none!) */}
+      {/* Secondary Right-Thumb Ergonomic Arc Controls: Reload, Crouch/Slide, Jump (each individually positioned & collision-checked) */}
+      {reloadRect.visible && (
+        <button
+          type="button"
+          data-testid="touch-btn-reload"
+          data-control-id="reload"
+          aria-label="Reload Weapon"
+          onPointerDown={(e) => fireTapAction(e, 'reload')}
+          style={{
+            left: `${reloadRect.left}px`,
+            top: `${reloadRect.top}px`,
+            width: `${reloadRect.width}px`,
+            height: `${reloadRect.height}px`,
+            zIndex: reloadRect.zIndex,
+            touchAction: 'none',
+          }}
+          className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border flex flex-col items-center justify-center ${
+            hud.isReloading
+              ? 'bg-amber-500/35 border-amber-400 text-amber-200'
+              : 'bg-[#0B0E11]/78 border-white/20 text-zinc-100'
+          }`}
+        >
+          <RefreshCw className={`w-4 h-4 ${hud.isReloading ? 'animate-spin' : ''}`} />
+        </button>
+      )}
+
+      {crouchRect.visible && (
+        <button
+          type="button"
+          data-testid="touch-btn-crouch"
+          data-control-id="crouch"
+          aria-label="Crouch or Slide"
+          onPointerDown={(e) => startHoldActions(e, ['crouch'])}
+          onPointerUp={endHoldActions}
+          onPointerCancel={endHoldActions}
+          style={{
+            left: `${crouchRect.left}px`,
+            top: `${crouchRect.top}px`,
+            width: `${crouchRect.width}px`,
+            height: `${crouchRect.height}px`,
+            zIndex: crouchRect.zIndex,
+            touchAction: 'none',
+          }}
+          className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border flex flex-col items-center justify-center ${
+            heldActionsUi.has('crouch') || hud.isCrouching
+              ? 'bg-cyan-500/35 border-cyan-400 text-cyan-200'
+              : 'bg-[#0B0E11]/78 border-white/20 text-zinc-200'
+          }`}
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
+      )}
+
+      {jumpRect.visible && (
+        <button
+          type="button"
+          data-testid="touch-btn-jump"
+          data-control-id="jump"
+          aria-label="Jump"
+          onPointerDown={(e) => startHoldActions(e, ['jump'])}
+          onPointerUp={endHoldActions}
+          onPointerCancel={endHoldActions}
+          style={{
+            left: `${jumpRect.left}px`,
+            top: `${jumpRect.top}px`,
+            width: `${jumpRect.width}px`,
+            height: `${jumpRect.height}px`,
+            zIndex: jumpRect.zIndex,
+            touchAction: 'none',
+          }}
+          className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border flex flex-col items-center justify-center ${
+            heldActionsUi.has('jump')
+              ? 'bg-amber-500/35 border-amber-400 text-amber-200'
+              : 'bg-[#0B0E11]/78 border-white/20 text-zinc-200'
+          }`}
+        >
+          <ArrowUp className="w-4 h-4" />
+        </button>
+      )}
+
+      {/* Bottom-Center Tactical Weapon & Ordnance Bar (keeps Weapon Switch, Grenade, and Kit completely clear of Right Fire & ADS) */}
       <div
-        className="pointer-events-none fixed flex flex-col items-end gap-1.5"
+        data-testid="touch-weapon-bar"
+        data-control-id="weapon_bar"
+        className="pointer-events-none fixed flex flex-col items-center"
         style={{
-          right: 'max(12px, env(safe-area-inset-right, 0px))',
-          bottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+          left: `${weaponBarRect.left}px`,
+          top: `${weaponBarRect.top}px`,
+          width: `${weaponBarRect.width}px`,
+          height: `${weaponBarRect.height}px`,
+          zIndex: weaponBarRect.zIndex,
         }}
       >
+        {/* Expandable Secondary Equipment / Ordnance Drawer (opens upward above the bottom-center bar) */}
+        {!hud.inVehicle && tacticalOpen && (
+          <div
+            data-testid="touch-tactical-drawer"
+            style={{
+              bottom: `${weaponBarRect.height + 8}px`,
+              touchAction: 'none',
+            }}
+            className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/95 border border-white/15 rounded-md p-2 flex flex-col gap-2 shadow-2xl w-[256px]"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-1">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+                Kit &amp; Ordnance
+              </span>
+              <button
+                type="button"
+                aria-label="Close Tactical Kit"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  setTacticalOpen(false);
+                }}
+                className="min-w-[32px] min-h-[32px] flex items-center justify-center text-zinc-400 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                data-testid="touch-btn-firemode"
+                aria-label="Cycle Fire Mode"
+                onPointerDown={(e) => fireTapAction(e, 'fireMode')}
+                className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] font-bold uppercase text-zinc-200"
+              >
+                {hud.fireMode}
+              </button>
+
+              {hud.ordnance && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="touch-btn-c4"
+                    aria-label={hud.ordnance.c4Deployed > 0 ? 'Detonate C4' : 'Place C4'}
+                    onPointerDown={(e) => {
+                      fireTapAction(e, hud.ordnance && hud.ordnance.c4Deployed > 0 ? 'c4Detonate' : 'c4');
+                      setTacticalOpen(false);
+                    }}
+                    className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-amber-500/50 rounded-sm font-mono text-[10px] font-bold text-amber-300"
+                  >
+                    {hud.ordnance.c4Deployed > 0 ? 'DET C4' : `C4 (${hud.ordnance.c4Inventory})`}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="touch-btn-strike"
+                    aria-label="Call Bomb Strike"
+                    onPointerDown={(e) => {
+                      fireTapAction(e, 'bombStrike');
+                      setTacticalOpen(false);
+                    }}
+                    className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-cyan-500/50 rounded-sm font-mono text-[10px] font-bold text-cyan-300 flex items-center gap-1"
+                  >
+                    <Bomb className="w-3.5 h-3.5" />
+                    <span>{hud.ordnance.selectedBombShort}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="touch-btn-cycle-bomb"
+                    aria-label="Cycle Bomb Type"
+                    onPointerDown={(e) => fireTapAction(e, 'cycleBomb')}
+                    className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] text-zinc-300"
+                  >
+                    TYPE
+                  </button>
+                  {!hud.ordnance.nukeUsed &&
+                    (hud.ordnance.sandboxAuthorized ||
+                      hud.ordnance.requisitionPoints >= hud.ordnance.nukeCost) && (
+                      <button
+                        type="button"
+                        data-testid="touch-btn-nuke"
+                        aria-label="Request Strategic Strike"
+                        onPointerDown={(e) => {
+                          fireTapAction(e, 'strategicNuke');
+                          setTacticalOpen(false);
+                        }}
+                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-red-950/90 border border-red-500 rounded-sm font-mono text-[10px] font-bold text-red-200"
+                      >
+                        TRIDENT
+                      </button>
+                    )}
+                </>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-1">
+              {WEAPON_CATALOG.map((w) => {
+                const active = w.id === hud.weaponId;
+                return (
+                  <button
+                    key={w.id}
+                    type="button"
+                    data-testid={`touch-slot-${w.slot}`}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      inputManager?.queueWeaponSlot(w.slot);
+                      setTacticalOpen(false);
+                    }}
+                    className={`touch-none touch-none-surface min-h-[38px] px-1.5 rounded-sm border font-mono text-[9px] font-bold uppercase truncate ${
+                      active
+                        ? 'bg-amber-500/25 border-amber-400 text-amber-200'
+                        : 'bg-[#141920] border-zinc-800 text-zinc-300'
+                    }`}
+                  >
+                    {w.slot}. {w.shortName}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {hud.inVehicle ? (
-          <div className="pointer-events-none flex items-center gap-2">
+          <div className="pointer-events-none flex items-center justify-center gap-2 w-full h-full">
             <button
               type="button"
               data-testid="touch-btn-veh-cam"
@@ -751,242 +1029,75 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
             </button>
           </div>
         ) : (
-          <div className="pointer-events-none flex flex-col items-end gap-1.5">
-            {/* Expandable Secondary Equipment / Ordnance Drawer (only mounted when toggled open) */}
-            {tacticalOpen && (
-              <div
-                data-testid="touch-tactical-drawer"
-                style={{ touchAction: 'none' }}
-                className="pointer-events-auto bg-[#0B0E11]/94 border border-white/15 rounded-md p-2 flex flex-col gap-2 shadow-2xl max-w-[260px]"
+          <div className="pointer-events-none flex items-center justify-center gap-1.5 w-full h-full">
+            {hud.ordnance && hud.ordnance.c4Deployed > 0 && (
+              <button
+                type="button"
+                data-testid="touch-btn-c4-detonate"
+                aria-label="Detonate Planted C4"
+                style={{ height: `${weaponBarRect.height}px`, touchAction: 'none' }}
+                onPointerDown={(e) => fireTapAction(e, 'c4Detonate')}
+                className="pointer-events-auto touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-red-950/85 border border-red-400 rounded-full font-mono text-[10px] font-bold text-red-200 flex items-center justify-center"
               >
-                <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-1">
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
-                    Kit &amp; Ordnance
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Close Tactical Kit"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      setTacticalOpen(false);
-                    }}
-                    className="min-w-[32px] min-h-[32px] flex items-center justify-center text-zinc-400 hover:text-white"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Secondary Actions: Fire Mode, C4, Bomb Strike, Cycle Bomb */}
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    data-testid="touch-btn-firemode"
-                    aria-label="Cycle Fire Mode"
-                    onPointerDown={(e) => fireTapAction(e, 'fireMode')}
-                    className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] font-bold uppercase text-zinc-200"
-                  >
-                    {hud.fireMode}
-                  </button>
-
-                  {hud.ordnance && (
-                    <>
-                      <button
-                        type="button"
-                        data-testid="touch-btn-c4"
-                        aria-label={hud.ordnance.c4Deployed > 0 ? 'Detonate C4' : 'Place C4'}
-                        onPointerDown={(e) => {
-                          fireTapAction(e, hud.ordnance && hud.ordnance.c4Deployed > 0 ? 'c4Detonate' : 'c4');
-                          setTacticalOpen(false);
-                        }}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-amber-500/50 rounded-sm font-mono text-[10px] font-bold text-amber-300"
-                      >
-                        {hud.ordnance.c4Deployed > 0 ? 'DET C4' : `C4 (${hud.ordnance.c4Inventory})`}
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="touch-btn-strike"
-                        aria-label="Call Bomb Strike"
-                        onPointerDown={(e) => {
-                          fireTapAction(e, 'bombStrike');
-                          setTacticalOpen(false);
-                        }}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-cyan-500/50 rounded-sm font-mono text-[10px] font-bold text-cyan-300 flex items-center gap-1"
-                      >
-                        <Bomb className="w-3.5 h-3.5" />
-                        <span>{hud.ordnance.selectedBombShort}</span>
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="touch-btn-cycle-bomb"
-                        aria-label="Cycle Bomb Type"
-                        onPointerDown={(e) => fireTapAction(e, 'cycleBomb')}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] text-zinc-300"
-                      >
-                        TYPE
-                      </button>
-                      {!hud.ordnance.nukeUsed &&
-                        (hud.ordnance.sandboxAuthorized ||
-                          hud.ordnance.requisitionPoints >= hud.ordnance.nukeCost) && (
-                          <button
-                            type="button"
-                            data-testid="touch-btn-nuke"
-                            aria-label="Request Strategic Strike"
-                            onPointerDown={(e) => {
-                              fireTapAction(e, 'strategicNuke');
-                              setTacticalOpen(false);
-                            }}
-                            className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-red-950/90 border border-red-500 rounded-sm font-mono text-[10px] font-bold text-red-200"
-                          >
-                            TRIDENT
-                          </button>
-                        )}
-                    </>
-                  )}
-                </div>
-
-                {/* Direct Weapon Slot Selector */}
-                <div className="grid grid-cols-3 gap-1">
-                  {WEAPON_CATALOG.map((w) => {
-                    const active = w.id === hud.weaponId;
-                    return (
-                      <button
-                        key={w.id}
-                        type="button"
-                        data-testid={`touch-slot-${w.slot}`}
-                        onPointerDown={(e) => {
-                          e.stopPropagation();
-                          inputManager?.queueWeaponSlot(w.slot);
-                          setTacticalOpen(false);
-                        }}
-                        className={`touch-none touch-none-surface min-h-[38px] px-1.5 rounded-sm border font-mono text-[9px] font-bold uppercase truncate ${
-                          active
-                            ? 'bg-amber-500/25 border-amber-400 text-amber-200'
-                            : 'bg-[#141920] border-zinc-800 text-zinc-300'
-                        }`}
-                      >
-                        {w.slot}. {w.shortName}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                DET
+              </button>
             )}
 
-            {/* Contextual Row: Detonate C4 (when deployed), Grenade (when > 0), Weapon Switch, Kit Drawer */}
-            <div className="pointer-events-none flex items-center gap-1.5">
-              {hud.ordnance && hud.ordnance.c4Deployed > 0 && (
-                <button
-                  type="button"
-                  data-testid="touch-btn-c4-detonate"
-                  aria-label="Detonate Planted C4"
-                  style={{ touchAction: 'none' }}
-                  onPointerDown={(e) => fireTapAction(e, 'c4Detonate')}
-                  className="pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] px-2.5 bg-red-950/85 border border-red-400 rounded-full font-mono text-[10px] font-bold text-red-200 flex items-center justify-center"
-                >
-                  DET
-                </button>
-              )}
-
-              {hud.grenades > 0 && (
-                <button
-                  type="button"
-                  data-testid="touch-btn-grenade"
-                  aria-label="Throw Frag Grenade"
-                  onPointerDown={(e) => fireTapAction(e, 'grenade')}
-                  style={{ height: `${compactBtnSize}px`, minWidth: `${compactBtnSize}px`, touchAction: 'none' }}
-                  className="pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] px-2.5 bg-[#0B0E11]/75 border border-amber-400/50 rounded-full font-mono text-[10px] font-bold text-amber-300 flex items-center justify-center gap-1"
-                >
-                  <Flame className="w-3.5 h-3.5" />
-                  <span className="tabular-nums">{hud.grenades}</span>
-                </button>
-              )}
-
+            {hud.grenades > 0 && (
               <button
                 type="button"
-                data-testid="touch-btn-weapon-switch"
-                aria-label="Switch Weapon"
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  inputManager?.cycleWeapon(1);
+                data-testid="touch-btn-grenade"
+                aria-label="Throw Frag Grenade"
+                onPointerDown={(e) => fireTapAction(e, 'grenade')}
+                style={{
+                  height: `${weaponBarRect.height}px`,
+                  minWidth: `${weaponBarRect.height}px`,
+                  touchAction: 'none',
                 }}
-                style={{ height: `${compactBtnSize}px`, touchAction: 'none' }}
-                className="pointer-events-auto touch-none touch-none-surface min-w-[64px] min-h-[42px] px-2.5 bg-[#0B0E11]/75 border border-white/20 rounded-full font-mono text-[10px] font-bold uppercase text-zinc-100 flex items-center justify-center gap-1"
+                className="pointer-events-auto touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#0B0E11]/80 border border-amber-400/50 rounded-full font-mono text-[10px] font-bold text-amber-300 flex items-center justify-center gap-1"
               >
-                <Repeat className="w-3 h-3 text-amber-400 shrink-0" />
-                <span className="truncate max-w-[58px]">{hud.weaponName}</span>
+                <Flame className="w-3.5 h-3.5" />
+                <span className="tabular-nums">{hud.grenades}</span>
               </button>
+            )}
 
-              <button
-                type="button"
-                data-testid="touch-btn-tactical-drawer"
-                aria-label="Toggle Tactical Kit"
-                aria-expanded={tacticalOpen}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  setTacticalOpen((v) => !v);
-                }}
-                style={{ width: `${compactBtnSize}px`, height: `${compactBtnSize}px`, touchAction: 'none' }}
-                className={`pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] rounded-full border flex items-center justify-center ${
-                  tacticalOpen
-                    ? 'bg-amber-500/30 border-amber-400 text-amber-200'
-                    : 'bg-[#0B0E11]/75 border-white/20 text-zinc-300'
-                }`}
-              >
-                <Layers className="w-4 h-4" />
-              </button>
-            </div>
+            <button
+              type="button"
+              data-testid="touch-btn-weapon-switch"
+              aria-label="Switch Weapon"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                inputManager?.cycleWeapon(1);
+              }}
+              style={{ height: `${weaponBarRect.height}px`, touchAction: 'none' }}
+              className="pointer-events-auto touch-none touch-none-surface min-w-[74px] min-h-[44px] px-3 bg-[#0B0E11]/80 border border-white/20 rounded-full font-mono text-[10px] font-bold uppercase text-zinc-100 flex items-center justify-center gap-1.5"
+            >
+              <Repeat className="w-3 h-3 text-amber-400 shrink-0" />
+              <span className="truncate max-w-[68px]">{hud.weaponName}</span>
+            </button>
 
-            {/* Bottom-Right Secondary Action Row: Reload, Crouch/Slide, Jump */}
-            <div className="pointer-events-none flex items-center gap-1.5">
-              <button
-                type="button"
-                data-testid="touch-btn-reload"
-                aria-label="Reload Weapon"
-                onPointerDown={(e) => fireTapAction(e, 'reload')}
-                style={{ width: `${compactBtnSize}px`, height: `${compactBtnSize}px`, touchAction: 'none' }}
-                className={`pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] rounded-full border flex items-center justify-center ${
-                  hud.isReloading
-                    ? 'bg-amber-500/35 border-amber-400 text-amber-200'
-                    : 'bg-[#0B0E11]/75 border-white/20 text-zinc-100'
-                }`}
-              >
-                <RefreshCw className={`w-4 h-4 ${hud.isReloading ? 'animate-spin' : ''}`} />
-              </button>
-
-              <button
-                type="button"
-                data-testid="touch-btn-crouch"
-                aria-label="Crouch or Slide"
-                onPointerDown={(e) => startHoldActions(e, ['crouch'])}
-                onPointerUp={endHoldActions}
-                onPointerCancel={endHoldActions}
-                style={{ width: `${compactBtnSize}px`, height: `${compactBtnSize}px`, touchAction: 'none' }}
-                className={`pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] rounded-full border flex items-center justify-center ${
-                  heldActionsUi.has('crouch') || hud.isCrouching
-                    ? 'bg-cyan-500/35 border-cyan-400 text-cyan-200'
-                    : 'bg-[#0B0E11]/75 border-white/20 text-zinc-200'
-                }`}
-              >
-                <ArrowDown className="w-4 h-4" />
-              </button>
-
-              <button
-                type="button"
-                data-testid="touch-btn-jump"
-                aria-label="Jump"
-                onPointerDown={(e) => startHoldActions(e, ['jump'])}
-                onPointerUp={endHoldActions}
-                onPointerCancel={endHoldActions}
-                style={{ width: `${compactBtnSize}px`, height: `${compactBtnSize}px`, touchAction: 'none' }}
-                className={`pointer-events-auto touch-none touch-none-surface min-w-[42px] min-h-[42px] rounded-full border flex items-center justify-center ${
-                  heldActionsUi.has('jump')
-                    ? 'bg-amber-500/35 border-amber-400 text-amber-200'
-                    : 'bg-[#0B0E11]/75 border-white/20 text-zinc-200'
-                }`}
-              >
-                <ArrowUp className="w-4 h-4" />
-              </button>
-            </div>
+            <button
+              type="button"
+              data-testid="touch-btn-tactical-drawer"
+              aria-label="Toggle Tactical Kit"
+              aria-expanded={tacticalOpen}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                setTacticalOpen((v) => !v);
+              }}
+              style={{
+                width: `${weaponBarRect.height}px`,
+                height: `${weaponBarRect.height}px`,
+                touchAction: 'none',
+              }}
+              className={`pointer-events-auto touch-none touch-none-surface min-w-[44px] min-h-[44px] rounded-full border flex items-center justify-center ${
+                tacticalOpen
+                  ? 'bg-amber-500/30 border-amber-400 text-amber-200'
+                  : 'bg-[#0B0E11]/80 border-white/20 text-zinc-300'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+            </button>
           </div>
         )}
       </div>

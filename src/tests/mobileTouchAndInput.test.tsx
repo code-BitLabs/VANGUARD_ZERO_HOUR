@@ -16,6 +16,7 @@ import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import { settingsStore } from '@/src/stores/settingsStore';
 import { SettingsPanel } from '@/src/ui/components/SettingsPanel';
 import { GameHUD } from '@/src/ui/hud/GameHUD';
+import { computeMobileHudLayout } from '@/src/ui/hud/mobileHudLayoutEngine';
 import { MobileTouchControls } from '@/src/ui/hud/MobileTouchControls';
 
 function makePointerEventInit(pointerId: number, clientX: number, clientY: number) {
@@ -301,7 +302,52 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     rm.disposeAll();
   });
 
-  it('supports Two-Finger (Thumb) and Three-Finger (Claw) profiles, prevents top-left HUD obstruction in Claw mode, and eliminates ADS-vs-Sprint deadlock during shooting', () => {
+  it('guarantees zero overlapping interactive hitboxes across all landscape viewports (including Instagram in-app browser 844x310) and profiles via computeMobileHudLayout', () => {
+    const viewports = [
+      { width: 844, height: 390 },
+      { width: 844, height: 310 }, // Instagram / mobile browser reduced height
+      { width: 915, height: 412 },
+      { width: 667, height: 375 },
+      { width: 1024, height: 768 },
+    ];
+
+    const profiles: Array<'two_finger' | 'three_finger' | 'custom'> = [
+      'two_finger',
+      'three_finger',
+      'custom',
+    ];
+
+    for (const vp of viewports) {
+      for (const profile of profiles) {
+        settingsStore.getState().updateInput({
+          touchControlProfile: profile,
+          leftFireEnabled: profile !== 'two_finger',
+          rightFireEnabled: profile !== 'three_finger',
+          touchFireButtonScale: 1.35, // test worst-case max Fire button size
+        });
+
+        const layout = computeMobileHudLayout(settingsStore.getState().input, vp, {
+          grenadeCount: 2,
+          c4DeployedCount: 1,
+        });
+
+        expect(layout.overlappingPairs).toEqual([]);
+
+        // Verify every visible control has >= 44px hitbox and stays inside viewport bounds
+        for (const rect of Object.values(layout.controls)) {
+          if (!rect.visible) continue;
+          expect(rect.width).toBeGreaterThanOrEqual(44);
+          expect(rect.height).toBeGreaterThanOrEqual(44);
+          expect(rect.left).toBeGreaterThanOrEqual(0);
+          expect(rect.top).toBeGreaterThanOrEqual(0);
+          expect(rect.right).toBeLessThanOrEqual(vp.width + 0.5);
+          expect(rect.bottom).toBeLessThanOrEqual(vp.height + 0.5);
+        }
+      }
+    }
+  });
+
+  it('supports Two-Finger (Thumb), Three-Finger (Claw), and independent Left/Right Fire settings, prevents top-left HUD obstruction, and eliminates ADS-vs-Sprint deadlock', () => {
     const rm = new ResourceManager();
     const audio = new AudioManager(rm, AudioSettingsSchema.parse({ muted: true }));
     const scene = new THREE.Scene();
@@ -313,7 +359,18 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     const camera = new THREE.PerspectiveCamera(78, 844 / 390, 0.1, 500);
     const input = new InputManager(rm, settingsStore.getState().input);
 
-    // Switch to Three-Finger Claw Mode
+    // Switch to Three-Finger Claw Mode -> defaults to Left Fire ON, Right Fire OFF
+    settingsStore.getState().updateInput({ touchControlProfile: 'three_finger' });
+    expect(settingsStore.getState().input.leftFireEnabled).toBe(true);
+    expect(settingsStore.getState().input.rightFireEnabled).toBe(false);
+
+    // Safety invariant: attempting to disable both Left and Right Fire keeps at least one active
+    settingsStore.getState().updateInput({ leftFireEnabled: false, rightFireEnabled: false });
+    expect(
+      settingsStore.getState().input.leftFireEnabled || settingsStore.getState().input.rightFireEnabled
+    ).toBe(true);
+
+    // Re-enable 3-Finger Claw (Left Fire ON, Right Fire OFF)
     settingsStore.getState().updateInput({ touchControlProfile: 'three_finger' });
     input.updateSettings(settingsStore.getState().input);
 
@@ -330,16 +387,21 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
 
     render(<GameHUD onRequestPointerLock={() => {}} inputManager={input} touchControlsVisible={true} />);
 
-    // Verify Fire button is in Three-Finger upper-left claw position & top-left HUD shifts rightward to avoid collision
+    // Verify Left Fire button is in Three-Finger upper-left claw position & top-left HUD shifts rightward to avoid collision
     const fireBtn = screen.getByTestId('touch-btn-fire');
     expect(fireBtn.getAttribute('data-profile')).toBe('three_finger');
+    expect(fireBtn.getAttribute('data-control-id')).toBe('fire_left');
+    expect(screen.queryByTestId('touch-btn-fire-right')).toBeNull();
+
     const fireLeft = parseInt(fireBtn.style.left, 10);
     const fireTop = parseInt(fireBtn.style.top, 10);
     expect(fireLeft).toBeLessThan(200);
     expect(fireTop).toBeLessThan(180);
 
     const topLeftCluster = screen.getByTestId('hud-top-left-cluster');
-    expect(topLeftCluster.style.left).toMatch(/158px|132px/);
+    const offsetMatch = topLeftCluster.style.left.match(/(\d+)px/);
+    expect(offsetMatch).not.toBeNull();
+    expect(Number(offsetMatch![1])).toBeGreaterThan(fireLeft + 60);
 
     // Verify compact objective indicator expands and collapses on demand
     expect(screen.queryByTestId('hud-objectives-expanded-list')).toBeNull();
@@ -389,7 +451,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     rm.disposeAll();
   });
 
-  it('gates enemy aircraft boss health bar by encounter relevance and supports SettingsPanel mobile profile customization', () => {
+  it('gates enemy aircraft boss health bar by encounter relevance and supports SettingsPanel inline preview + 1:1 Full-Screen HUD Editor', () => {
     const rm = new ResourceManager();
     const audio = new AudioManager(rm, AudioSettingsSchema.parse({ muted: true }));
     const scene = new THREE.Scene();
@@ -398,7 +460,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     const playerPos = new THREE.Vector3(0, 1.7, 58);
 
     air.spawnUnit('helicopter', 27, 48, 0, 'mission:1');
-    // At t=0 (unaware, full health, not primary objective, grace timer active), boss bar is hidden
+    // At t=0 (unaware, full health, not primary objective, not dealing damage), boss bar is hidden
     expect(
       air.getActiveBossInfo({
         playerPosition: playerPos,
@@ -416,7 +478,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
       })
     ).not.toBeNull();
 
-    // Verify SettingsPanel Controls tab allows selecting Two-Finger / Three-Finger and resetting mobile controls
+    // Verify SettingsPanel Controls tab allows selecting Two-Finger / Three-Finger / Custom and launching the 1:1 HUD Editor
     render(<SettingsPanel onBack={() => {}} />);
     const controlsTab = screen.getByRole('tab', { name: /Controls/i });
     fireEvent.mouseDown(controlsTab, { button: 0, ctrlKey: false });
@@ -428,6 +490,15 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     fireEvent.click(screen.getByTestId('profile-three-finger'));
     expect(settingsStore.getState().input.touchControlProfile).toBe('three_finger');
     expect(preview.getAttribute('data-profile')).toBe('three_finger');
+
+    // Open 1:1 Full-Screen HUD Editor
+    fireEvent.click(screen.getByTestId('open-fullscreen-hud-editor'));
+    expect(screen.getByTestId('fullscreen-hud-editor')).toBeTruthy();
+    expect(screen.getByTestId('editor-handle-fire_left')).toBeTruthy();
+
+    // Close 1:1 Full-Screen HUD Editor
+    fireEvent.click(screen.getByTestId('close-fullscreen-hud-editor'));
+    expect(screen.queryByTestId('fullscreen-hud-editor')).toBeNull();
 
     // Customize Fire button size and position, then reset
     settingsStore.getState().updateInput({
@@ -443,7 +514,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     rm.disposeAll();
   });
 
-  it('enforces simplified PUBG HUD visibility rules: removes redundant arrows/sprint, hides 0-grenade & kit items behind drawer, and swaps to vehicle controls', () => {
+  it('enforces simplified PUBG HUD visibility rules: bottom-center weapon bar, hides 0-grenade & kit items behind drawer, and swaps to vehicle controls', () => {
     const rm = new ResourceManager();
     const input = new InputManager(rm, settingsStore.getState().input);
 
@@ -464,17 +535,18 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     expect(screen.queryByTestId('touch-btn-interact')).toBeNull();
     expect(screen.queryByTestId('touch-tactical-drawer')).toBeNull();
 
-    // Primary 6 controls + kit toggle are present
+    // Primary controls + bottom-center weapon bar + kit toggle are present
     expect(screen.getByTestId('touch-btn-fire')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-ads')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-reload')).toBeTruthy();
+    expect(screen.getByTestId('touch-weapon-bar')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-weapon-switch')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-jump')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-crouch')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-tactical-drawer')).toBeTruthy();
 
     // Expandable Tactical Kit reveals secondary controls on demand
-    fireEvent.pointerDown(screen.getByTestId('touch-btn-tactical-drawer'), makePointerEventInit(5, 780, 220));
+    fireEvent.pointerDown(screen.getByTestId('touch-btn-tactical-drawer'), makePointerEventInit(5, 420, 350));
     expect(screen.getByTestId('touch-tactical-drawer')).toBeTruthy();
     expect(screen.getByTestId('touch-btn-firemode')).toBeTruthy();
 

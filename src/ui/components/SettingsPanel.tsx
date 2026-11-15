@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Crosshair, Hand, Play, RotateCcw, Target } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Crosshair, Hand, Play, RotateCcw, Sliders } from 'lucide-react';
 import { GpuCapabilityReport } from '@/src/engine/GpuCapabilityDetector';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { ColorblindModeSchema, QualityTierSchema } from '@/src/schemas/common.schema';
@@ -7,10 +7,6 @@ import {
   AudioSettingsSchema,
   ControlBindings,
   ControlBindingsSchema,
-  DEFAULT_THREE_FINGER_ADS_POS,
-  DEFAULT_THREE_FINGER_FIRE_POS,
-  DEFAULT_TWO_FINGER_ADS_POS,
-  DEFAULT_TWO_FINGER_FIRE_POS,
   DrawDistanceSettingSchema,
   FpsCapSchema,
   SubQualityLevelSchema,
@@ -22,6 +18,11 @@ import {
 import { useAudioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore } from '@/src/stores/uiStore';
+import {
+  MobileControlLayoutPreview,
+  MobileHudEditorModal,
+  resetMobileControlSettingsToDefaults,
+} from '@/src/ui/components/MobileHudEditorModal';
 import { Button } from '@/src/ui/primitives/Button';
 import { Select, Slider, Switch } from '@/src/ui/primitives/Controls';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/src/ui/primitives/Tabs';
@@ -68,6 +69,7 @@ export function SettingsPanel({
 
   const audio = useAudioSettingsStore((s) => s);
   const [rebindingAction, setRebindingAction] = useState<keyof ControlBindings | null>(null);
+  const [hudEditorOpen, setHudEditorOpen] = useState(false);
   const [latestGpuReport, setLatestGpuReport] = useState<GpuCapabilityReport | null>(gpuReport);
 
   useEffect(() => {
@@ -420,10 +422,10 @@ export function SettingsPanel({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
-                      Mobile &amp; Touch Controls
+                      Mobile Control Configuration
                     </p>
                     <p className="text-xs text-zinc-400 mt-0.5">
-                      Choose Two-Finger (Thumb) or Three-Finger (Claw), preview the HUD, and customize button positions.
+                      Choose 2 Fingers, 3 Fingers (Claw), or Custom, toggle Left/Right Fire independently, and customize HUD positions.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -443,36 +445,15 @@ export function SettingsPanel({
                       size="sm"
                       data-testid="reset-mobile-controls"
                       className="min-h-[36px] text-[11px]"
-                      onClick={() => {
-                        updateInput({
-                          touchSensitivity: 1.15,
-                          touchLookSmoothing: 0,
-                          touchJoystickScale: 1.0,
-                          touchDeadzone: 0.1,
-                          touchButtonScale: 1.0,
-                          touchFireButtonScale: 1.0,
-                          touchButtonOpacity: 0.72,
-                          touchFirePosTwoFinger: { ...DEFAULT_TWO_FINGER_FIRE_POS },
-                          touchFirePosThreeFinger: { ...DEFAULT_THREE_FINGER_FIRE_POS },
-                          touchAdsPosTwoFinger: { ...DEFAULT_TWO_FINGER_ADS_POS },
-                          touchAdsPosThreeFinger: { ...DEFAULT_THREE_FINGER_ADS_POS },
-                          touchFireOffsetX: 0,
-                          touchFireOffsetY: 0,
-                          touchAdsOffsetX: 0,
-                          touchAdsOffsetY: 0,
-                        });
-                        uiStore
-                          .getState()
-                          .showToast('Mobile Controls Reset', 'Positions, sizes, and sensitivity restored.', 'info');
-                      }}
+                      onClick={resetMobileControlSettingsToDefaults}
                     >
                       <RotateCcw className="w-3.5 h-3.5" /> Reset Mobile Controls
                     </Button>
                   </div>
                 </div>
 
-                {/* 1. Select Two-Finger or Three-Finger Control Profile */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* 1. Control Layout Profile Selector: 2 Fingers | 3 Fingers | Custom */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <button
                     type="button"
                     data-testid="profile-two-finger"
@@ -486,14 +467,14 @@ export function SettingsPanel({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-display text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
-                        <Hand className="w-4 h-4 text-amber-400" /> Two-Finger / Thumb Mode
+                        <Hand className="w-4 h-4 text-amber-400" /> 2 Fingers (Thumb)
                       </span>
                       {input.touchControlProfile === 'two_finger' && (
                         <span className="font-mono text-[10px] uppercase text-amber-400 font-bold">Active</span>
                       )}
                     </div>
                     <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                      Left Thumb: 360° Joystick · Right Thumb: Free 360° Camera Look + Ergonomic Right-Side Fire &amp; ADS.
+                      Right-side Fire ON · Left-side Fire OFF · Ergonomic right-thumb arc + bottom-center weapon bar.
                     </p>
                   </button>
 
@@ -510,20 +491,89 @@ export function SettingsPanel({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-display text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
-                        <Hand className="w-4 h-4 text-cyan-400" /> Three-Finger / Claw Mode
+                        <Hand className="w-4 h-4 text-cyan-400" /> 3 Fingers (Claw)
                       </span>
                       {input.touchControlProfile === 'three_finger' && (
                         <span className="font-mono text-[10px] uppercase text-amber-400 font-bold">Active</span>
                       )}
                     </div>
                     <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                      Left Thumb: 360° Joystick · Left Index Finger: Upper-Left Fire · Right Thumb: Unobstructed 360° Aim + ADS.
+                      Left Index Fire ON · Right Fire OFF by default · Unobstructed right-thumb 360° camera look + ADS.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="profile-custom"
+                    aria-pressed={input.touchControlProfile === 'custom'}
+                    onClick={() => updateInput({ touchControlProfile: TouchControlProfileSchema.parse('custom') })}
+                    className={`text-left p-3 rounded-sm border transition-colors ${
+                      input.touchControlProfile === 'custom'
+                        ? 'bg-amber-500/15 border-amber-400 text-zinc-100'
+                        : 'bg-[#0B0E11]/75 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-display text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        <Sliders className="w-4 h-4 text-emerald-400" /> Custom Layout
+                      </span>
+                      {input.touchControlProfile === 'custom' && (
+                        <span className="font-mono text-[10px] uppercase text-amber-400 font-bold">Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                      Independently toggle Left &amp; Right Fire and drag/resize every control in the 1:1 HUD Editor.
                     </p>
                   </button>
                 </div>
 
-                {/* 2. Interactive Control Layout Preview (Drag FIRE or ADS directly to customize) */}
-                <MobileControlLayoutPreview />
+                {/* 2. Independent Left-Side & Right-Side Fire Settings */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="flex items-center justify-between gap-3 bg-[#0B0E11]/85 border border-amber-500/30 px-4 py-3 rounded-sm">
+                    <div>
+                      <div className="text-sm font-medium text-zinc-100 flex items-center gap-1.5">
+                        <Crosshair className="w-3.5 h-3.5 text-amber-400" /> Enable Left Fire
+                      </div>
+                      <div className="text-xs text-zinc-400 mt-0.5">
+                        Dedicated upper-left index finger shooting button (outside joystick zone).
+                      </div>
+                    </div>
+                    <Switch
+                      aria-label="Enable Left Fire"
+                      checked={input.leftFireEnabled}
+                      onCheckedChange={(leftFireEnabled) =>
+                        updateInput({
+                          leftFireEnabled,
+                          touchControlProfile: 'custom',
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 bg-[#0B0E11]/85 border border-zinc-800 px-4 py-3 rounded-sm">
+                    <div>
+                      <div className="text-sm font-medium text-zinc-100 flex items-center gap-1.5">
+                        <Crosshair className="w-3.5 h-3.5 text-cyan-400" /> Right-Side Fire
+                      </div>
+                      <div className="text-xs text-zinc-400 mt-0.5">
+                        Ergonomic right-thumb Fire trigger (at least one Fire button stays active).
+                      </div>
+                    </div>
+                    <Switch
+                      aria-label="Right-Side Fire"
+                      checked={input.rightFireEnabled}
+                      onCheckedChange={(rightFireEnabled) =>
+                        updateInput({
+                          rightFireEnabled,
+                          touchControlProfile: 'custom',
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Live Layout Engine Preview + Launch 1:1 Full-Screen Editor */}
+                <MobileControlLayoutPreview onOpenFullscreenEditor={() => setHudEditorOpen(true)} />
 
                 <SettingRow
                   label="Touch HUD Mode"
@@ -945,6 +995,8 @@ export function SettingsPanel({
           </div>
         </Tabs>
       </div>
+
+      {hudEditorOpen && <MobileHudEditorModal onClose={() => setHudEditorOpen(false)} />}
     </div>
   );
 }
@@ -965,199 +1017,6 @@ function SettingRow({
         {hint && <div className="text-xs text-zinc-400 mt-0.5">{hint}</div>}
       </div>
       <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-function MobileControlLayoutPreview() {
-  const input = useSettingsStore((s) => s.input);
-  const updateInput = useSettingsStore((s) => s.updateInput);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [draggingTarget, setDraggingTarget] = useState<'fire' | 'ads' | null>(null);
-
-  const isClaw = input.touchControlProfile === 'three_finger';
-  const firePos = isClaw ? input.touchFirePosThreeFinger : input.touchFirePosTwoFinger;
-  const adsPos = isClaw ? input.touchAdsPosThreeFinger : input.touchAdsPosTwoFinger;
-
-  const applyPreviewDrag = (clientX: number, clientY: number, target: 'fire' | 'ads') => {
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const x = Number(Math.max(0.05, Math.min(0.94, (clientX - rect.left) / rect.width)).toFixed(2));
-    const y = Number(Math.max(0.1, Math.min(0.9, (clientY - rect.top) / rect.height)).toFixed(2));
-
-    if (target === 'fire') {
-      updateInput(
-        isClaw
-          ? { touchFirePosThreeFinger: { x, y } }
-          : { touchFirePosTwoFinger: { x, y } }
-      );
-    } else {
-      updateInput(
-        isClaw
-          ? { touchAdsPosThreeFinger: { x, y } }
-          : { touchAdsPosTwoFinger: { x, y } }
-      );
-    }
-  };
-
-  const clawShiftsTopLeft =
-    isClaw && input.touchFirePosThreeFinger.x < 0.32 && input.touchFirePosThreeFinger.y < 0.48;
-
-  const previewStickSize = Math.round(54 * input.touchJoystickScale);
-  const previewFireSize = Math.round(42 * input.touchButtonScale * input.touchFireButtonScale);
-  const previewAdsSize = Math.round(30 * input.touchButtonScale);
-
-  return (
-    <div
-      data-testid="control-layout-preview"
-      data-profile={input.touchControlProfile}
-      className="bg-[#0B0E11] border border-zinc-800 rounded-sm p-3 space-y-2"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-200">
-          Live Control Layout Preview —{' '}
-          <span className="text-amber-400 font-bold">
-            {isClaw ? 'Three-Finger Claw Mode' : 'Two-Finger Thumb Mode'}
-          </span>
-        </span>
-        <span className="font-mono text-[10px] text-zinc-400">
-          Drag <span className="text-amber-300">FIRE</span> or <span className="text-cyan-300">ADS</span> directly to reposition
-        </span>
-      </div>
-
-      <div
-        ref={containerRef}
-        style={{ opacity: input.touchButtonOpacity, touchAction: 'none' }}
-        onPointerMove={(e) => {
-          if (!draggingTarget) return;
-          e.stopPropagation();
-          applyPreviewDrag(e.clientX, e.clientY, draggingTarget);
-        }}
-        onPointerUp={() => setDraggingTarget(null)}
-        onPointerCancel={() => setDraggingTarget(null)}
-        className="relative w-full aspect-[16/8.2] max-h-[230px] bg-gradient-to-b from-[#131922] via-[#10151c] to-[#0b0e12] border border-zinc-700/80 rounded-sm overflow-hidden select-none"
-      >
-        {/* Zone Split Guides */}
-        <div
-          className={`absolute left-0 w-[40%] bottom-0 border-r border-dashed border-amber-400/20 bg-amber-500/[0.03] flex items-end justify-start p-2 ${
-            isClaw ? 'top-[44%] border-t' : 'top-0'
-          }`}
-        >
-          <span className="font-mono text-[8px] uppercase text-amber-300/60">
-            Left Thumb: 360° Move Zone
-          </span>
-        </div>
-        {isClaw && (
-          <div className="absolute left-0 top-0 w-[40%] h-[44%] border-r border-dashed border-red-400/20 bg-red-500/[0.03] p-1.5 flex items-start justify-start">
-            <span className="font-mono text-[8px] uppercase text-red-300/70">
-              Left Index: Claw Fire Zone
-            </span>
-          </div>
-        )}
-        <div className="absolute left-[40%] right-0 top-0 bottom-0 bg-cyan-500/[0.02] flex items-center justify-center">
-          <span className="font-mono text-[9px] uppercase tracking-widest text-cyan-300/45">
-            Right Thumb: Unrestricted 360° Camera Look Surface
-          </span>
-        </div>
-
-        {/* Simulated Compact Top HUD */}
-        <div
-          data-testid="preview-top-left-hud"
-          style={{ left: clawShiftsTopLeft ? '18%' : '2%' }}
-          className="absolute top-1.5 flex items-center gap-1.5 bg-[#0B0E11]/85 border border-white/15 px-1.5 py-0.5 rounded-xs transition-all"
-        >
-          <div className="w-4 h-4 rounded-full border border-cyan-400/60 flex items-center justify-center">
-            <div className="w-1 h-1 rounded-full bg-cyan-400" />
-          </div>
-          <div className="font-mono text-[8px] text-zinc-200 leading-tight">
-            <div>OBJ: Radar Relays 1/2</div>
-            <div className="text-[7px] text-emerald-400">ARM 100 · HP 100</div>
-          </div>
-        </div>
-
-        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 bg-[#0B0E11]/80 border border-white/15 px-2 py-0.5 rounded-xs font-mono text-[8px] text-amber-400">
-          360° N · SCORE 420 · 01:15
-        </div>
-
-        <div className="absolute top-1.5 right-2 bg-[#0B0E11]/80 border border-white/15 px-1.5 py-0.5 rounded-xs font-mono text-[8px] text-zinc-200">
-          M4A1 30/120
-        </div>
-
-        {/* Simulated Left Thumbstick */}
-        <div
-          style={{ width: `${previewStickSize}px`, height: `${previewStickSize}px` }}
-          className="absolute left-4 bottom-3 rounded-full bg-[#0B0E11]/65 border border-amber-400/60 flex items-center justify-center"
-        >
-          <div className="w-4 h-4 rounded-full bg-amber-400/80" />
-        </div>
-
-        {/* Draggable FIRE Handle */}
-        <button
-          type="button"
-          data-testid="preview-fire-handle"
-          aria-label="Preview Fire Button Position"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {
-              // Ignore
-            }
-            setDraggingTarget('fire');
-          }}
-          style={{
-            left: `calc(${firePos.x * 100}% - ${previewFireSize / 2}px)`,
-            top: `calc(${firePos.y * 100}% - ${previewFireSize / 2}px)`,
-            width: `${previewFireSize}px`,
-            height: `${previewFireSize}px`,
-          }}
-          className="absolute rounded-full bg-amber-500/45 border-2 border-amber-300 text-white font-mono text-[8px] font-bold flex flex-col items-center justify-center shadow-lg cursor-grab active:cursor-grabbing"
-        >
-          <Crosshair className="w-3 h-3" />
-          <span>FIRE</span>
-        </button>
-
-        {/* Draggable ADS Handle */}
-        <button
-          type="button"
-          data-testid="preview-ads-handle"
-          aria-label="Preview ADS Button Position"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {
-              // Ignore
-            }
-            setDraggingTarget('ads');
-          }}
-          style={{
-            left: `calc(${adsPos.x * 100}% - ${previewAdsSize / 2}px)`,
-            top: `calc(${adsPos.y * 100}% - ${previewAdsSize / 2}px)`,
-            width: `${previewAdsSize}px`,
-            height: `${previewAdsSize}px`,
-          }}
-          className="absolute rounded-full bg-cyan-500/40 border border-cyan-300 text-cyan-100 font-mono text-[8px] font-bold flex flex-col items-center justify-center shadow-md cursor-grab active:cursor-grabbing"
-        >
-          <Target className="w-2.5 h-2.5" />
-          <span>ADS</span>
-        </button>
-
-        {/* Simulated Secondary Right Cluster */}
-        <div className="absolute right-2.5 bottom-2.5 flex items-center gap-1 font-mono text-[7px] text-zinc-300">
-          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
-            R
-          </div>
-          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
-            C
-          </div>
-          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
-            J
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

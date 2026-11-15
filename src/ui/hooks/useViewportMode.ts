@@ -4,6 +4,8 @@ import { TouchMode } from '@/src/schemas/settings.schema';
 export interface ViewportMetrics {
   width: number;
   height: number;
+  offsetTop: number;
+  offsetLeft: number;
   isLandscape: boolean;
   isPortrait: boolean;
   isCoarsePointer: boolean;
@@ -16,6 +18,8 @@ function readViewportMetrics(): ViewportMetrics {
     return {
       width: 1280,
       height: 720,
+      offsetTop: 0,
+      offsetLeft: 0,
       isLandscape: true,
       isPortrait: false,
       isCoarsePointer: false,
@@ -25,8 +29,12 @@ function readViewportMetrics(): ViewportMetrics {
   }
 
   const vv = window.visualViewport;
-  const width = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
-  const height = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
+  const innerW = Math.max(1, Math.round(window.innerWidth || 1280));
+  const innerH = Math.max(1, Math.round(window.innerHeight || 720));
+  const width = Math.max(1, Math.round(vv ? Math.min(innerW, vv.width) : innerW));
+  const height = Math.max(1, Math.round(vv ? Math.min(innerH, vv.height) : innerH));
+  const offsetTop = Math.max(0, Math.round(vv?.offsetTop ?? 0));
+  const offsetLeft = Math.max(0, Math.round(vv?.offsetLeft ?? 0));
   const isPortrait = height > width;
   const isLandscape = !isPortrait;
   const isCoarsePointer = Boolean(
@@ -40,6 +48,8 @@ function readViewportMetrics(): ViewportMetrics {
   return {
     width,
     height,
+    offsetTop,
+    offsetLeft,
     isLandscape,
     isPortrait,
     isCoarsePointer,
@@ -71,16 +81,18 @@ export function useViewportMode(): ViewportMetrics {
     };
 
     const scheduleUpdate = () => {
+      update();
       if (rafId) window.cancelAnimationFrame(rafId);
       rafId = window.requestAnimationFrame(update);
       window.clearTimeout(settleTimer);
-      settleTimer = window.setTimeout(update, 140);
+      settleTimer = window.setTimeout(update, 120);
     };
 
     update();
     window.addEventListener('resize', scheduleUpdate);
     window.addEventListener('orientationchange', scheduleUpdate);
     window.visualViewport?.addEventListener('resize', scheduleUpdate);
+    window.visualViewport?.addEventListener('scroll', scheduleUpdate);
 
     return () => {
       if (rafId) window.cancelAnimationFrame(rafId);
@@ -88,6 +100,7 @@ export function useViewportMode(): ViewportMetrics {
       window.removeEventListener('resize', scheduleUpdate);
       window.removeEventListener('orientationchange', scheduleUpdate);
       window.visualViewport?.removeEventListener('resize', scheduleUpdate);
+      window.visualViewport?.removeEventListener('scroll', scheduleUpdate);
     };
   }, []);
 

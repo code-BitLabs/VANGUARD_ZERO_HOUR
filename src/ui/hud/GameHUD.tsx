@@ -21,6 +21,7 @@ import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { computeMobileHudLayout } from './mobileHudLayoutEngine';
 import { MobileTouchControls } from './MobileTouchControls';
 
 export function GameHUD({
@@ -48,8 +49,7 @@ export function GameHUD({
   const colorblind = useSettingsStore((s) => s.accessibility.colorblindMode);
   const uiScale = useSettingsStore((s) => s.accessibility.uiScale);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
-  const touchControlProfile = useSettingsStore((s) => s.input.touchControlProfile);
-  const touchFirePosThreeFinger = useSettingsStore((s) => s.input.touchFirePosThreeFinger);
+  const inputSettings = useSettingsStore((s) => s.input);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
   const warnCount = combatDebug?.warnings.length ?? 0;
   const liveFps = combatDebug?.performance.fps ?? diagnostics.fps;
@@ -98,17 +98,21 @@ export function GameHUD({
   const radarCenter = radarSizePx / 2;
   const radarRadius = radarCenter - 4;
 
-  // In Three-Finger Claw mode, if the upper-left Fire button is placed in the top-left quadrant,
-  // shift the compact Radar & Mission Objective cluster rightward so it never collides with the left index finger Fire button.
-  const clawTopLeftConflict =
-    touchControlsVisible &&
-    touchControlProfile === 'three_finger' &&
-    touchFirePosThreeFinger.x < 0.32 &&
-    touchFirePosThreeFinger.y < 0.48;
+  // Use the authoritative Mobile HUD Layout Engine to shift the top-left HUD cluster rightward
+  // whenever Left-Side Fire is enabled in the upper-left quadrant.
+  const mobileLayout = touchControlsVisible
+    ? computeMobileHudLayout(
+        inputSettings,
+        { width: viewport.width, height: viewport.height },
+        {
+          inVehicle: hud.inVehicle,
+          grenadeCount: hud.grenades,
+          c4DeployedCount: hud.ordnance?.c4Deployed ?? 0,
+        }
+      )
+    : null;
 
-  const topLeftOffsetPx = clawTopLeftConflict
-    ? Math.max(132, Math.round(viewport.width * touchFirePosThreeFinger.x + 56))
-    : 10;
+  const topLeftOffsetPx = mobileLayout ? mobileLayout.topLeftHudLeftPx : 10;
 
   const activeObjective =
     hud.objectives.find((o) => !o.completed) ?? hud.objectives[hud.objectives.length - 1] ?? null;
