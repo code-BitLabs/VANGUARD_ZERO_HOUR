@@ -167,13 +167,14 @@ export class GameEngine {
       this.resourceManager,
       settings.input,
       (locked) => {
+        const wasLocked = uiStore.getState().pointerLocked;
         uiStore.getState().setPointerLocked(locked);
         if (locked) {
           this.suppressAutoPauseOnUnlock = false;
           return;
         }
-        // Auto-pause only if pointer lock drops unexpectedly during active play (not when freeing cursor for F4 diagnostics)
-        if (uiStore.getState().screen === 'playing') {
+        // Auto-pause only if pointer lock was active and dropped unexpectedly during active play
+        if (wasLocked && uiStore.getState().screen === 'playing') {
           if (this.suppressAutoPauseOnUnlock) {
             this.suppressAutoPauseOnUnlock = false;
           } else {
@@ -661,6 +662,20 @@ export class GameEngine {
   }
 
   requestPointerLock(): void {
+    const touchOverride = uiStore.getState().touchHudOverride;
+    const touchMode = settingsStore.getState().input.touchMode;
+    const isCoarse =
+      typeof window !== 'undefined' &&
+      Boolean(
+        window.matchMedia?.('(pointer: coarse)')?.matches ||
+          (typeof navigator !== 'undefined' &&
+            navigator.maxTouchPoints > 0 &&
+            Math.max(window.innerWidth, window.innerHeight) <= 1366)
+      );
+    const touchActive =
+      touchOverride !== null ? touchOverride : touchMode === 'always_on' ? true : touchMode === 'always_off' ? false : isCoarse;
+    if (touchActive) return;
+
     this.suppressAutoPauseOnUnlock = false;
     this.input.requestPointerLock(this.renderer.renderer.domElement);
   }
@@ -1331,10 +1346,24 @@ export class GameEngine {
     );
   };
 
-  private onRender = (): void => {
+  private onRender = (dt = 1 / 60): void => {
     const t0 = performance.now();
+    const isPlaying = uiStore.getState().screen === 'playing';
+    const inVehicle = this.vehicles.getPlayerVehicle() !== null;
+    if (isPlaying && !inVehicle && this.activeMission && this.input.hasPendingLookDelta()) {
+      const settings = settingsStore.getState();
+      const weaponCfg = this.weapons.getActiveState().config;
+      this.player.applyLookInput(this.input, this.weapons.isAds);
+      this.player.syncCamera(
+        this.renderer.camera,
+        settings.graphics.fov,
+        weaponCfg.adsFov,
+        this.weapons.isAds,
+        dt
+      );
+    }
     this.chunkManager.updateVisibility(this.renderer.camera, this.governor.getProfile().drawDistance);
-    const showVm = uiStore.getState().screen === 'playing' && this.vehicles.getPlayerVehicle() === null;
+    const showVm = isPlaying && !inVehicle;
     this.renderer.renderFrame(showVm);
     this.monitor.recordPhase('render', performance.now() - t0);
   };

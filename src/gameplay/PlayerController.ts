@@ -358,6 +358,14 @@ export class PlayerController {
     this.grenades = Math.min(4, this.grenades + 2);
   }
 
+  applyLookInput(input: InputManager, isAds: boolean): void {
+    if (!this.alive) return;
+    const { yawDelta, pitchDelta } = input.consumeLookDelta(isAds);
+    if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return;
+    this.yaw -= yawDelta;
+    this.pitch = Math.max(-1.42, Math.min(1.42, this.pitch - pitchDelta));
+  }
+
   update(
     dt: number,
     input: InputManager,
@@ -380,9 +388,7 @@ export class PlayerController {
     }
 
     // Look delta
-    const { yawDelta, pitchDelta } = input.consumeLookDelta(isAds);
-    this.yaw -= yawDelta;
-    this.pitch = Math.max(-1.42, Math.min(1.42, this.pitch - pitchDelta));
+    this.applyLookInput(input, isAds);
 
     // Smooth recoil recovery (crouching settles faster)
     const recoilRecoveryRate = this.isCrouching ? 11.2 : 9.0;

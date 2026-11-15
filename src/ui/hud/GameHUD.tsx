@@ -358,13 +358,13 @@ export function GameHUD({
 
       {/* Top-Right Pause, Touch Toggle, Diagnostics Launcher & Compact Mobile Weapon Status */}
       <div
-        className="absolute flex flex-col items-end gap-1.5"
+        className="absolute z-30 flex flex-col items-end gap-1.5 pointer-events-none"
         style={{
           top: 'max(10px, env(safe-area-inset-top, 0px))',
           right: 'max(10px, env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-1.5 pointer-events-auto">
+        <div className="flex items-center gap-1.5 pointer-events-none">
           {devModeActive && !combatDebugOpen && !compactHud && (
             <button
               type="button"
@@ -375,7 +375,7 @@ export function GameHUD({
                 setCombatDebugCollapsed(false);
                 setCombatDebugOpen(true);
               }}
-              className="flex items-center gap-2 px-2.5 min-h-[44px] bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700/90 rounded-sm font-mono text-[11px] tabular-nums text-zinc-200 whitespace-nowrap shrink-0 transition-colors"
+              className="pointer-events-auto flex items-center gap-2 px-2.5 min-h-[44px] bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700/90 rounded-sm font-mono text-[11px] tabular-nums text-zinc-200 whitespace-nowrap shrink-0 transition-colors"
             >
               <BarChart3 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="text-zinc-400">[F4]</span>
@@ -402,7 +402,7 @@ export function GameHUD({
               e.stopPropagation();
               uiStore.getState().toggleTouchHudOverride(touchControlsVisible);
             }}
-            className={`min-w-[44px] min-h-[44px] px-2.5 rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors ${
+            className={`pointer-events-auto min-w-[44px] min-h-[44px] px-2.5 rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors ${
               touchControlsVisible
                 ? 'bg-amber-500/20 border-amber-400 text-amber-300'
                 : 'bg-[#0B0E11]/85 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
@@ -422,7 +422,7 @@ export function GameHUD({
                 e.stopPropagation();
                 onPause();
               }}
-              className="min-w-[44px] min-h-[44px] px-2.5 bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors"
+              className="pointer-events-auto min-w-[44px] min-h-[44px] px-2.5 bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors"
             >
               <Pause className="w-4 h-4" />
             </button>

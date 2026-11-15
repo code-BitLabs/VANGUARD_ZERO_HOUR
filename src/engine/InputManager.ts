@@ -92,8 +92,9 @@ export class InputManager {
       document,
       'pointerlockchange',
       () => {
+        const wasLocked = this.pointerLocked;
         this.pointerLocked = document.pointerLockElement === canvas;
-        if (!this.pointerLocked) {
+        if (wasLocked && !this.pointerLocked) {
           this.clearAllInputs();
         }
         this.onPointerLockChange?.(this.pointerLocked);
@@ -262,13 +263,25 @@ export class InputManager {
     return this.justPressedMouse.has(button);
   }
 
+  hasPendingLookDelta(): boolean {
+    return (
+      this.virtualLookDeltaX !== 0 ||
+      this.virtualLookDeltaY !== 0 ||
+      this.mouseDeltaX !== 0 ||
+      this.mouseDeltaY !== 0 ||
+      this.smoothedTouchLookX !== 0 ||
+      this.smoothedTouchLookY !== 0
+    );
+  }
+
   consumeLookDelta(isAds: boolean): { yawDelta: number; pitchDelta: number } {
     const adsScale = isAds ? this.settings.adsSensitivity : 1.0;
     const baseSens = 0.0022 * this.settings.mouseSensitivity * adsScale;
-    const touchSens = 0.0042 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
+    const touchYawSens = 0.0135 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
+    const touchPitchSens = 0.0095 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
 
-    const rawTouchDx = this.virtualLookDeltaX * touchSens;
-    const rawTouchDy = this.virtualLookDeltaY * touchSens;
+    const rawTouchDx = this.virtualLookDeltaX * touchYawSens;
+    const rawTouchDy = this.virtualLookDeltaY * touchPitchSens;
     this.virtualLookDeltaX = 0;
     this.virtualLookDeltaY = 0;
 

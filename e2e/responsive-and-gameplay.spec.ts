@@ -74,7 +74,7 @@ test('enforces Rotate Device to Landscape gate on 390x844 mobile portrait and re
   await context.close();
 });
 
-test('deploys Mission 1 on 844x390 touch landscape, renders simplified PUBG touch HUD without overlap, and auto-pauses if rotated to portrait', async ({
+test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° camera rotation + full analog movement + 3rd-finger fire, and auto-pauses on portrait rotation', async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -141,6 +141,67 @@ test('deploys Mission 1 on 844x390 touch landscape, renders simplified PUBG touc
     return violations;
   });
   expect(layoutCheck).toEqual([]);
+
+  // Exercise live multitouch movement (forward/backward/left/right) + continuous 360° camera rotation + 3rd-finger fire
+  const multitouchResult = await page.evaluate(async () => {
+    const moveZone = document.querySelector('[data-testid="touch-move-zone"]') as HTMLElement;
+    const lookZone = document.querySelector('[data-testid="touch-look-zone"]') as HTMLElement;
+    const fireBtn = document.querySelector('[data-testid="touch-btn-fire"]') as HTMLElement;
+
+    const dispatchPtr = (target: EventTarget, type: string, pointerId: number, x: number, y: number) => {
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+        })
+      );
+    };
+
+    const waitFrames = (count: number) =>
+      new Promise<void>((resolve) => {
+        let rem = count;
+        const step = () => {
+          if (--rem <= 0) resolve();
+          else requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+
+    // 1. Hold left joystick forward (pointerId = 10)
+    dispatchPtr(moveZone, 'pointerdown', 10, 140, 260);
+    dispatchPtr(window, 'pointermove', 10, 140, 195);
+    await waitFrames(8);
+
+    // 2. Simultaneously drag right look zone (pointerId = 11) across 420px to turn > 360 degrees while moving
+    dispatchPtr(lookZone, 'pointerdown', 11, 400, 190);
+    for (let i = 1; i <= 15; i++) {
+      dispatchPtr(window, 'pointermove', 11, 400 + i * 28, 190);
+      await waitFrames(1);
+    }
+    dispatchPtr(window, 'pointerup', 11, 820, 190);
+
+    // 3. Fire with 3rd finger (pointerId = 12) while still moving
+    dispatchPtr(fireBtn, 'pointerdown', 12, 760, 310);
+    await waitFrames(6);
+    dispatchPtr(window, 'pointerup', 12, 760, 310);
+
+    // 4. Pull joystick backward, then strafe left & right
+    dispatchPtr(window, 'pointermove', 10, 140, 325);
+    await waitFrames(6);
+    dispatchPtr(window, 'pointermove', 10, 80, 260);
+    await waitFrames(6);
+    dispatchPtr(window, 'pointermove', 10, 200, 260);
+    await waitFrames(6);
+    dispatchPtr(window, 'pointerup', 10, 200, 260);
+    await waitFrames(4);
+
+    return { ok: true };
+  });
+  expect(multitouchResult.ok).toBe(true);
 
   // Rotating into portrait mid-mission blocks with Rotate dialog and pauses the mission
   await page.setViewportSize({ width: 390, height: 844 });

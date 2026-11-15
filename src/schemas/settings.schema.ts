@@ -75,7 +75,7 @@ export const InputSettingsSchema = z.object({
   gamepadEnabled: z.boolean().default(true),
   touchMode: TouchModeSchema.default('auto'),
   touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
-  touchLookSmoothing: z.number().min(0).max(0.6).default(0.15),
+  touchLookSmoothing: z.number().min(0).max(0.6).default(0),
   touchJoystickScale: z.number().min(0.75).max(1.35).default(1.0),
   touchDeadzone: z.number().min(0.05).max(0.28).default(0.1),
   touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
