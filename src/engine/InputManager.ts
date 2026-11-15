@@ -27,6 +27,8 @@ export class InputManager {
   private virtualMoveRight = 0;
   private virtualLookDeltaX = 0;
   private virtualLookDeltaY = 0;
+  private smoothedTouchLookX = 0;
+  private smoothedTouchLookY = 0;
   private virtualHeldActions = new Set<string>();
   private virtualJustPressedActions = new Set<string>();
   private queuedWeaponDelta = 0;
@@ -265,12 +267,34 @@ export class InputManager {
     const baseSens = 0.0022 * this.settings.mouseSensitivity * adsScale;
     const touchSens = 0.0042 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
 
-    let dx = this.mouseDeltaX * baseSens + this.virtualLookDeltaX * touchSens;
-    let dy = this.mouseDeltaY * baseSens + this.virtualLookDeltaY * touchSens;
-    this.mouseDeltaX = 0;
-    this.mouseDeltaY = 0;
+    const rawTouchDx = this.virtualLookDeltaX * touchSens;
+    const rawTouchDy = this.virtualLookDeltaY * touchSens;
     this.virtualLookDeltaX = 0;
     this.virtualLookDeltaY = 0;
+
+    const smoothAlpha = Math.max(0, Math.min(0.6, this.settings.touchLookSmoothing ?? 0));
+    let touchDx = rawTouchDx;
+    let touchDy = rawTouchDy;
+    if (smoothAlpha > 0.001) {
+      this.smoothedTouchLookX = rawTouchDx * (1 - smoothAlpha) + this.smoothedTouchLookX * smoothAlpha;
+      this.smoothedTouchLookY = rawTouchDy * (1 - smoothAlpha) + this.smoothedTouchLookY * smoothAlpha;
+      if (rawTouchDx === 0 && Math.abs(this.smoothedTouchLookX) < 1e-5) {
+        this.smoothedTouchLookX = 0;
+      }
+      if (rawTouchDy === 0 && Math.abs(this.smoothedTouchLookY) < 1e-5) {
+        this.smoothedTouchLookY = 0;
+      }
+      touchDx = this.smoothedTouchLookX;
+      touchDy = this.smoothedTouchLookY;
+    } else {
+      this.smoothedTouchLookX = 0;
+      this.smoothedTouchLookY = 0;
+    }
+
+    let dx = this.mouseDeltaX * baseSens + touchDx;
+    let dy = this.mouseDeltaY * baseSens + touchDy;
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
 
     if (this.settings.gamepadEnabled) {
       const gp = this.getGamepad();
@@ -345,6 +369,8 @@ export class InputManager {
     this.virtualMoveRight = 0;
     this.virtualLookDeltaX = 0;
     this.virtualLookDeltaY = 0;
+    this.smoothedTouchLookX = 0;
+    this.smoothedTouchLookY = 0;
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
     this.wheelDelta = 0;

@@ -80,7 +80,7 @@ describe('Tactical UI Screens & HUD', () => {
     );
     expect(screen.getByText('84')).toBeTruthy();
     expect(screen.getByText(/ARM 62/i)).toBeTruthy();
-    expect(screen.getByText('AX-50')).toBeTruthy();
+    expect(screen.getAllByText('AX-50').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Destroy AA Radar Relays')).toBeTruthy();
     expect(screen.getByText('1/2')).toBeTruthy();
     expect(screen.getByTestId('mobile-touch-controls')).toBeTruthy();

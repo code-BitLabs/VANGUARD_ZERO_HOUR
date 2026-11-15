@@ -7,11 +7,11 @@ const SECTIONS = [
   {
     title: 'Mobile Landscape Touch Controls',
     items: [
-      ['Left Thumbstick', 'Move & Strafe; push outer edge for Auto-Sprint'],
-      ['Right Screen Drag', 'Aim Camera / Steer Turret (never fires accidentally)'],
-      ['FIRE / ADS Buttons', 'Dedicated Fire button + momentary Hold-to-ADS'],
-      ['Cluster Actions', 'Reload, Jump, Crouch, Grenade, Prev/Next Weapon, C4, Strike'],
-      ['Top-Right HUD', 'Touch Overlay Toggle & Pause Button (min 44px targets)'],
+      ['Left Movement Zone', '360° analog thumbstick anywhere on lower-left; push forward edge to Auto-Sprint'],
+      ['Right Camera Surface', 'Continuous 360° drag aiming & vertical pitch (never fires accidentally)'],
+      ['FIRE & ADS Toggle', 'Dedicated Fire trigger + tap-to-toggle ADS aim (customizable in Settings)'],
+      ['Primary & Kit Tray', 'Reload, Weapon Switch, Jump, Crouch/Slide; Grenade, Interact & Kit drawer appear cleanly on demand'],
+      ['Top-Right HUD', 'Touch Overlay Toggle & Pause Button (min 44px touch targets)'],
     ],
   },
   {

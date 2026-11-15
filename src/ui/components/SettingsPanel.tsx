@@ -10,6 +10,7 @@ import {
   DrawDistanceSettingSchema,
   FpsCapSchema,
   SubQualityLevelSchema,
+  TouchAdsModeSchema,
   TouchFireBehaviorSchema,
   TouchModeSchema,
 } from '@/src/schemas/settings.schema';
@@ -409,9 +410,26 @@ export function SettingsPanel({
               </SettingRow>
 
               <div className="pt-2 border-t border-zinc-800 space-y-3">
-                <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
-                  Mobile &amp; Touch Controls
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
+                    Mobile &amp; Touch Controls
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-[36px] text-[11px]"
+                    onClick={() =>
+                      updateInput({
+                        touchFireOffsetX: 0,
+                        touchFireOffsetY: 0,
+                        touchAdsOffsetX: 0,
+                        touchAdsOffsetY: 0,
+                      })
+                    }
+                  >
+                    Reset Button Positions
+                  </Button>
+                </div>
 
                 <SettingRow
                   label="Touch HUD Mode"
@@ -445,6 +463,48 @@ export function SettingsPanel({
                   </div>
                 </SettingRow>
 
+                <SettingRow
+                  label={`Touch Look Smoothing (${Math.round(input.touchLookSmoothing * 100)}%)`}
+                  hint="Low-latency aim smoothing (0% = raw 1:1 pointer delta)."
+                >
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Touch Look Smoothing"
+                      value={input.touchLookSmoothing}
+                      min={0}
+                      max={0.6}
+                      step={0.05}
+                      onValueChange={(touchLookSmoothing) => updateInput({ touchLookSmoothing })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Joystick Size (${Math.round(input.touchJoystickScale * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Joystick Size"
+                      value={input.touchJoystickScale}
+                      min={0.75}
+                      max={1.35}
+                      step={0.05}
+                      onValueChange={(touchJoystickScale) => updateInput({ touchJoystickScale })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Joystick Deadzone (${Math.round(input.touchDeadzone * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Joystick Deadzone"
+                      value={input.touchDeadzone}
+                      min={0.05}
+                      max={0.28}
+                      step={0.01}
+                      onValueChange={(touchDeadzone) => updateInput({ touchDeadzone })}
+                    />
+                  </div>
+                </SettingRow>
+
                 <SettingRow label={`Touch Button Scale (${Math.round(input.touchButtonScale * 100)}%)`}>
                   <div className="w-48 sm:w-52">
                     <Slider
@@ -472,12 +532,50 @@ export function SettingsPanel({
                 </SettingRow>
 
                 <SettingRow
-                  label="Auto-Sprint on Full Stick"
-                  hint="Automatically engages sprint when pushing the left thumbstick past 78%."
+                  label="Auto-Sprint on Forward Stick"
+                  hint="Engages sprint only when pushing forward past threshold (never while strafing or backing up)."
                 >
                   <Switch
                     checked={input.autoSprint}
                     onCheckedChange={(autoSprint) => updateInput({ autoSprint })}
+                  />
+                </SettingRow>
+
+                <SettingRow label={`Auto-Sprint Threshold (${Math.round(input.touchAutoSprintThreshold * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Auto-Sprint Threshold"
+                      value={input.touchAutoSprintThreshold}
+                      min={0.65}
+                      max={0.95}
+                      step={0.05}
+                      onValueChange={(touchAutoSprintThreshold) => updateInput({ touchAutoSprintThreshold })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow
+                  label="Show Manual Sprint Override Button"
+                  hint="Displays an optional Sprint toggle above the left joystick."
+                >
+                  <Switch
+                    checked={input.touchManualSprintButton}
+                    onCheckedChange={(touchManualSprintButton) => updateInput({ touchManualSprintButton })}
+                  />
+                </SettingRow>
+
+                <SettingRow
+                  label="ADS Touch Mode"
+                  hint="Toggle Aim lets you tap ADS once to aim; Hold requires holding ADS."
+                >
+                  <Select
+                    aria-label="ADS Touch Mode"
+                    value={input.touchAdsMode}
+                    onValueChange={(v) => updateInput({ touchAdsMode: TouchAdsModeSchema.parse(v) })}
+                    options={[
+                      { value: 'toggle', label: 'Toggle Aim (Recommended)' },
+                      { value: 'hold', label: 'Hold to Aim' },
+                    ]}
                   />
                 </SettingRow>
 
@@ -494,6 +592,54 @@ export function SettingsPanel({
                       { value: 'ads_on_fire', label: 'ADS While Firing' },
                     ]}
                   />
+                </SettingRow>
+
+                <SettingRow
+                  label={`Fire Button Position (X ${input.touchFireOffsetX}px · Y ${input.touchFireOffsetY}px)`}
+                  hint="Fine-tune Fire button placement for your right thumb."
+                >
+                  <div className="flex flex-col gap-2 w-48 sm:w-52">
+                    <Slider
+                      aria-label="Fire Button Horizontal Offset"
+                      value={input.touchFireOffsetX}
+                      min={-60}
+                      max={60}
+                      step={5}
+                      onValueChange={(touchFireOffsetX) => updateInput({ touchFireOffsetX })}
+                    />
+                    <Slider
+                      aria-label="Fire Button Vertical Offset"
+                      value={input.touchFireOffsetY}
+                      min={-60}
+                      max={60}
+                      step={5}
+                      onValueChange={(touchFireOffsetY) => updateInput({ touchFireOffsetY })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow
+                  label={`ADS Button Position (X ${input.touchAdsOffsetX}px · Y ${input.touchAdsOffsetY}px)`}
+                  hint="Fine-tune ADS button placement for your right thumb."
+                >
+                  <div className="flex flex-col gap-2 w-48 sm:w-52">
+                    <Slider
+                      aria-label="ADS Button Horizontal Offset"
+                      value={input.touchAdsOffsetX}
+                      min={-60}
+                      max={60}
+                      step={5}
+                      onValueChange={(touchAdsOffsetX) => updateInput({ touchAdsOffsetX })}
+                    />
+                    <Slider
+                      aria-label="ADS Button Vertical Offset"
+                      value={input.touchAdsOffsetY}
+                      min={-60}
+                      max={60}
+                      step={5}
+                      onValueChange={(touchAdsOffsetY) => updateInput({ touchAdsOffsetY })}
+                    />
+                  </div>
                 </SettingRow>
               </div>
 

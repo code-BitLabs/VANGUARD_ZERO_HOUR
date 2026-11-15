@@ -435,7 +435,11 @@ export class PlayerController {
 
     const axes = input.getMoveAxes();
     let wantsSprint =
-      input.isActionHeld('sprint') && axes.forward > 0.25 && !isAds && !this.isSliding;
+      input.isActionHeld('sprint') &&
+      axes.forward > 0.45 &&
+      Math.abs(axes.right) <= axes.forward * 0.85 &&
+      !isAds &&
+      !this.isSliding;
     if (wantsSprint && this.isCrouching) {
       if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
         this.isCrouching = false;
@@ -472,8 +476,9 @@ export class PlayerController {
         .set(0, 0, 0)
         .addScaledVector(this._fwd, axes.forward)
         .addScaledVector(this._right, axes.right);
-      if (this._wish.lengthSq() > 0.0001) {
-        this._wish.normalize();
+      const wishMag = this._wish.length();
+      if (wishMag > 1) {
+        this._wish.divideScalar(wishMag);
       }
     }
 

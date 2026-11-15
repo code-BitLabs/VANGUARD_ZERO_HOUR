@@ -65,6 +65,9 @@ export type TouchMode = z.infer<typeof TouchModeSchema>;
 export const TouchFireBehaviorSchema = z.enum(['dedicated', 'ads_on_fire']);
 export type TouchFireBehavior = z.infer<typeof TouchFireBehaviorSchema>;
 
+export const TouchAdsModeSchema = z.enum(['toggle', 'hold']);
+export type TouchAdsMode = z.infer<typeof TouchAdsModeSchema>;
+
 export const InputSettingsSchema = z.object({
   mouseSensitivity: z.number().min(0.1).max(4.0).default(1.0),
   adsSensitivity: z.number().min(0.1).max(2.0).default(0.6),
@@ -72,10 +75,20 @@ export const InputSettingsSchema = z.object({
   gamepadEnabled: z.boolean().default(true),
   touchMode: TouchModeSchema.default('auto'),
   touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
+  touchLookSmoothing: z.number().min(0).max(0.6).default(0.15),
+  touchJoystickScale: z.number().min(0.75).max(1.35).default(1.0),
+  touchDeadzone: z.number().min(0.05).max(0.28).default(0.1),
   touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
   touchButtonOpacity: z.number().min(0.35).max(0.95).default(0.72),
   autoSprint: z.boolean().default(true),
+  touchAutoSprintThreshold: z.number().min(0.65).max(0.95).default(0.82),
+  touchManualSprintButton: z.boolean().default(false),
+  touchAdsMode: TouchAdsModeSchema.default('toggle'),
   touchFireBehavior: TouchFireBehaviorSchema.default('dedicated'),
+  touchFireOffsetX: z.number().min(-60).max(60).default(0),
+  touchFireOffsetY: z.number().min(-60).max(60).default(0),
+  touchAdsOffsetX: z.number().min(-60).max(60).default(0),
+  touchAdsOffsetY: z.number().min(-60).max(60).default(0),
   bindings: ControlBindingsSchema.default(() => ControlBindingsSchema.parse({})),
 });
 export type InputSettings = z.infer<typeof InputSettingsSchema>;

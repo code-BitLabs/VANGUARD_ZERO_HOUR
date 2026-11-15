@@ -74,7 +74,7 @@ test('enforces Rotate Device to Landscape gate on 390x844 mobile portrait and re
   await context.close();
 });
 
-test('deploys Mission 1 on 844x390 touch landscape, renders twin-stick touch HUD, and auto-pauses if rotated to portrait', async ({
+test('deploys Mission 1 on 844x390 touch landscape, renders simplified PUBG touch HUD without overlap, and auto-pauses if rotated to portrait', async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -92,8 +92,55 @@ test('deploys Mission 1 on 844x390 touch landscape, renders twin-stick touch HUD
 
   await expect(page.getByTestId('mobile-touch-controls')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId('touch-move-stick')).toBeVisible();
+  await expect(page.getByTestId('touch-look-zone')).toBeVisible();
   await expect(page.getByTestId('touch-btn-fire')).toBeVisible();
+  await expect(page.getByTestId('touch-btn-ads')).toBeVisible();
+  await expect(page.getByTestId('touch-btn-weapon-switch')).toBeVisible();
+  await expect(page.getByTestId('touch-btn-tactical-drawer')).toBeVisible();
   await expect(page.getByRole('button', { name: /Pause Mission/i })).toBeVisible();
+
+  // Simplified HUD: redundant weapon prev/next arrows & always-visible sprint button are absent
+  await expect(page.getByTestId('touch-btn-weapon-prev')).toHaveCount(0);
+  await expect(page.getByTestId('touch-btn-weapon-next')).toHaveCount(0);
+  await expect(page.getByTestId('touch-btn-sprint')).toHaveCount(0);
+
+  // Verify >=44px touch targets and zero overlap between touch controls and center crosshair / landscape bounds
+  const layoutCheck = await page.evaluate(() => {
+    const ids = [
+      'touch-move-stick',
+      'touch-btn-fire',
+      'touch-btn-ads',
+      'touch-btn-reload',
+      'touch-btn-jump',
+      'touch-btn-crouch',
+      'touch-btn-weapon-switch',
+    ];
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cx = vw / 2;
+    const cy = vh / 2;
+    const violations: string[] = [];
+    for (const id of ids) {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      if (!el) {
+        violations.push(`missing:${id}`);
+        continue;
+      }
+      const r = el.getBoundingClientRect();
+      if (r.width < 44 || r.height < 44) {
+        violations.push(`small:${id}:${Math.round(r.width)}x${Math.round(r.height)}`);
+      }
+      if (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1) {
+        violations.push(`clipped:${id}`);
+      }
+      // Must not overlap central crosshair zone (40px box at viewport center)
+      if (r.left < cx + 20 && r.right > cx - 20 && r.top < cy + 20 && r.bottom > cy - 20) {
+        violations.push(`crosshair-overlap:${id}`);
+      }
+    }
+    return violations;
+  });
+  expect(layoutCheck).toEqual([]);
 
   // Rotating into portrait mid-mission blocks with Rotate dialog and pauses the mission
   await page.setViewportSize({ width: 390, height: 844 });
