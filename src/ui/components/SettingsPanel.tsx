@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { RotateCcw } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Crosshair, Hand, Play, RotateCcw, Target } from 'lucide-react';
 import { GpuCapabilityReport } from '@/src/engine/GpuCapabilityDetector';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { ColorblindModeSchema, QualityTierSchema } from '@/src/schemas/common.schema';
@@ -7,10 +7,15 @@ import {
   AudioSettingsSchema,
   ControlBindings,
   ControlBindingsSchema,
+  DEFAULT_THREE_FINGER_ADS_POS,
+  DEFAULT_THREE_FINGER_FIRE_POS,
+  DEFAULT_TWO_FINGER_ADS_POS,
+  DEFAULT_TWO_FINGER_FIRE_POS,
   DrawDistanceSettingSchema,
   FpsCapSchema,
   SubQualityLevelSchema,
   TouchAdsModeSchema,
+  TouchControlProfileSchema,
   TouchFireBehaviorSchema,
   TouchModeSchema,
 } from '@/src/schemas/settings.schema';
@@ -41,10 +46,12 @@ const BINDING_LABELS: Array<{ key: keyof ControlBindings; label: string }> = [
 
 export function SettingsPanel({
   onBack,
+  onResumeAndTest,
   gpuReport = null,
   onReapplyAutoGraphics,
 }: {
   onBack: () => void;
+  onResumeAndTest?: () => void;
   gpuReport?: GpuCapabilityReport | null;
   onReapplyAutoGraphics?: () => GpuCapabilityReport | null;
 }) {
@@ -411,25 +418,112 @@ export function SettingsPanel({
 
               <div className="pt-2 border-t border-zinc-800 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
-                    Mobile &amp; Touch Controls
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="min-h-[36px] text-[11px]"
-                    onClick={() =>
-                      updateInput({
-                        touchFireOffsetX: 0,
-                        touchFireOffsetY: 0,
-                        touchAdsOffsetX: 0,
-                        touchAdsOffsetY: 0,
-                      })
-                    }
-                  >
-                    Reset Button Positions
-                  </Button>
+                  <div>
+                    <p className="font-mono text-xs uppercase tracking-wider text-amber-400">
+                      Mobile &amp; Touch Controls
+                    </p>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Choose Two-Finger (Thumb) or Three-Finger (Claw), preview the HUD, and customize button positions.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {uiStore.getState().previousMenuScreen === 'paused' && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        data-testid="test-controls-in-mission"
+                        className="min-h-[36px] text-[11px]"
+                        onClick={onResumeAndTest ?? onBack}
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" /> Resume &amp; Test Controls
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      data-testid="reset-mobile-controls"
+                      className="min-h-[36px] text-[11px]"
+                      onClick={() => {
+                        updateInput({
+                          touchSensitivity: 1.15,
+                          touchLookSmoothing: 0,
+                          touchJoystickScale: 1.0,
+                          touchDeadzone: 0.1,
+                          touchButtonScale: 1.0,
+                          touchFireButtonScale: 1.0,
+                          touchButtonOpacity: 0.72,
+                          touchFirePosTwoFinger: { ...DEFAULT_TWO_FINGER_FIRE_POS },
+                          touchFirePosThreeFinger: { ...DEFAULT_THREE_FINGER_FIRE_POS },
+                          touchAdsPosTwoFinger: { ...DEFAULT_TWO_FINGER_ADS_POS },
+                          touchAdsPosThreeFinger: { ...DEFAULT_THREE_FINGER_ADS_POS },
+                          touchFireOffsetX: 0,
+                          touchFireOffsetY: 0,
+                          touchAdsOffsetX: 0,
+                          touchAdsOffsetY: 0,
+                        });
+                        uiStore
+                          .getState()
+                          .showToast('Mobile Controls Reset', 'Positions, sizes, and sensitivity restored.', 'info');
+                      }}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" /> Reset Mobile Controls
+                    </Button>
+                  </div>
                 </div>
+
+                {/* 1. Select Two-Finger or Three-Finger Control Profile */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="profile-two-finger"
+                    aria-pressed={input.touchControlProfile === 'two_finger'}
+                    onClick={() => updateInput({ touchControlProfile: TouchControlProfileSchema.parse('two_finger') })}
+                    className={`text-left p-3 rounded-sm border transition-colors ${
+                      input.touchControlProfile === 'two_finger'
+                        ? 'bg-amber-500/15 border-amber-400 text-zinc-100'
+                        : 'bg-[#0B0E11]/75 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-display text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        <Hand className="w-4 h-4 text-amber-400" /> Two-Finger / Thumb Mode
+                      </span>
+                      {input.touchControlProfile === 'two_finger' && (
+                        <span className="font-mono text-[10px] uppercase text-amber-400 font-bold">Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                      Left Thumb: 360° Joystick · Right Thumb: Free 360° Camera Look + Ergonomic Right-Side Fire &amp; ADS.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="profile-three-finger"
+                    aria-pressed={input.touchControlProfile === 'three_finger'}
+                    onClick={() => updateInput({ touchControlProfile: TouchControlProfileSchema.parse('three_finger') })}
+                    className={`text-left p-3 rounded-sm border transition-colors ${
+                      input.touchControlProfile === 'three_finger'
+                        ? 'bg-amber-500/15 border-amber-400 text-zinc-100'
+                        : 'bg-[#0B0E11]/75 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-display text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        <Hand className="w-4 h-4 text-cyan-400" /> Three-Finger / Claw Mode
+                      </span>
+                      {input.touchControlProfile === 'three_finger' && (
+                        <span className="font-mono text-[10px] uppercase text-amber-400 font-bold">Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                      Left Thumb: 360° Joystick · Left Index Finger: Upper-Left Fire · Right Thumb: Unobstructed 360° Aim + ADS.
+                    </p>
+                  </button>
+                </div>
+
+                {/* 2. Interactive Control Layout Preview (Drag FIRE or ADS directly to customize) */}
+                <MobileControlLayoutPreview />
 
                 <SettingRow
                   label="Touch HUD Mode"
@@ -475,6 +569,19 @@ export function SettingsPanel({
                       max={0.6}
                       step={0.05}
                       onValueChange={(touchLookSmoothing) => updateInput({ touchLookSmoothing })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Fire Button Size (${Math.round(input.touchFireButtonScale * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Fire Button Size"
+                      value={input.touchFireButtonScale}
+                      min={0.75}
+                      max={1.45}
+                      step={0.05}
+                      onValueChange={(touchFireButtonScale) => updateInput({ touchFireButtonScale })}
                     />
                   </div>
                 </SettingRow>
@@ -594,53 +701,90 @@ export function SettingsPanel({
                   />
                 </SettingRow>
 
-                <SettingRow
-                  label={`Fire Button Position (X ${input.touchFireOffsetX}px · Y ${input.touchFireOffsetY}px)`}
-                  hint="Fine-tune Fire button placement for your right thumb."
-                >
-                  <div className="flex flex-col gap-2 w-48 sm:w-52">
-                    <Slider
-                      aria-label="Fire Button Horizontal Offset"
-                      value={input.touchFireOffsetX}
-                      min={-60}
-                      max={60}
-                      step={5}
-                      onValueChange={(touchFireOffsetX) => updateInput({ touchFireOffsetX })}
-                    />
-                    <Slider
-                      aria-label="Fire Button Vertical Offset"
-                      value={input.touchFireOffsetY}
-                      min={-60}
-                      max={60}
-                      step={5}
-                      onValueChange={(touchFireOffsetY) => updateInput({ touchFireOffsetY })}
-                    />
-                  </div>
-                </SettingRow>
+                {(() => {
+                  const isClaw = input.touchControlProfile === 'three_finger';
+                  const firePos = isClaw ? input.touchFirePosThreeFinger : input.touchFirePosTwoFinger;
+                  const adsPos = isClaw ? input.touchAdsPosThreeFinger : input.touchAdsPosTwoFinger;
+                  return (
+                    <>
+                      <SettingRow
+                        label={`Fire Button Position — ${isClaw ? 'Claw Mode' : 'Thumb Mode'} (X ${Math.round(
+                          firePos.x * 100
+                        )}% · Y ${Math.round(firePos.y * 100)}%)`}
+                        hint="Normalized viewport-relative position (adapts automatically to all mobile screen sizes)."
+                      >
+                        <div className="flex flex-col gap-2 w-48 sm:w-52">
+                          <Slider
+                            aria-label="Fire Button Horizontal Position"
+                            value={firePos.x}
+                            min={0.05}
+                            max={0.94}
+                            step={0.01}
+                            onValueChange={(x) =>
+                              updateInput(
+                                isClaw
+                                  ? { touchFirePosThreeFinger: { ...firePos, x } }
+                                  : { touchFirePosTwoFinger: { ...firePos, x } }
+                              )
+                            }
+                          />
+                          <Slider
+                            aria-label="Fire Button Vertical Position"
+                            value={firePos.y}
+                            min={0.1}
+                            max={0.9}
+                            step={0.01}
+                            onValueChange={(y) =>
+                              updateInput(
+                                isClaw
+                                  ? { touchFirePosThreeFinger: { ...firePos, y } }
+                                  : { touchFirePosTwoFinger: { ...firePos, y } }
+                              )
+                            }
+                          />
+                        </div>
+                      </SettingRow>
 
-                <SettingRow
-                  label={`ADS Button Position (X ${input.touchAdsOffsetX}px · Y ${input.touchAdsOffsetY}px)`}
-                  hint="Fine-tune ADS button placement for your right thumb."
-                >
-                  <div className="flex flex-col gap-2 w-48 sm:w-52">
-                    <Slider
-                      aria-label="ADS Button Horizontal Offset"
-                      value={input.touchAdsOffsetX}
-                      min={-60}
-                      max={60}
-                      step={5}
-                      onValueChange={(touchAdsOffsetX) => updateInput({ touchAdsOffsetX })}
-                    />
-                    <Slider
-                      aria-label="ADS Button Vertical Offset"
-                      value={input.touchAdsOffsetY}
-                      min={-60}
-                      max={60}
-                      step={5}
-                      onValueChange={(touchAdsOffsetY) => updateInput({ touchAdsOffsetY })}
-                    />
-                  </div>
-                </SettingRow>
+                      <SettingRow
+                        label={`ADS Button Position — ${isClaw ? 'Claw Mode' : 'Thumb Mode'} (X ${Math.round(
+                          adsPos.x * 100
+                        )}% · Y ${Math.round(adsPos.y * 100)}%)`}
+                        hint="Normalized viewport-relative ADS position."
+                      >
+                        <div className="flex flex-col gap-2 w-48 sm:w-52">
+                          <Slider
+                            aria-label="ADS Button Horizontal Position"
+                            value={adsPos.x}
+                            min={0.05}
+                            max={0.94}
+                            step={0.01}
+                            onValueChange={(x) =>
+                              updateInput(
+                                isClaw
+                                  ? { touchAdsPosThreeFinger: { ...adsPos, x } }
+                                  : { touchAdsPosTwoFinger: { ...adsPos, x } }
+                              )
+                            }
+                          />
+                          <Slider
+                            aria-label="ADS Button Vertical Position"
+                            value={adsPos.y}
+                            min={0.1}
+                            max={0.9}
+                            step={0.01}
+                            onValueChange={(y) =>
+                              updateInput(
+                                isClaw
+                                  ? { touchAdsPosThreeFinger: { ...adsPos, y } }
+                                  : { touchAdsPosTwoFinger: { ...adsPos, y } }
+                              )
+                            }
+                          />
+                        </div>
+                      </SettingRow>
+                    </>
+                  );
+                })()}
               </div>
 
               <div className="pt-2 border-t border-zinc-800">
@@ -824,3 +968,197 @@ function SettingRow({
     </div>
   );
 }
+
+function MobileControlLayoutPreview() {
+  const input = useSettingsStore((s) => s.input);
+  const updateInput = useSettingsStore((s) => s.updateInput);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [draggingTarget, setDraggingTarget] = useState<'fire' | 'ads' | null>(null);
+
+  const isClaw = input.touchControlProfile === 'three_finger';
+  const firePos = isClaw ? input.touchFirePosThreeFinger : input.touchFirePosTwoFinger;
+  const adsPos = isClaw ? input.touchAdsPosThreeFinger : input.touchAdsPosTwoFinger;
+
+  const applyPreviewDrag = (clientX: number, clientY: number, target: 'fire' | 'ads') => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = Number(Math.max(0.05, Math.min(0.94, (clientX - rect.left) / rect.width)).toFixed(2));
+    const y = Number(Math.max(0.1, Math.min(0.9, (clientY - rect.top) / rect.height)).toFixed(2));
+
+    if (target === 'fire') {
+      updateInput(
+        isClaw
+          ? { touchFirePosThreeFinger: { x, y } }
+          : { touchFirePosTwoFinger: { x, y } }
+      );
+    } else {
+      updateInput(
+        isClaw
+          ? { touchAdsPosThreeFinger: { x, y } }
+          : { touchAdsPosTwoFinger: { x, y } }
+      );
+    }
+  };
+
+  const clawShiftsTopLeft =
+    isClaw && input.touchFirePosThreeFinger.x < 0.32 && input.touchFirePosThreeFinger.y < 0.48;
+
+  const previewStickSize = Math.round(54 * input.touchJoystickScale);
+  const previewFireSize = Math.round(42 * input.touchButtonScale * input.touchFireButtonScale);
+  const previewAdsSize = Math.round(30 * input.touchButtonScale);
+
+  return (
+    <div
+      data-testid="control-layout-preview"
+      data-profile={input.touchControlProfile}
+      className="bg-[#0B0E11] border border-zinc-800 rounded-sm p-3 space-y-2"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-200">
+          Live Control Layout Preview —{' '}
+          <span className="text-amber-400 font-bold">
+            {isClaw ? 'Three-Finger Claw Mode' : 'Two-Finger Thumb Mode'}
+          </span>
+        </span>
+        <span className="font-mono text-[10px] text-zinc-400">
+          Drag <span className="text-amber-300">FIRE</span> or <span className="text-cyan-300">ADS</span> directly to reposition
+        </span>
+      </div>
+
+      <div
+        ref={containerRef}
+        style={{ opacity: input.touchButtonOpacity, touchAction: 'none' }}
+        onPointerMove={(e) => {
+          if (!draggingTarget) return;
+          e.stopPropagation();
+          applyPreviewDrag(e.clientX, e.clientY, draggingTarget);
+        }}
+        onPointerUp={() => setDraggingTarget(null)}
+        onPointerCancel={() => setDraggingTarget(null)}
+        className="relative w-full aspect-[16/8.2] max-h-[230px] bg-gradient-to-b from-[#131922] via-[#10151c] to-[#0b0e12] border border-zinc-700/80 rounded-sm overflow-hidden select-none"
+      >
+        {/* Zone Split Guides */}
+        <div
+          className={`absolute left-0 w-[40%] bottom-0 border-r border-dashed border-amber-400/20 bg-amber-500/[0.03] flex items-end justify-start p-2 ${
+            isClaw ? 'top-[44%] border-t' : 'top-0'
+          }`}
+        >
+          <span className="font-mono text-[8px] uppercase text-amber-300/60">
+            Left Thumb: 360° Move Zone
+          </span>
+        </div>
+        {isClaw && (
+          <div className="absolute left-0 top-0 w-[40%] h-[44%] border-r border-dashed border-red-400/20 bg-red-500/[0.03] p-1.5 flex items-start justify-start">
+            <span className="font-mono text-[8px] uppercase text-red-300/70">
+              Left Index: Claw Fire Zone
+            </span>
+          </div>
+        )}
+        <div className="absolute left-[40%] right-0 top-0 bottom-0 bg-cyan-500/[0.02] flex items-center justify-center">
+          <span className="font-mono text-[9px] uppercase tracking-widest text-cyan-300/45">
+            Right Thumb: Unrestricted 360° Camera Look Surface
+          </span>
+        </div>
+
+        {/* Simulated Compact Top HUD */}
+        <div
+          data-testid="preview-top-left-hud"
+          style={{ left: clawShiftsTopLeft ? '18%' : '2%' }}
+          className="absolute top-1.5 flex items-center gap-1.5 bg-[#0B0E11]/85 border border-white/15 px-1.5 py-0.5 rounded-xs transition-all"
+        >
+          <div className="w-4 h-4 rounded-full border border-cyan-400/60 flex items-center justify-center">
+            <div className="w-1 h-1 rounded-full bg-cyan-400" />
+          </div>
+          <div className="font-mono text-[8px] text-zinc-200 leading-tight">
+            <div>OBJ: Radar Relays 1/2</div>
+            <div className="text-[7px] text-emerald-400">ARM 100 · HP 100</div>
+          </div>
+        </div>
+
+        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 bg-[#0B0E11]/80 border border-white/15 px-2 py-0.5 rounded-xs font-mono text-[8px] text-amber-400">
+          360° N · SCORE 420 · 01:15
+        </div>
+
+        <div className="absolute top-1.5 right-2 bg-[#0B0E11]/80 border border-white/15 px-1.5 py-0.5 rounded-xs font-mono text-[8px] text-zinc-200">
+          M4A1 30/120
+        </div>
+
+        {/* Simulated Left Thumbstick */}
+        <div
+          style={{ width: `${previewStickSize}px`, height: `${previewStickSize}px` }}
+          className="absolute left-4 bottom-3 rounded-full bg-[#0B0E11]/65 border border-amber-400/60 flex items-center justify-center"
+        >
+          <div className="w-4 h-4 rounded-full bg-amber-400/80" />
+        </div>
+
+        {/* Draggable FIRE Handle */}
+        <button
+          type="button"
+          data-testid="preview-fire-handle"
+          aria-label="Preview Fire Button Position"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              // Ignore
+            }
+            setDraggingTarget('fire');
+          }}
+          style={{
+            left: `calc(${firePos.x * 100}% - ${previewFireSize / 2}px)`,
+            top: `calc(${firePos.y * 100}% - ${previewFireSize / 2}px)`,
+            width: `${previewFireSize}px`,
+            height: `${previewFireSize}px`,
+          }}
+          className="absolute rounded-full bg-amber-500/45 border-2 border-amber-300 text-white font-mono text-[8px] font-bold flex flex-col items-center justify-center shadow-lg cursor-grab active:cursor-grabbing"
+        >
+          <Crosshair className="w-3 h-3" />
+          <span>FIRE</span>
+        </button>
+
+        {/* Draggable ADS Handle */}
+        <button
+          type="button"
+          data-testid="preview-ads-handle"
+          aria-label="Preview ADS Button Position"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              // Ignore
+            }
+            setDraggingTarget('ads');
+          }}
+          style={{
+            left: `calc(${adsPos.x * 100}% - ${previewAdsSize / 2}px)`,
+            top: `calc(${adsPos.y * 100}% - ${previewAdsSize / 2}px)`,
+            width: `${previewAdsSize}px`,
+            height: `${previewAdsSize}px`,
+          }}
+          className="absolute rounded-full bg-cyan-500/40 border border-cyan-300 text-cyan-100 font-mono text-[8px] font-bold flex flex-col items-center justify-center shadow-md cursor-grab active:cursor-grabbing"
+        >
+          <Target className="w-2.5 h-2.5" />
+          <span>ADS</span>
+        </button>
+
+        {/* Simulated Secondary Right Cluster */}
+        <div className="absolute right-2.5 bottom-2.5 flex items-center gap-1 font-mono text-[7px] text-zinc-300">
+          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
+            R
+          </div>
+          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
+            C
+          </div>
+          <div className="w-5 h-5 rounded-full bg-[#0B0E11]/75 border border-white/20 flex items-center justify-center">
+            J
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

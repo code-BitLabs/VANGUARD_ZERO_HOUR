@@ -1,15 +1,17 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Crosshair,
-  Shield,
-  Heart,
-  Radio,
-  Compass,
-  Bomb,
   AlertTriangle,
   BarChart3,
-  Pause,
+  Bomb,
+  ChevronDown,
+  ChevronUp,
+  Compass,
+  Crosshair,
   Gamepad2,
+  Heart,
+  Pause,
+  Radio,
+  Shield,
 } from 'lucide-react';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { InputManager } from '@/src/engine/InputManager';
@@ -46,11 +48,23 @@ export function GameHUD({
   const colorblind = useSettingsStore((s) => s.accessibility.colorblindMode);
   const uiScale = useSettingsStore((s) => s.accessibility.uiScale);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
+  const touchControlProfile = useSettingsStore((s) => s.input.touchControlProfile);
+  const touchFirePosThreeFinger = useSettingsStore((s) => s.input.touchFirePosThreeFinger);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
   const warnCount = combatDebug?.warnings.length ?? 0;
   const liveFps = combatDebug?.performance.fps ?? diagnostics.fps;
   const viewport = useViewportMode();
   const compactHud = touchControlsVisible || viewport.isCompactLandscape;
+
+  const [objectivesExpanded, setObjectivesExpanded] = useState(false);
+  const [showHit, setShowHit] = useState(false);
+
+  useEffect(() => {
+    if (!hitFeedback) return;
+    setShowHit(true);
+    const id = window.setTimeout(() => setShowHit(false), 180);
+    return () => window.clearTimeout(id);
+  }, [hitFeedback?.id]);
 
   const threatColor =
     colorblind === 'deuteranopia'
@@ -80,18 +94,30 @@ export function GameHUD({
                   : 'NW';
 
   const spreadPx = Math.min(34, Math.max(5, Math.round(hud.crosshairSpread * 520)));
-  const [showHit, setShowHit] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!hitFeedback) return;
-    setShowHit(true);
-    const id = window.setTimeout(() => setShowHit(false), 180);
-    return () => window.clearTimeout(id);
-  }, [hitFeedback?.id]);
-
-  const radarSizePx = compactHud ? 68 : 112;
+  const radarSizePx = compactHud ? 52 : 108;
   const radarCenter = radarSizePx / 2;
-  const radarRadius = radarCenter - 5;
+  const radarRadius = radarCenter - 4;
+
+  // In Three-Finger Claw mode, if the upper-left Fire button is placed in the top-left quadrant,
+  // shift the compact Radar & Mission Objective cluster rightward so it never collides with the left index finger Fire button.
+  const clawTopLeftConflict =
+    touchControlsVisible &&
+    touchControlProfile === 'three_finger' &&
+    touchFirePosThreeFinger.x < 0.32 &&
+    touchFirePosThreeFinger.y < 0.48;
+
+  const topLeftOffsetPx = clawTopLeftConflict
+    ? Math.max(132, Math.round(viewport.width * touchFirePosThreeFinger.x + 56))
+    : 10;
+
+  const activeObjective =
+    hud.objectives.find((o) => !o.completed) ?? hud.objectives[hud.objectives.length - 1] ?? null;
+  const completedObjectivesCount = hud.objectives.filter((o) => o.completed).length;
+
+  const formatObjectiveDistance = (o: (typeof hud.objectives)[number]) => {
+    if (o.completed || !o.markerPos) return null;
+    return Math.round(Math.hypot(o.markerPos.x - hud.playerX, o.markerPos.z - hud.playerZ));
+  };
 
   return (
     <div
@@ -201,19 +227,23 @@ export function GameHUD({
         </div>
       )}
 
-      {/* Top Center Compass & Boss Gunship Bar */}
+      {/* Top Center Compact Strip: Compass + Score + Elapsed Time + Encounter-Gated Aircraft Health */}
       <div
-        className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5"
-        style={{ top: 'max(10px, env(safe-area-inset-top, 0px))' }}
+        data-testid="hud-top-center-strip"
+        className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1"
+        style={{ top: 'max(6px, env(safe-area-inset-top, 0px))' }}
       >
-        <div className="bg-[#0B0E11]/85 border border-zinc-800 px-3 sm:px-4 py-1 rounded-sm flex items-center gap-2 sm:gap-3 font-mono text-[11px] sm:text-xs tabular-nums whitespace-nowrap">
-          <Compass className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span className="text-zinc-400">{Math.round(headingDeg)}°</span>
-          <span className="text-amber-400 font-bold w-5 text-center">{cardinal}</span>
-          <span className="text-zinc-600">|</span>
-          <span className="text-zinc-300">SCORE {hud.score}</span>
-          <span className="text-zinc-600 hidden sm:inline">|</span>
-          <span className="text-cyan-400 hidden sm:inline">
+        <div
+          data-testid="hud-compass-strip"
+          className="bg-[#0B0E11]/72 border border-white/12 px-2.5 sm:px-3.5 py-0.5 rounded-sm flex items-center gap-2 sm:gap-2.5 font-mono text-[10px] sm:text-xs tabular-nums whitespace-nowrap shadow-sm"
+        >
+          <Compass className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 shrink-0" />
+          <span className="text-zinc-300">{Math.round(headingDeg)}°</span>
+          <span className="text-amber-400 font-bold w-4 text-center">{cardinal}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-zinc-200">SCORE {hud.score}</span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-cyan-400">
             {String(Math.floor(hud.elapsedSec / 60)).padStart(2, '0')}:
             {String(hud.elapsedSec % 60).padStart(2, '0')}
           </span>
@@ -233,13 +263,17 @@ export function GameHUD({
           </button>
         )}
 
+        {/* Compact Encounter-Relevant Aircraft Health Bar */}
         {hud.activeBossLabel && (
-          <div className="w-60 sm:w-72 bg-[#0B0E11]/90 border border-red-500/60 px-3 py-1 rounded-sm">
-            <div className="flex justify-between font-mono text-[10px] text-red-400 mb-1">
-              <span>{hud.activeBossLabel}</span>
-              <span>{Math.round(hud.activeBossHealthPct * 100)}%</span>
+          <div
+            data-testid="hud-boss-bar"
+            className="w-40 sm:w-56 bg-[#0B0E11]/78 border border-red-500/55 px-2 py-0.5 rounded-sm shadow-sm"
+          >
+            <div className="flex justify-between items-center font-mono text-[9px] sm:text-[10px] text-red-300 leading-none mb-0.5">
+              <span className="truncate max-w-[115px] sm:max-w-[165px]">{hud.activeBossLabel}</span>
+              <span className="tabular-nums font-bold">{Math.round(hud.activeBossHealthPct * 100)}%</span>
             </div>
-            <div className="h-1.5 bg-zinc-800 overflow-hidden">
+            <div className="h-1 bg-zinc-800/90 overflow-hidden">
               <div
                 className="h-full bg-red-500 transition-all duration-150"
                 style={{ width: `${Math.round(hud.activeBossHealthPct * 100)}%` }}
@@ -249,122 +283,235 @@ export function GameHUD({
         )}
       </div>
 
-      {/* Top-Left Radar Mini-Map & Active Objectives */}
+      {/* Top-Left Compact Radar, Expandable Mission Objective Indicator & Slim Mobile Vitals */}
       <div
-        className="absolute flex flex-col gap-1.5 max-w-[38vw] sm:max-w-xs"
+        data-testid="hud-top-left-cluster"
+        className="absolute z-30 flex items-start gap-1.5 pointer-events-none"
         style={{
-          top: 'max(10px, env(safe-area-inset-top, 0px))',
-          left: 'max(10px, env(safe-area-inset-left, 0px))',
+          top: 'max(6px, env(safe-area-inset-top, 0px))',
+          left: `max(${topLeftOffsetPx}px, calc(env(safe-area-inset-left, 0px) + ${topLeftOffsetPx - 4}px))`,
         }}
       >
-        <div className="flex items-start gap-2">
+        {/* Radar Mini-Map */}
+        <div
+          style={{ width: `${radarSizePx}px`, height: `${radarSizePx}px` }}
+          className="relative rounded-full bg-[#0B0E11]/78 border border-zinc-700/90 overflow-hidden shrink-0"
+        >
+          <div className="absolute inset-0 border border-zinc-800/70 rounded-full scale-50" />
           <div
-            style={{ width: `${radarSizePx}px`, height: `${radarSizePx}px` }}
-            className="relative rounded-full bg-[#0B0E11]/85 border-2 border-zinc-700 overflow-hidden shrink-0"
-          >
-            <div className="absolute inset-0 border border-zinc-800/70 rounded-full scale-50" />
-            <div
-              className="absolute left-1/2 top-1/2 w-2 h-2 -ml-1 -mt-1 bg-cyan-400 rounded-full"
-              title="Player"
-            />
-            {hud.blips.slice(0, 28).map((b) => {
-              const dx = b.x - hud.playerX;
-              const dz = b.z - hud.playerZ;
-              const cos = Math.cos(hud.playerYaw);
-              const sin = Math.sin(hud.playerYaw);
-              const rx = dx * cos - dz * sin;
-              const rz = dx * sin + dz * cos;
-              const px = Math.max(4, Math.min(radarSizePx - 4, radarCenter + (rx / 95) * radarRadius));
-              const py = Math.max(4, Math.min(radarSizePx - 4, radarCenter + (rz / 95) * radarRadius));
-              const color =
-                b.kind === 'objective'
-                  ? '#f59e0b'
-                  : b.kind === 'friendly_vehicle'
-                    ? '#10b981'
-                    : b.kind === 'air'
-                      ? '#38bdf8'
-                      : threatColor;
-              return (
-                <div
-                  key={b.id}
-                  className="absolute w-1.5 h-1.5 -ml-0.75 -mt-0.75 rounded-full"
-                  style={{ left: `${px}px`, top: `${py}px`, backgroundColor: color }}
-                />
-              );
-            })}
-          </div>
-
-          <div
-            className={`bg-[#0B0E11]/82 border border-zinc-800/90 rounded-sm ${
-              compactHud ? 'px-2 py-1.5 space-y-1 min-w-[155px]' : 'px-3 py-2 space-y-2 min-w-[215px]'
-            }`}
-          >
-            <div className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-amber-400">
-              Mission Objectives
-            </div>
-            {hud.objectives.map((o) => {
-              const distMeters =
-                !o.completed && o.markerPos
-                  ? Math.round(Math.hypot(o.markerPos.x - hud.playerX, o.markerPos.z - hud.playerZ))
-                  : null;
-              return (
-                <div key={o.id} className="space-y-0.5">
-                  <div className="flex items-center justify-between gap-2 text-[11px] sm:text-xs">
-                    <span className={o.completed ? 'line-through text-emerald-400/80' : 'text-zinc-100 font-medium'}>
-                      {o.title}
-                    </span>
-                    <span className="font-mono text-[10px] sm:text-[11px] tabular-nums text-amber-400 shrink-0">
-                      {distMeters !== null ? `${distMeters}m · ` : ''}
-                      {o.current}/{o.target}
-                    </span>
-                  </div>
-                  {!compactHud && !o.completed && o.description && (
-                    <div className="text-[10px] text-zinc-400 leading-tight">{o.description}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+            className="absolute left-1/2 top-1/2 w-1.5 h-1.5 -ml-0.75 -mt-0.75 bg-cyan-400 rounded-full"
+            title="Player"
+          />
+          {hud.blips.slice(0, 28).map((b) => {
+            const dx = b.x - hud.playerX;
+            const dz = b.z - hud.playerZ;
+            const cos = Math.cos(hud.playerYaw);
+            const sin = Math.sin(hud.playerYaw);
+            const rx = dx * cos - dz * sin;
+            const rz = dx * sin + dz * cos;
+            const px = Math.max(3, Math.min(radarSizePx - 3, radarCenter + (rx / 95) * radarRadius));
+            const py = Math.max(3, Math.min(radarSizePx - 3, radarCenter + (rz / 95) * radarRadius));
+            const color =
+              b.kind === 'objective'
+                ? '#f59e0b'
+                : b.kind === 'friendly_vehicle'
+                  ? '#10b981'
+                  : b.kind === 'air'
+                    ? '#38bdf8'
+                    : threatColor;
+            return (
+              <div
+                key={b.id}
+                className="absolute w-1.5 h-1.5 -ml-0.75 -mt-0.75 rounded-full"
+                style={{ left: `${px}px`, top: `${py}px`, backgroundColor: color }}
+              />
+            );
+          })}
         </div>
 
-        {/* Compact Mobile Vitals directly below Radar/Objectives so bottom-left stays free for left thumbstick */}
-        {compactHud && (
-          <div className="bg-[#0B0E11]/85 border border-zinc-800 px-2.5 py-1.5 rounded-sm w-[180px] space-y-1">
-            <div className="flex items-center justify-between text-[10px] font-mono">
-              <span className="text-cyan-400 flex items-center gap-1">
-                <Shield className="w-3 h-3" /> ARM {hud.armor}
-              </span>
-              <span className={`font-bold flex items-center gap-1 ${hud.health < 35 ? 'text-red-400' : 'text-emerald-400'}`}>
-                <Heart className="w-3 h-3" /> {hud.health}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              <div className="h-1 bg-zinc-800 overflow-hidden">
+        {/* Compact Mission Indicator + Integrated Mobile Vitals */}
+        <div className="flex flex-col gap-1 pointer-events-none">
+          {compactHud ? (
+            <div
+              data-testid="hud-objectives-compact"
+              className="pointer-events-auto bg-[#0B0E11]/76 border border-white/12 rounded-sm px-2 py-1 min-w-[150px] max-w-[210px] shadow-sm"
+            >
+              <button
+                type="button"
+                data-testid="hud-objectives-toggle"
+                aria-label="Toggle Mission Objectives"
+                aria-expanded={objectivesExpanded}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setObjectivesExpanded((v) => !v);
+                }}
+                className="w-full text-left flex items-center justify-between gap-1.5"
+              >
+                {activeObjective ? (
+                  <>
+                    <span
+                      className={`text-[10px] truncate ${
+                        activeObjective.completed ? 'line-through text-emerald-400' : 'text-zinc-100 font-medium'
+                      }`}
+                    >
+                      {activeObjective.title}
+                    </span>
+                    <span className="font-mono text-[10px] tabular-nums text-amber-400 shrink-0 flex items-center gap-1">
+                      {(() => {
+                        const dist = formatObjectiveDistance(activeObjective);
+                        return dist !== null ? <span>{dist}m</span> : null;
+                      })()}
+                      <span>
+                        {activeObjective.current}/{activeObjective.target}
+                      </span>
+                      {hud.objectives.length > 1 &&
+                        (objectivesExpanded ? (
+                          <ChevronUp className="w-3 h-3 text-zinc-400" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 text-zinc-400" />
+                        ))}
+                    </span>
+                  </>
+                ) : (
+                  <span className="font-mono text-[10px] uppercase text-amber-400">Objectives</span>
+                )}
+              </button>
+
+              {/* Expandable Full Objective List on Demand */}
+              {objectivesExpanded && hud.objectives.length > 0 && (
                 <div
-                  className="h-full bg-cyan-400"
-                  style={{ width: `${Math.round((hud.armor / hud.maxArmor) * 100)}%` }}
-                />
-              </div>
-              <div className="h-1 bg-zinc-800 overflow-hidden">
+                  data-testid="hud-objectives-expanded-list"
+                  className="mt-1 pt-1 border-t border-zinc-800/90 space-y-1"
+                >
+                  <div className="flex items-center justify-between font-mono text-[9px] uppercase tracking-wider text-zinc-400">
+                    <span>Mission Objectives</span>
+                    <span>
+                      {completedObjectivesCount}/{hud.objectives.length}
+                    </span>
+                  </div>
+                  {hud.objectives.map((o) => {
+                    const dist = formatObjectiveDistance(o);
+                    return (
+                      <div key={o.id} className="flex items-center justify-between gap-2 text-[10px]">
+                        <span className={o.completed ? 'line-through text-emerald-400/80 truncate' : 'text-zinc-200 truncate'}>
+                          {o.title}
+                        </span>
+                        <span className="font-mono text-[9px] tabular-nums text-amber-400 shrink-0">
+                          {dist !== null ? `${dist}m · ` : ''}
+                          {o.current}/{o.target}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Ultra-Compact Single-Line Mobile Vitals Integrated Inside Top-Left Strip */}
+              <div className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between gap-2 font-mono text-[9px] leading-none">
+                <div className="flex items-center gap-1 text-cyan-400 flex-1">
+                  <Shield className="w-2.5 h-2.5 shrink-0" />
+                  <span className="tabular-nums">ARM {hud.armor}</span>
+                  <div className="h-1 flex-1 bg-zinc-800 overflow-hidden rounded-xs">
+                    <div
+                      className="h-full bg-cyan-400"
+                      style={{ width: `${Math.round((hud.armor / hud.maxArmor) * 100)}%` }}
+                    />
+                  </div>
+                </div>
                 <div
-                  className={`h-full ${hud.health < 35 ? 'bg-red-500' : 'bg-emerald-400'}`}
-                  style={{ width: `${Math.round((hud.health / hud.maxHealth) * 100)}%` }}
-                />
+                  className={`flex items-center gap-1 font-bold flex-1 ${
+                    hud.health < 35 ? 'text-red-400' : 'text-emerald-400'
+                  }`}
+                >
+                  <Heart className="w-2.5 h-2.5 shrink-0" />
+                  <span className="tabular-nums">{hud.health}</span>
+                  <div className="h-1 flex-1 bg-zinc-800 overflow-hidden rounded-xs">
+                    <div
+                      className={`h-full ${hud.health < 35 ? 'bg-red-500' : 'bg-emerald-400'}`}
+                      style={{ width: `${Math.round((hud.health / hud.maxHealth) * 100)}%` }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            /* Desktop Objectives Panel */
+            <div className="bg-[#0B0E11]/82 border border-zinc-800/90 rounded-sm px-3 py-2 space-y-1.5 min-w-[215px]">
+              <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
+                Mission Objectives
+              </div>
+              {hud.objectives.map((o) => {
+                const distMeters = formatObjectiveDistance(o);
+                return (
+                  <div key={o.id} className="space-y-0.5">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className={o.completed ? 'line-through text-emerald-400/80' : 'text-zinc-100 font-medium'}>
+                        {o.title}
+                      </span>
+                      <span className="font-mono text-[11px] tabular-nums text-amber-400 shrink-0">
+                        {distMeters !== null ? `${distMeters}m · ` : ''}
+                        {o.current}/{o.target}
+                      </span>
+                    </div>
+                    {!o.completed && o.description && (
+                      <div className="text-[10px] text-zinc-400 leading-tight">{o.description}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Top-Right Pause, Touch Toggle, Diagnostics Launcher & Compact Mobile Weapon Status */}
+      {/* Top-Right Single-Row Bar: Compact Mobile Weapon/Ammo + Touch Toggle + Pause + Diagnostics */}
       <div
         className="absolute z-30 flex flex-col items-end gap-1.5 pointer-events-none"
         style={{
-          top: 'max(10px, env(safe-area-inset-top, 0px))',
-          right: 'max(10px, env(safe-area-inset-right, 0px))',
+          top: 'max(6px, env(safe-area-inset-top, 0px))',
+          right: 'max(8px, env(safe-area-inset-right, 0px))',
         }}
       >
         <div className="flex items-center gap-1.5 pointer-events-none">
+          {/* Compact Inline Weapon/Vehicle Readout on Mobile (prevents vertical stacking into the right look zone) */}
+          {compactHud && (
+            <div
+              data-testid="hud-compact-weapon-readout"
+              className="bg-[#0B0E11]/76 border border-white/12 px-2 py-1 rounded-sm font-mono text-right flex items-center gap-2"
+            >
+              {hud.inVehicle ? (
+                <div className="leading-tight">
+                  <div className="text-[9px] text-emerald-400 uppercase truncate max-w-[96px]">{hud.vehicleName}</div>
+                  <div className="text-[11px] font-bold text-amber-400 tabular-nums whitespace-nowrap">
+                    {hud.vehicleSpeedKmh} KM/H · {hud.vehicleHealth}%
+                  </div>
+                </div>
+              ) : (
+                <div className="leading-tight">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="text-[9px] text-zinc-300 font-bold uppercase">{hud.weaponName}</span>
+                    <span className="text-[8px] text-amber-400 uppercase">{hud.fireMode}</span>
+                  </div>
+                  <div className="tabular-nums leading-none mt-0.5">
+                    <span className={`text-sm font-bold ${hud.ammoInMag === 0 ? 'text-red-400' : 'text-white'}`}>
+                      {hud.ammoInMag}
+                    </span>
+                    <span className="text-[10px] text-zinc-400"> / {hud.reserveAmmo}</span>
+                  </div>
+                  {hud.isReloading && (
+                    <div className="h-0.5 bg-zinc-800 mt-0.5 overflow-hidden">
+                      <div
+                        className="h-full bg-amber-400"
+                        style={{ width: `${Math.round(hud.reloadProgress * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {devModeActive && !combatDebugOpen && !compactHud && (
             <button
               type="button"
@@ -375,7 +522,7 @@ export function GameHUD({
                 setCombatDebugCollapsed(false);
                 setCombatDebugOpen(true);
               }}
-              className="pointer-events-auto flex items-center gap-2 px-2.5 min-h-[44px] bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700/90 rounded-sm font-mono text-[11px] tabular-nums text-zinc-200 whitespace-nowrap shrink-0 transition-colors"
+              className="pointer-events-auto flex items-center gap-2 px-2.5 min-h-[40px] bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700/90 rounded-sm font-mono text-[11px] tabular-nums text-zinc-200 whitespace-nowrap shrink-0 transition-colors"
             >
               <BarChart3 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="text-zinc-400">[F4]</span>
@@ -402,13 +549,13 @@ export function GameHUD({
               e.stopPropagation();
               uiStore.getState().toggleTouchHudOverride(touchControlsVisible);
             }}
-            className={`pointer-events-auto min-w-[44px] min-h-[44px] px-2.5 rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors ${
+            className={`pointer-events-auto min-w-[40px] min-h-[40px] px-2 rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors ${
               touchControlsVisible
                 ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                : 'bg-[#0B0E11]/85 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
+                : 'bg-[#0B0E11]/80 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
             }`}
           >
-            <Gamepad2 className="w-4 h-4 shrink-0" />
+            <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden sm:inline">TOUCH</span>
           </button>
 
@@ -422,44 +569,12 @@ export function GameHUD({
                 e.stopPropagation();
                 onPause();
               }}
-              className="pointer-events-auto min-w-[44px] min-h-[44px] px-2.5 bg-[#0B0E11]/90 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors"
+              className="pointer-events-auto min-w-[40px] min-h-[40px] px-2 bg-[#0B0E11]/85 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors"
             >
-              <Pause className="w-4 h-4" />
+              <Pause className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
-
-        {/* Compact Top-Right Weapon/Vehicle Pill-Free Readout when Touch HUD is active */}
-        {compactHud && (
-          <div className="bg-[#0B0E11]/85 border border-zinc-800 px-2.5 py-1.5 rounded-sm font-mono text-right min-w-[140px]">
-            {hud.inVehicle ? (
-              <div>
-                <div className="text-[10px] text-emerald-400 uppercase">{hud.vehicleName}</div>
-                <div className="text-sm font-bold text-amber-400 tabular-nums">
-                  {hud.vehicleSpeedKmh} KM/H · HULL {hud.vehicleHealth}%
-                </div>
-              </div>
-            ) : (
-              <div>
-                <div className="text-[10px] text-zinc-300 font-bold uppercase">{hud.weaponName}</div>
-                <div className="tabular-nums leading-tight">
-                  <span className={`text-lg font-bold ${hud.ammoInMag === 0 ? 'text-red-400' : 'text-white'}`}>
-                    {hud.ammoInMag}
-                  </span>
-                  <span className="text-[11px] text-zinc-400"> / {hud.reserveAmmo}</span>
-                </div>
-                {hud.isReloading && (
-                  <div className="h-1 bg-zinc-800 mt-1 overflow-hidden">
-                    <div
-                      className="h-full bg-amber-400"
-                      style={{ width: `${Math.round(hud.reloadProgress * 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
 
         {!compactHud && (
           <div className={`flex flex-col items-end gap-1.5 ${devModeActive && combatDebugOpen && combatDebugCollapsed ? 'mt-9' : ''}`}>
@@ -479,15 +594,15 @@ export function GameHUD({
       </div>
 
       {/* Mission Alert & Strategic Ordnance Warnings */}
-      <div className="absolute top-20 sm:top-28 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none">
+      <div className="absolute top-14 sm:top-20 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
         {hud.missionAlert && (
-          <div className="bg-[#141920]/95 border border-amber-500/70 px-4 py-1.5 rounded-sm font-display text-xs sm:text-sm uppercase tracking-widest text-amber-400 shadow-lg text-center">
+          <div className="bg-[#141920]/90 border border-amber-500/70 px-3 py-1 rounded-sm font-display text-[11px] sm:text-xs uppercase tracking-widest text-amber-400 shadow-lg text-center">
             {hud.missionAlert}
           </div>
         )}
 
         {hud.ordnance && hud.ordnance.nukePendingConfirmSec > 0 && (
-          <div className="bg-[#1b1010]/95 border-2 border-red-500 px-4 py-2 rounded-sm text-center shadow-2xl">
+          <div className="bg-[#1b1010]/95 border-2 border-red-500 px-3.5 py-1.5 rounded-sm text-center shadow-2xl">
             <div className="font-display text-xs sm:text-sm font-bold uppercase tracking-widest text-red-400 flex items-center justify-center gap-2">
               <AlertTriangle className="w-4 h-4" />
               CONFIRM TRIDENT-X ({hud.ordnance.nukePendingConfirmSec.toFixed(1)}s)
@@ -501,15 +616,15 @@ export function GameHUD({
         )}
 
         {hud.ordnance && hud.ordnance.nukeCountdownSec > 0 && (
-          <div className="bg-red-950/95 border-2 border-amber-400 px-5 py-2 rounded-sm text-center shadow-2xl">
-            <div className="font-display text-sm sm:text-base font-bold uppercase tracking-widest text-amber-300">
+          <div className="bg-red-950/95 border-2 border-amber-400 px-4 py-1.5 rounded-sm text-center shadow-2xl">
+            <div className="font-display text-xs sm:text-sm font-bold uppercase tracking-widest text-amber-300">
               STRATEGIC IMPACT IN {hud.ordnance.nukeCountdownSec.toFixed(1)}s — SEEK COVER
             </div>
           </div>
         )}
 
         {hud.ordnance && hud.ordnance.inFalloutZone && (
-          <div className="bg-amber-950/90 border border-amber-500 px-3 py-1 rounded-sm font-mono text-[11px] text-amber-300 tracking-wider">
+          <div className="bg-amber-950/90 border border-amber-500 px-2.5 py-0.5 rounded-sm font-mono text-[10px] text-amber-300 tracking-wider">
             FALLOUT ZONE (-4.5 HP/S) · {hud.ordnance.falloutRemainingSec.toFixed(0)}s
           </div>
         )}
@@ -523,8 +638,8 @@ export function GameHUD({
 
       {hud.subtitleText && (
         <div
-          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/85 border border-zinc-800 px-3.5 py-1.5 rounded-sm flex items-center gap-2 text-[11px] sm:text-xs text-zinc-200 max-w-md sm:max-w-xl text-center ${
-            compactHud ? 'bottom-16' : 'bottom-24'
+          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/82 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 max-w-md sm:max-w-xl text-center ${
+            compactHud ? 'bottom-12' : 'bottom-24'
           }`}
         >
           <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -678,7 +793,7 @@ export function GameHUD({
         </div>
       )}
 
-      {/* Multi-Touch Virtual Twin-Stick & Action Overlay */}
+      {/* Multi-Touch Virtual Twin-Stick & Profile-Aware Action Overlay */}
       {touchControlsVisible && <MobileTouchControls inputManager={inputManager} hud={hud} />}
     </div>
   );

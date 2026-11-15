@@ -289,11 +289,8 @@ export class WeaponSystem {
 
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     this.equipTimer = Math.max(0, this.equipTimer - dt);
-    if (this.wasSprinting && !player.isSprinting) {
-      this.sprintToFireTimer = 0.09;
-    }
     this.wasSprinting = player.isSprinting;
-    this.sprintToFireTimer = Math.max(0, this.sprintToFireTimer - dt);
+    this.sprintToFireTimer = 0;
     this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt);
     this.recoilKickZ = THREE.MathUtils.lerp(this.recoilKickZ, 0, Math.min(1, dt * 16));
 
@@ -303,7 +300,8 @@ export class WeaponSystem {
       this.equipTimer <= 0 &&
       state.ammoInMag < state.magSize &&
       state.reserveAmmo > 0 &&
-      (input.wasActionPressed('reload') || (state.ammoInMag === 0 && input.isActionHeld('fire')))
+      (input.wasActionPressed('reload') ||
+        (state.ammoInMag === 0 && (input.isActionHeld('fire') || input.wasActionPressed('fire'))))
     ) {
       this.isReloading = true;
       const reloadLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'reload');
@@ -323,18 +321,18 @@ export class WeaponSystem {
       }
     }
 
-    // ADS & Sniper Scope
-    this.isAds = input.isActionHeld('ads') && !this.isReloading && !player.isSprinting;
+    // ADS & Sniper Scope (entering ADS immediately cancels sprint in PlayerController)
+    this.isAds = input.isActionHeld('ads') && !this.isReloading;
     this.isScoped = this.isAds && cfg.hasOpticalScope;
 
     // Guided Missile Lock-On State Machine
     this.updateLockOn(dt, cfg, camera, lockCandidates);
 
-    // Firing logic
+    // Firing logic: auto supports continuous hold + immediate sub-frame tap; semi/burst enforce tap trigger
     const mode = this.getActiveFireMode();
     const wantsFire =
       mode === 'auto'
-        ? input.isActionHeld('fire')
+        ? input.isActionHeld('fire') || input.wasActionPressed('fire')
         : mode === 'burst'
           ? input.wasActionPressed('fire') || this.burstRemaining > 0
           : input.wasActionPressed('fire');

@@ -440,11 +440,16 @@ export class PlayerController {
     }
 
     const axes = input.getMoveAxes();
+    const isFiringOrAiming =
+      isAds ||
+      input.isActionHeld('ads') ||
+      input.isActionHeld('fire') ||
+      input.wasActionPressed('fire');
     let wantsSprint =
       input.isActionHeld('sprint') &&
       axes.forward > 0.45 &&
       Math.abs(axes.right) <= axes.forward * 0.85 &&
-      !isAds &&
+      !isFiringOrAiming &&
       !this.isSliding;
     if (wantsSprint && this.isCrouching) {
       if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {

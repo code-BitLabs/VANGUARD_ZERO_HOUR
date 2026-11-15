@@ -62,11 +62,25 @@ export type AudioSettings = z.infer<typeof AudioSettingsSchema>;
 export const TouchModeSchema = z.enum(['auto', 'always_on', 'always_off']);
 export type TouchMode = z.infer<typeof TouchModeSchema>;
 
+export const TouchControlProfileSchema = z.enum(['two_finger', 'three_finger']);
+export type TouchControlProfile = z.infer<typeof TouchControlProfileSchema>;
+
 export const TouchFireBehaviorSchema = z.enum(['dedicated', 'ads_on_fire']);
 export type TouchFireBehavior = z.infer<typeof TouchFireBehaviorSchema>;
 
 export const TouchAdsModeSchema = z.enum(['toggle', 'hold']);
 export type TouchAdsMode = z.infer<typeof TouchAdsModeSchema>;
+
+export const NormalizedTouchPositionSchema = z.object({
+  x: z.number().min(0.04).max(0.95),
+  y: z.number().min(0.08).max(0.92),
+});
+export type NormalizedTouchPosition = z.infer<typeof NormalizedTouchPositionSchema>;
+
+export const DEFAULT_TWO_FINGER_FIRE_POS: NormalizedTouchPosition = { x: 0.88, y: 0.75 };
+export const DEFAULT_THREE_FINGER_FIRE_POS: NormalizedTouchPosition = { x: 0.1, y: 0.24 };
+export const DEFAULT_TWO_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.76, y: 0.68 };
+export const DEFAULT_THREE_FINGER_ADS_POS: NormalizedTouchPosition = { x: 0.87, y: 0.68 };
 
 export const InputSettingsSchema = z.object({
   mouseSensitivity: z.number().min(0.1).max(4.0).default(1.0),
@@ -74,17 +88,23 @@ export const InputSettingsSchema = z.object({
   invertY: z.boolean().default(false),
   gamepadEnabled: z.boolean().default(true),
   touchMode: TouchModeSchema.default('auto'),
+  touchControlProfile: TouchControlProfileSchema.default('two_finger'),
   touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
   touchLookSmoothing: z.number().min(0).max(0.6).default(0),
   touchJoystickScale: z.number().min(0.75).max(1.35).default(1.0),
   touchDeadzone: z.number().min(0.05).max(0.28).default(0.1),
   touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
+  touchFireButtonScale: z.number().min(0.75).max(1.45).default(1.0),
   touchButtonOpacity: z.number().min(0.35).max(0.95).default(0.72),
   autoSprint: z.boolean().default(true),
   touchAutoSprintThreshold: z.number().min(0.65).max(0.95).default(0.82),
   touchManualSprintButton: z.boolean().default(false),
   touchAdsMode: TouchAdsModeSchema.default('toggle'),
   touchFireBehavior: TouchFireBehaviorSchema.default('dedicated'),
+  touchFirePosTwoFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_TWO_FINGER_FIRE_POS })),
+  touchFirePosThreeFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_THREE_FINGER_FIRE_POS })),
+  touchAdsPosTwoFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_TWO_FINGER_ADS_POS })),
+  touchAdsPosThreeFinger: NormalizedTouchPositionSchema.default(() => ({ ...DEFAULT_THREE_FINGER_ADS_POS })),
   touchFireOffsetX: z.number().min(-60).max(60).default(0),
   touchFireOffsetY: z.number().min(-60).max(60).default(0),
   touchAdsOffsetX: z.number().min(-60).max(60).default(0),

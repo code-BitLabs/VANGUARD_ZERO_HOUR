@@ -174,6 +174,11 @@ export default function App() {
               <SettingsPanel
                 gpuReport={engineRef.current?.getGpuCapabilityReport() ?? null}
                 onReapplyAutoGraphics={() => engineRef.current?.reapplyAutoGraphics() ?? null}
+                onResumeAndTest={() => {
+                  handleUiClick();
+                  uiStore.getState().setScreen('paused');
+                  engineRef.current?.resumeMission();
+                }}
                 onBack={() => {
                   handleUiClick();
                   uiStore.getState().setScreen(previousMenuScreen);

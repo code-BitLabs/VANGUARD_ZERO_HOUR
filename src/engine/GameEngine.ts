@@ -1420,7 +1420,14 @@ export class GameEngine {
     const wState = this.weapons.getActiveState();
     const veh = this.vehicles.getPlayerVehicle();
     const nearVeh = !veh ? this.vehicles.getNearestInteractableVehicle(this.player.position) : null;
-    const boss = this.airCombat.getActiveBossInfo();
+    const objStatuses = this.missionDirector.getObjectiveStatuses();
+    const firstActiveObj = objStatuses.find((o) => !o.completed);
+    const lockState = this.weapons.getLockOnState();
+    const boss = this.airCombat.getActiveBossInfo({
+      playerPosition: this.player.position,
+      isPrimaryObjective: firstActiveObj?.type === 'air_defense',
+      lockStatus: lockState.status,
+    });
 
     let interactPrompt: string | null = null;
     if (veh) {

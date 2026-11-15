@@ -303,9 +303,29 @@ export class AirCombatManager {
       }));
   }
 
-  getActiveBossInfo(): { label: string; healthPct: number } | null {
-    const boss = this.units.find((u) => u.alive && (u.type === 'gunship' || u.type === 'helicopter'));
+  getActiveBossInfo(context?: {
+    playerPosition?: THREE.Vector3;
+    isPrimaryObjective?: boolean;
+    lockStatus?: 'none' | 'scanning' | 'acquiring' | 'locked';
+  }): { label: string; healthPct: number } | null {
+    const boss = this.units.find((u) => u.alive && !u.crashing && (u.type === 'gunship' || u.type === 'helicopter'));
     if (!boss) return null;
+
+    if (context) {
+      const damaged = boss.health < boss.maxHealth;
+      const engaged = boss.detectedPlayer || boss.hasLos;
+      const lockedOn = context.lockStatus === 'acquiring' || context.lockStatus === 'locked';
+      const primaryObj = Boolean(context.isPrimaryObjective);
+      const closeEncounter =
+        boss.initialGraceTimerSec <= 0 &&
+        context.playerPosition !== undefined &&
+        boss.position.distanceTo(context.playerPosition) <= 58;
+
+      if (!damaged && !engaged && !lockedOn && !primaryObj && !closeEncounter) {
+        return null;
+      }
+    }
+
     return {
       label: boss.displayName.toUpperCase(),
       healthPct: boss.health / boss.maxHealth,

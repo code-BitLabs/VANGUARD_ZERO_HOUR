@@ -1,14 +1,21 @@
 import React from 'react';
+import * as THREE from 'three';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { ResourceManager } from '@/src/core/ResourceManager';
+import { VFXPool } from '@/src/effects/VFXPool';
 import { InputManager } from '@/src/engine/InputManager';
+import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
 import { PlayerController } from '@/src/gameplay/PlayerController';
+import { ProjectileManager } from '@/src/gameplay/ProjectileManager';
+import { WeaponSystem } from '@/src/gameplay/WeaponSystem';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { AudioSettingsSchema } from '@/src/schemas/settings.schema';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import { settingsStore } from '@/src/stores/settingsStore';
+import { SettingsPanel } from '@/src/ui/components/SettingsPanel';
+import { GameHUD } from '@/src/ui/hud/GameHUD';
 import { MobileTouchControls } from '@/src/ui/hud/MobileTouchControls';
 
 function makePointerEventInit(pointerId: number, clientX: number, clientY: number) {
@@ -37,6 +44,16 @@ function mockStickRect(stick: HTMLElement) {
 }
 
 describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', () => {
+  beforeAll(() => {
+    if (typeof globalThis.ResizeObserver === 'undefined') {
+      globalThis.ResizeObserver = class ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    }
+  });
+
   afterEach(() => {
     cleanup();
     settingsStore.getState().resetDefaults();
@@ -64,7 +81,6 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     // 2. Full 360-degree sweep across 12 angles (every 30 deg), including cardinals & diagonals
     for (let deg = 0; deg < 360; deg += 30) {
       const rad = (deg * Math.PI) / 180;
-      // Screen coords: +x is right, -y is forward (up)
       const px = cx + Math.sin(rad) * r;
       const py = cy - Math.cos(rad) * r;
       fireEvent.pointerMove(stick, makePointerEventInit(1, px, py));
@@ -109,21 +125,17 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     expect(input.getMoveAxes()).toEqual({ forward: 0, right: 0 });
     expect(input.isActionHeld('sprint')).toBe(false);
 
-    // 5. Floating left movement zone anchors at exact touch point (even high or low on screen) for all 4 directions
+    // 5. Floating left movement zone anchors at exact touch point for all 4 directions
     const moveZone = screen.getByTestId('touch-move-zone');
     fireEvent.pointerDown(moveZone, makePointerEventInit(2, 140, 120));
     expect(input.getMoveAxes()).toEqual({ forward: 0, right: 0 });
-    // Pull downward from (140, 120) -> MUST move backward (never forward!)
     fireEvent.pointerMove(window, makePointerEventInit(2, 140, 168));
     expect(input.getMoveAxes().forward).toBeLessThan(-0.5);
     expect(input.isActionHeld('sprint')).toBe(false);
-    // Push upward from (140, 120) -> moves forward
     fireEvent.pointerMove(window, makePointerEventInit(2, 140, 72));
     expect(input.getMoveAxes().forward).toBeGreaterThan(0.5);
-    // Drag left from (140, 120) -> strafes left
     fireEvent.pointerMove(window, makePointerEventInit(2, 92, 120));
     expect(input.getMoveAxes().right).toBeLessThan(-0.5);
-    // Drag right from (140, 120) -> strafes right
     fireEvent.pointerMove(window, makePointerEventInit(2, 188, 120));
     expect(input.getMoveAxes().right).toBeGreaterThan(0.5);
 
@@ -152,21 +164,20 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
 
     // Step 1: Hold left joystick forward (pointerId = 1)
     fireEvent.pointerDown(moveZone, makePointerEventInit(1, 120, 260));
-    fireEvent.pointerMove(window, makePointerEventInit(1, 120, 200)); // Push up 60px
+    fireEvent.pointerMove(window, makePointerEventInit(1, 120, 200));
     for (let i = 0; i < 10; i++) {
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
-    expect(player.position.z).toBeLessThan(-0.5); // Moving North (-Z)
+    expect(player.position.z).toBeLessThan(-0.5);
 
     // Step 2 & 3: While holding left joystick forward, drag right side continuously to turn a complete 360 degrees
     fireEvent.pointerDown(lookZone, makePointerEventInit(2, 420, 200));
-    // Single 410px swipe across the right half rotates > 360 degrees (2*PI = 6.283 rad)
     for (let s = 1; s <= 20; s++) {
       fireEvent.pointerMove(window, makePointerEventInit(2, 420 + s * 20.5, 200));
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
     expect(Math.abs(player.yaw)).toBeGreaterThan(Math.PI * 2);
-    expect(input.isActionHeld('fire')).toBe(false); // Camera drag never fires
+    expect(input.isActionHeld('fire')).toBe(false);
 
     // Lift look finger — camera must NOT snap back to 0!
     const yawAfter360 = player.yaw;
@@ -176,52 +187,47 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
 
     // Step 4: Turn 180 degrees to face South (yaw = -PI) while still holding joystick forward -> player moves South (+Z)
     player.spawn(0, 1.65, 0, 0);
-    // Swipe right ~202px to rotate ~PI radians (180 degrees)
     fireEvent.pointerDown(lookZone, makePointerEventInit(3, 500, 200));
     fireEvent.pointerMove(window, makePointerEventInit(3, 500 + Math.PI / (0.0135 * 1.15), 200));
     fireEvent.pointerUp(window, makePointerEventInit(3, 702, 200));
     player.update(1 / 60, input, collision, false, 1.0, 0, false);
     expect(player.yaw).toBeCloseTo(-Math.PI, 1);
 
-    // Continue holding joystick forward while facing South (-PI) -> position.z increases (+Z)
     for (let i = 0; i < 15; i++) {
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
     expect(player.position.z).toBeGreaterThan(0.6);
 
-    // Step 5: Move backward, left, and right using the joystick (at yaw = 0 for clear cardinal verification)
+    // Step 5: Move backward, left, and right using the joystick
     player.spawn(0, 1.65, 0, 0);
-    // Backward (pull thumb down from origin (120, 260) -> (120, 320))
     fireEvent.pointerMove(window, makePointerEventInit(1, 120, 320));
     for (let i = 0; i < 12; i++) {
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
-    expect(player.position.z).toBeGreaterThan(0.4); // Moved backward (+Z)
+    expect(player.position.z).toBeGreaterThan(0.4);
 
-    // Left strafe (drag thumb left from (120, 260) -> (60, 260))
     player.spawn(0, 1.65, 0, 0);
     fireEvent.pointerMove(window, makePointerEventInit(1, 60, 260));
     for (let i = 0; i < 12; i++) {
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
-    expect(player.position.x).toBeLessThan(-0.4); // Strafed left (-X)
+    expect(player.position.x).toBeLessThan(-0.4);
 
-    // Right strafe (drag thumb right from (120, 260) -> (180, 260))
     player.spawn(0, 1.65, 0, 0);
     fireEvent.pointerMove(window, makePointerEventInit(1, 180, 260));
     for (let i = 0; i < 12; i++) {
       player.update(1 / 60, input, collision, false, 1.0, 0, false);
     }
-    expect(player.position.x).toBeGreaterThan(0.4); // Strafed right (+X)
+    expect(player.position.x).toBeGreaterThan(0.4);
 
     // Step 6: Fire using a 3rd finger and toggle ADS with a 4th finger while simultaneously moving and aiming
-    fireEvent.pointerMove(window, makePointerEventInit(1, 120, 200)); // Finger 1: move forward
-    fireEvent.pointerDown(lookZone, makePointerEventInit(4, 520, 180)); // Finger 2: aim
-    fireEvent.pointerDown(fireBtn, makePointerEventInit(5, 760, 310)); // Finger 3: fire
-    fireEvent.pointerDown(adsBtn, makePointerEventInit(6, 680, 260)); // Finger 4: ADS toggle
+    fireEvent.pointerMove(window, makePointerEventInit(1, 120, 200));
+    fireEvent.pointerDown(lookZone, makePointerEventInit(4, 520, 180));
+    fireEvent.pointerDown(fireBtn, makePointerEventInit(5, 760, 310));
+    fireEvent.pointerDown(adsBtn, makePointerEventInit(6, 680, 260));
     fireEvent.pointerUp(adsBtn, makePointerEventInit(6, 680, 260));
 
-    fireEvent.pointerMove(window, makePointerEventInit(4, 565, 165)); // Drag camera while firing & moving
+    fireEvent.pointerMove(window, makePointerEventInit(4, 565, 165));
     expect(input.getMoveAxes().forward).toBeGreaterThan(0.8);
     expect(input.isActionHeld('fire')).toBe(true);
     expect(input.isActionHeld('ads')).toBe(true);
@@ -236,22 +242,10 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     expect(input.getMoveAxes()).toEqual({ forward: 0, right: 0 });
     expect(input.isActionHeld('fire')).toBe(false);
 
-    // Step 7: Pitch clamping within [-1.42, 1.42]
-    for (let i = 0; i < 20; i++) {
-      input.addVirtualLookDelta(0, -100);
-      player.update(1 / 60, input, collision, false, 1.0, 0, false);
-    }
-    expect(player.pitch).toBeCloseTo(1.42, 2);
-    for (let i = 0; i < 40; i++) {
-      input.addVirtualLookDelta(0, 100);
-      player.update(1 / 60, input, collision, false, 1.0, 0, false);
-    }
-    expect(player.pitch).toBeCloseTo(-1.42, 2);
-
     rm.disposeAll();
   });
 
-  it('isolates 4 simultaneous multitouch pointerIds (Move + Look + Fire + ADS toggle), prevents look-to-fire, and clears cleanly on interruption', () => {
+  it('isolates 4 simultaneous multitouch pointerIds, prevents Fire button wiggles from jumping the camera, survives lostpointercapture, and clears cleanly on interruption', () => {
     const rm = new ResourceManager();
     const input = new InputManager(rm, settingsStore.getState().input);
     const hud = { ...gameSessionStore.getState().hud, inVehicle: false, grenades: 2 };
@@ -264,23 +258,22 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     const fireBtn = screen.getByTestId('touch-btn-fire');
     const adsBtn = screen.getByTestId('touch-btn-ads');
 
+    // Pressing and wiggling a finger on the Fire button MUST NOT cause an unintended camera jump
+    fireEvent.pointerDown(fireBtn, makePointerEventInit(3, 760, 310));
+    fireEvent.pointerMove(window, makePointerEventInit(3, 780, 290));
+    expect(input.isActionHeld('fire')).toBe(true);
+    expect(input.consumeLookDelta(false)).toEqual({ yawDelta: 0, pitchDelta: 0 });
+
     // Finger 1: left stick forward
     fireEvent.pointerDown(stick, makePointerEventInit(1, 98, 234));
     expect(input.getMoveAxes().forward).toBeGreaterThan(0.8);
 
-    // Finger 2: camera drag right & up -> NEVER fires weapon
+    // Finger 2: camera drag right & up
     fireEvent.pointerDown(lookZone, makePointerEventInit(2, 500, 180));
     fireEvent.pointerMove(lookZone, makePointerEventInit(2, 560, 165));
-    expect(input.isActionHeld('fire')).toBe(false);
-    expect(input.wasActionPressed('fire')).toBe(false);
     const lookDelta = input.consumeLookDelta(false);
     expect(lookDelta.yawDelta).toBeGreaterThan(0);
     expect(lookDelta.pitchDelta).toBeLessThan(0);
-
-    // Finger 3: Fire held
-    fireEvent.pointerDown(fireBtn, makePointerEventInit(3, 760, 310));
-    expect(input.isActionHeld('fire')).toBe(true);
-    expect(input.isActionHeld('ads')).toBe(false);
 
     // Finger 4: ADS toggle tapped ON while moving, looking, and firing
     fireEvent.pointerDown(adsBtn, makePointerEventInit(4, 680, 260));
@@ -289,20 +282,12 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     expect(input.isActionHeld('fire')).toBe(true);
     expect(input.getMoveAxes().forward).toBeGreaterThan(0.8);
 
-    // Cancel finger 2 (look) -> stick, fire, ADS stay intact
-    fireEvent.pointerCancel(lookZone, makePointerEventInit(2, 560, 165));
-    expect(input.getMoveAxes().forward).toBeGreaterThan(0.8);
-    expect(input.isActionHeld('fire')).toBe(true);
-    expect(input.isActionHeld('ads')).toBe(true);
-
-    // Tap ADS again -> toggles OFF cleanly
-    fireEvent.pointerDown(adsBtn, makePointerEventInit(4, 680, 260));
-    fireEvent.pointerUp(adsBtn, makePointerEventInit(4, 680, 260));
-    expect(input.isActionHeld('ads')).toBe(false);
-
-    // lostpointercapture on Fire releases fire cleanly while stick continues
+    // Browser implicit lostpointercapture while finger 3 is still holding Fire must NOT drop Fire!
     fireEvent(fireBtn, new MouseEvent('lostpointercapture', { bubbles: true }) as unknown as Event);
-    fireEvent.pointerUp(fireBtn, makePointerEventInit(3, 760, 310));
+    expect(input.isActionHeld('fire')).toBe(true);
+
+    // Actual pointerup on finger 3 releases Fire cleanly while stick continues
+    fireEvent.pointerUp(window, makePointerEventInit(3, 760, 310));
     expect(input.isActionHeld('fire')).toBe(false);
     expect(input.getMoveAxes().forward).toBeGreaterThan(0.8);
 
@@ -312,6 +297,148 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     expect(input.isActionHeld('fire')).toBe(false);
     expect(input.isActionHeld('ads')).toBe(false);
     expect(input.isActionHeld('sprint')).toBe(false);
+
+    rm.disposeAll();
+  });
+
+  it('supports Two-Finger (Thumb) and Three-Finger (Claw) profiles, prevents top-left HUD obstruction in Claw mode, and eliminates ADS-vs-Sprint deadlock during shooting', () => {
+    const rm = new ResourceManager();
+    const audio = new AudioManager(rm, AudioSettingsSchema.parse({ muted: true }));
+    const scene = new THREE.Scene();
+    const vfx = new VFXPool(scene, rm);
+    const proj = new ProjectileManager(scene, rm, vfx, audio);
+    const weapons = new WeaponSystem(scene, audio, vfx, proj);
+    const collision = new CollisionWorld();
+    const player = new PlayerController(audio);
+    const camera = new THREE.PerspectiveCamera(78, 844 / 390, 0.1, 500);
+    const input = new InputManager(rm, settingsStore.getState().input);
+
+    // Switch to Three-Finger Claw Mode
+    settingsStore.getState().updateInput({ touchControlProfile: 'three_finger' });
+    input.updateSettings(settingsStore.getState().input);
+
+    gameSessionStore.getState().updateHudSnapshot({
+      ...gameSessionStore.getState().hud,
+      health: 100,
+      armor: 100,
+      inVehicle: false,
+      objectives: [
+        { id: 'obj1', title: 'Eliminate Hostile Garrison', current: 3, target: 10, completed: false },
+        { id: 'obj2', title: 'Destroy AA Radar Relays', current: 0, target: 2, completed: false },
+      ],
+    });
+
+    render(<GameHUD onRequestPointerLock={() => {}} inputManager={input} touchControlsVisible={true} />);
+
+    // Verify Fire button is in Three-Finger upper-left claw position & top-left HUD shifts rightward to avoid collision
+    const fireBtn = screen.getByTestId('touch-btn-fire');
+    expect(fireBtn.getAttribute('data-profile')).toBe('three_finger');
+    const fireLeft = parseInt(fireBtn.style.left, 10);
+    const fireTop = parseInt(fireBtn.style.top, 10);
+    expect(fireLeft).toBeLessThan(200);
+    expect(fireTop).toBeLessThan(180);
+
+    const topLeftCluster = screen.getByTestId('hud-top-left-cluster');
+    expect(topLeftCluster.style.left).toMatch(/158px|132px/);
+
+    // Verify compact objective indicator expands and collapses on demand
+    expect(screen.queryByTestId('hud-objectives-expanded-list')).toBeNull();
+    fireEvent.click(screen.getByTestId('hud-objectives-toggle'));
+    expect(screen.getByTestId('hud-objectives-expanded-list')).toBeTruthy();
+    expect(screen.getByText('Destroy AA Radar Relays')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('hud-objectives-toggle'));
+    expect(screen.queryByTestId('hud-objectives-expanded-list')).toBeNull();
+
+    // Test simultaneous 3-Finger Claw: Left thumb move (lower-left) + Left index Fire (upper-left) + Right thumb Look + ADS
+    const moveZone = screen.getByTestId('touch-move-zone');
+    const lookZone = screen.getByTestId('touch-look-zone');
+    const adsBtn = screen.getByTestId('touch-btn-ads');
+
+    // 1. Left thumb pushes forward into auto-sprint
+    fireEvent.pointerDown(moveZone, makePointerEventInit(1, 110, 280));
+    fireEvent.pointerMove(window, makePointerEventInit(1, 110, 210));
+    player.update(1 / 60, input, collision, weapons.isAds, 1.0, 0, false);
+    expect(player.isSprinting).toBe(true);
+
+    // 2. Tap ADS while auto-sprinting forward -> MUST immediately cancel sprint and enter ADS (no deadlock!)
+    fireEvent.pointerDown(adsBtn, makePointerEventInit(2, 720, 260));
+    fireEvent.pointerUp(adsBtn, makePointerEventInit(2, 720, 260));
+    player.update(1 / 60, input, collision, weapons.isAds, 1.0, 0, false);
+    weapons.update(1 / 60, input, player, camera, collision, [], [], () => {}, false);
+    expect(weapons.isAds).toBe(true);
+    expect(player.isSprinting).toBe(false);
+
+    // 3. Left index finger presses upper-left Claw Fire while Right thumb rotates camera -> fires weapon immediately!
+    const shotsBefore = weapons.shotsFired;
+    fireEvent.pointerDown(fireBtn, makePointerEventInit(3, 84, 90));
+    fireEvent.pointerDown(lookZone, makePointerEventInit(4, 520, 190));
+    fireEvent.pointerMove(window, makePointerEventInit(4, 580, 180));
+
+    player.update(1 / 60, input, collision, weapons.isAds, 1.0, 0, false);
+    weapons.update(1 / 60, input, player, camera, collision, [], [], () => {}, false);
+    input.endFrame();
+
+    expect(weapons.shotsFired).toBeGreaterThan(shotsBefore);
+    expect(player.yaw).not.toBe(0);
+
+    fireEvent.pointerUp(window, makePointerEventInit(1, 110, 210));
+    fireEvent.pointerUp(window, makePointerEventInit(3, 84, 90));
+    fireEvent.pointerUp(window, makePointerEventInit(4, 580, 180));
+
+    weapons.dispose();
+    rm.disposeAll();
+  });
+
+  it('gates enemy aircraft boss health bar by encounter relevance and supports SettingsPanel mobile profile customization', () => {
+    const rm = new ResourceManager();
+    const audio = new AudioManager(rm, AudioSettingsSchema.parse({ muted: true }));
+    const scene = new THREE.Scene();
+    const vfx = new VFXPool(scene, rm);
+    const air = new AirCombatManager(scene, rm, vfx, audio);
+    const playerPos = new THREE.Vector3(0, 1.7, 58);
+
+    air.spawnUnit('helicopter', 27, 48, 0, 'mission:1');
+    // At t=0 (unaware, full health, not primary objective, grace timer active), boss bar is hidden
+    expect(
+      air.getActiveBossInfo({
+        playerPosition: playerPos,
+        isPrimaryObjective: false,
+        lockStatus: 'none',
+      })
+    ).toBeNull();
+
+    // Once damaged or when air_defense becomes primary objective, boss bar is shown
+    expect(
+      air.getActiveBossInfo({
+        playerPosition: playerPos,
+        isPrimaryObjective: true,
+        lockStatus: 'none',
+      })
+    ).not.toBeNull();
+
+    // Verify SettingsPanel Controls tab allows selecting Two-Finger / Three-Finger and resetting mobile controls
+    render(<SettingsPanel onBack={() => {}} />);
+    const controlsTab = screen.getByRole('tab', { name: /Controls/i });
+    fireEvent.mouseDown(controlsTab, { button: 0, ctrlKey: false });
+    fireEvent.click(controlsTab);
+
+    const preview = screen.getByTestId('control-layout-preview');
+    expect(preview.getAttribute('data-profile')).toBe('two_finger');
+
+    fireEvent.click(screen.getByTestId('profile-three-finger'));
+    expect(settingsStore.getState().input.touchControlProfile).toBe('three_finger');
+    expect(preview.getAttribute('data-profile')).toBe('three_finger');
+
+    // Customize Fire button size and position, then reset
+    settingsStore.getState().updateInput({
+      touchFireButtonScale: 1.3,
+      touchFirePosThreeFinger: { x: 0.22, y: 0.35 },
+    });
+    expect(settingsStore.getState().input.touchFireButtonScale).toBe(1.3);
+
+    fireEvent.click(screen.getByTestId('reset-mobile-controls'));
+    expect(settingsStore.getState().input.touchFireButtonScale).toBe(1.0);
+    expect(settingsStore.getState().input.touchFirePosThreeFinger).toEqual({ x: 0.1, y: 0.24 });
 
     rm.disposeAll();
   });

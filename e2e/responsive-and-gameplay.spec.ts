@@ -34,7 +34,7 @@ for (const vp of LANDSCAPE_VIEWPORTS) {
 
     // First-time Play Campaign -> Campaign Briefing & Difficulty screen
     await page.getByRole('button', { name: /Play Campaign/i }).click();
-    await expect(page.getByText(/Operation Briefing/i)).toBeVisible();
+    await expect(page.getByText(/Mission Briefing & Difficulty/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /Deploy Operation/i })).toBeVisible();
 
     const briefingOverflow = await page.evaluate(
@@ -99,6 +99,19 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await expect(page.getByTestId('touch-btn-tactical-drawer')).toBeVisible();
   await expect(page.getByRole('button', { name: /Pause Mission/i })).toBeVisible();
 
+  // Compact Top HUD verification: compact objective indicator, single-line compass strip, inline weapon readout, and encounter-gated boss bar
+  await expect(page.getByTestId('hud-objectives-compact')).toBeVisible();
+  await expect(page.getByTestId('hud-compass-strip')).toBeVisible();
+  await expect(page.getByTestId('hud-compact-weapon-readout')).toBeVisible();
+  await expect(page.getByTestId('hud-boss-bar')).toHaveCount(0);
+
+  // Expand and collapse objective list
+  await expect(page.getByTestId('hud-objectives-expanded-list')).toHaveCount(0);
+  await page.getByTestId('hud-objectives-toggle').click();
+  await expect(page.getByTestId('hud-objectives-expanded-list')).toBeVisible();
+  await page.getByTestId('hud-objectives-toggle').click();
+  await expect(page.getByTestId('hud-objectives-expanded-list')).toHaveCount(0);
+
   // Simplified HUD: redundant weapon prev/next arrows & always-visible sprint button are absent
   await expect(page.getByTestId('touch-btn-weapon-prev')).toHaveCount(0);
   await expect(page.getByTestId('touch-btn-weapon-next')).toHaveCount(0);
@@ -161,47 +174,74 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
       );
     };
 
-    const waitFrames = (count: number) =>
-      new Promise<void>((resolve) => {
-        let rem = count;
-        const step = () => {
-          if (--rem <= 0) resolve();
-          else requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      });
+    const waitTick = (ms = 25) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
     // 1. Hold left joystick forward (pointerId = 10)
     dispatchPtr(moveZone, 'pointerdown', 10, 140, 260);
     dispatchPtr(window, 'pointermove', 10, 140, 195);
-    await waitFrames(8);
+    await waitTick(35);
 
     // 2. Simultaneously drag right look zone (pointerId = 11) across 420px to turn > 360 degrees while moving
     dispatchPtr(lookZone, 'pointerdown', 11, 400, 190);
-    for (let i = 1; i <= 15; i++) {
-      dispatchPtr(window, 'pointermove', 11, 400 + i * 28, 190);
-      await waitFrames(1);
+    for (let i = 1; i <= 8; i++) {
+      dispatchPtr(window, 'pointermove', 11, 400 + i * 52, 190);
+      await waitTick(15);
     }
-    dispatchPtr(window, 'pointerup', 11, 820, 190);
+    dispatchPtr(window, 'pointerup', 11, 816, 190);
 
     // 3. Fire with 3rd finger (pointerId = 12) while still moving
-    dispatchPtr(fireBtn, 'pointerdown', 12, 760, 310);
-    await waitFrames(6);
-    dispatchPtr(window, 'pointerup', 12, 760, 310);
+    dispatchPtr(fireBtn, 'pointerdown', 12, 740, 290);
+    await waitTick(40);
+    dispatchPtr(window, 'pointerup', 12, 740, 290);
 
     // 4. Pull joystick backward, then strafe left & right
     dispatchPtr(window, 'pointermove', 10, 140, 325);
-    await waitFrames(6);
+    await waitTick(30);
     dispatchPtr(window, 'pointermove', 10, 80, 260);
-    await waitFrames(6);
+    await waitTick(30);
     dispatchPtr(window, 'pointermove', 10, 200, 260);
-    await waitFrames(6);
+    await waitTick(30);
     dispatchPtr(window, 'pointerup', 10, 200, 260);
-    await waitFrames(4);
+    await waitTick(25);
 
     return { ok: true };
   });
   expect(multitouchResult.ok).toBe(true);
+
+  // Switch to Three-Finger Claw Mode from Pause -> Settings -> Resume & Test Controls
+  await page.getByRole('button', { name: /Pause Mission/i }).click();
+  await expect(page.getByRole('heading', { name: /Mission Paused/i })).toBeVisible();
+  await page.getByRole('button', { name: /Settings/i }).click();
+  await page.getByRole('tab', { name: /Controls & Keys/i }).click();
+  await expect(page.getByTestId('control-layout-preview')).toBeVisible();
+  await page.getByTestId('profile-three-finger').click();
+  await page.getByTestId('test-controls-in-mission').click();
+  await expect(page.getByTestId('touch-btn-fire')).toBeVisible();
+
+  // Verify Three-Finger Claw Mode places Fire button in upper-left without overlapping hud-top-left-cluster
+  const clawOverlapCheck = await page.evaluate(() => {
+    const fireEl = document.querySelector('[data-testid="touch-btn-fire"]');
+    const clusterEl = document.querySelector('[data-testid="hud-top-left-cluster"]');
+    if (!fireEl || !clusterEl) return { missing: true };
+    const fr = fireEl.getBoundingClientRect();
+    const cr = clusterEl.getBoundingClientRect();
+    const overlaps = !(
+      fr.right <= cr.left ||
+      fr.left >= cr.right ||
+      fr.bottom <= cr.top ||
+      fr.top >= cr.bottom
+    );
+    return {
+      missing: false,
+      fireInUpperLeft: fr.left < window.innerWidth * 0.3 && fr.top < window.innerHeight * 0.45,
+      overlaps,
+    };
+  });
+  expect(clawOverlapCheck).toEqual({
+    missing: false,
+    fireInUpperLeft: true,
+    overlaps: false,
+  });
 
   // Rotating into portrait mid-mission blocks with Rotate dialog and pauses the mission
   await page.setViewportSize({ width: 390, height: 844 });
