@@ -5,6 +5,7 @@ export interface ViewModelRig {
   root: THREE.Group;
   muzzleFlash: THREE.Mesh;
   slideOrBolt: THREE.Object3D | null;
+  slideRestZ: number;
 }
 
 export interface ViewModelMaterialBank {
@@ -124,10 +125,31 @@ export function buildWeaponViewModel(
     muzzleZ = -0.26;
     muzzleY = 0.028;
   } else if (weaponId === 'rocket_launcher') {
-    addPart(new THREE.CylinderGeometry(0.075, 0.075, 0.92, 14), oliveTube, 0, 0.02, -0.22, Math.PI / 2);
-    addPart(new THREE.CylinderGeometry(0.088, 0.082, 0.14, 14), darkPolymer, 0, 0.02, -0.66, Math.PI / 2); // cone
-    addPart(new THREE.BoxGeometry(0.05, 0.07, 0.08), opticGlass, -0.08, 0.05, -0.25);
-    muzzleZ = -0.75;
+    // RPG-7V / AT-4X Bazooka Launcher Tube, Heat Shield, Venturi Cone & Conical PG-7V Warhead
+    addPart(new THREE.CylinderGeometry(0.056, 0.056, 0.88, 14), oliveTube, 0, 0.02, -0.22, Math.PI / 2);
+    addPart(new THREE.CylinderGeometry(0.068, 0.068, 0.34, 14), darkPolymer, 0, 0.02, -0.18, Math.PI / 2); // heat shield
+    addPart(new THREE.CylinderGeometry(0.054, 0.092, 0.16, 14), steel, 0, 0.02, 0.24, Math.PI / 2); // rear venturi exhaust cone
+    addPart(new THREE.CylinderGeometry(0.072, 0.064, 0.1, 14), darkPolymer, 0, 0.02, -0.64, Math.PI / 2); // muzzle collar
+    addPart(new THREE.BoxGeometry(0.04, 0.11, 0.055), darkPolymer, 0, -0.06, -0.18); // forward grip
+    addPart(new THREE.BoxGeometry(0.046, 0.065, 0.08), opticGlass, -0.068, 0.055, -0.26); // optical iron sight
+    // Protruding conical PG-7V warhead (assigned to slideOrBolt so it recoils/hides when chamber is empty)
+    const warheadGroup = new THREE.Group();
+    warheadGroup.position.set(0, 0.02, -0.74);
+    const warheadBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.092, 0.044, 0.16, 14),
+      oliveTube
+    );
+    warheadBody.rotation.x = Math.PI / 2;
+    const warheadNose = new THREE.Mesh(
+      new THREE.ConeGeometry(0.092, 0.18, 14),
+      steel
+    );
+    warheadNose.rotation.x = -Math.PI / 2;
+    warheadNose.position.z = -0.17;
+    warheadGroup.add(warheadBody, warheadNose);
+    root.add(warheadGroup);
+    slideOrBolt = warheadGroup;
+    muzzleZ = -0.92;
     muzzleY = 0.02;
   } else if (weaponId === 'guided_missile') {
     addPart(new THREE.CylinderGeometry(0.082, 0.082, 0.98, 14), gunmetal, 0, 0.02, -0.22, Math.PI / 2);
@@ -150,6 +172,11 @@ export function buildWeaponViewModel(
   muzzleFlash.visible = false;
   root.add(muzzleFlash);
 
-  return { root, muzzleFlash, slideOrBolt };
+  return {
+    root,
+    muzzleFlash,
+    slideOrBolt,
+    slideRestZ: slideOrBolt ? slideOrBolt.position.z : 0,
+  };
 }
 

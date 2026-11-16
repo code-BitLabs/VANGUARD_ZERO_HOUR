@@ -3,10 +3,13 @@ import { useStore } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import {
   AccessibilitySettings,
+  cloneVehicleControlLayoutMap,
   ControlBindings,
+  DEFAULT_VEHICLE_CONTROL_MAP,
   DeveloperSettings,
   GraphicsSettings,
   InputSettings,
+  LEFT_HANDED_VEHICLE_CONTROL_MAP,
   SettingsBundle,
   SettingsBundleSchema,
 } from '@/src/schemas/settings.schema';
@@ -115,6 +118,14 @@ export const settingsStore = createStore<SettingsStoreState>()(
       } else if (patch.touchControlProfile === 'three_finger') {
         if (patch.leftFireEnabled === undefined) next.leftFireEnabled = true;
         if (patch.rightFireEnabled === undefined) next.rightFireEnabled = false;
+      }
+
+      if (patch.touchVehicleLeftHanded !== undefined && !patch.touchVehicleLayout) {
+        next.touchVehicleLayout = cloneVehicleControlLayoutMap(
+          patch.touchVehicleLeftHanded
+            ? LEFT_HANDED_VEHICLE_CONTROL_MAP
+            : DEFAULT_VEHICLE_CONTROL_MAP
+        );
       }
 
       // Synchronize legacy per-profile fire/ads positions into touchCustomLayout so all custom edits and presets stay coherent

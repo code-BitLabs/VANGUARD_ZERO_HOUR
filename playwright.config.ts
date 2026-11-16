@@ -1,4 +1,12 @@
+import fs from 'node:fs';
 import { defineConfig } from '@playwright/test';
+
+const FALLBACK_HEADLESS_SHELL =
+  '/ms-playwright/chromium_headless_shell-1247/chrome-headless-shell-linux64/chrome-headless-shell';
+
+const resolvedExecutablePath =
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+  (fs.existsSync(FALLBACK_HEADLESS_SHELL) ? FALLBACK_HEADLESS_SHELL : undefined);
 
 export default defineConfig({
   testDir: './e2e',
@@ -14,7 +22,9 @@ export default defineConfig({
     headless: true,
     trace: 'retain-on-failure',
     launchOptions: {
+      ...(resolvedExecutablePath ? { executablePath: resolvedExecutablePath } : {}),
       args: [
+        '--no-sandbox',
         '--use-gl=angle',
         '--use-angle=swiftshader',
         '--enable-webgl',

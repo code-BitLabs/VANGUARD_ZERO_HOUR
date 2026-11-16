@@ -6,6 +6,7 @@ export interface SceneLights {
   sun: THREE.DirectionalLight;
   fill: THREE.HemisphereLight;
   rim: THREE.DirectionalLight;
+  updateShadowFocus: (focusX: number, focusY: number, focusZ: number, shadowDistance: number) => void;
   dispose: () => void;
 }
 
@@ -106,7 +107,7 @@ export function setupLightingRig(
   sun.castShadow = shadowMapSize >= 512;
   sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
   sun.shadow.camera.near = 5;
-  sun.shadow.camera.far = 240;
+  sun.shadow.camera.far = 260;
   sun.shadow.camera.left = -shadowDistance;
   sun.shadow.camera.right = shadowDistance;
   sun.shadow.camera.top = shadowDistance;
@@ -115,6 +116,60 @@ export function setupLightingRig(
   sun.shadow.normalBias = 0.025;
   scene.add(sun);
   scene.add(sun.target);
+
+  const baseSunPos = new THREE.Vector3(...p.sunPos);
+  const sunForward = baseSunPos.clone().negate().normalize();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const sunRight = new THREE.Vector3().crossVectors(sunForward, worldUp);
+  if (sunRight.lengthSq() < 1e-6) {
+    sunRight.set(1, 0, 0);
+  } else {
+    sunRight.normalize();
+  }
+  const sunUp = new THREE.Vector3().crossVectors(sunRight, sunForward).normalize();
+  const scratchFocus = new THREE.Vector3();
+  const scratchSnappedTarget = new THREE.Vector3();
+
+  const updateShadowFocus = (
+    focusX: number,
+    focusY: number,
+    focusZ: number,
+    activeShadowDistance: number
+  ): void => {
+    if (!sun.castShadow || sun.shadow.mapSize.x < 512 || activeShadowDistance <= 0) return;
+
+    const mapSize = sun.shadow.mapSize.x;
+    const texelSize = (activeShadowDistance * 2) / mapSize;
+    if (
+      Math.abs(sun.shadow.camera.right - activeShadowDistance) > 0.01 ||
+      Math.abs(sun.shadow.camera.left + activeShadowDistance) > 0.01
+    ) {
+      sun.shadow.camera.left = -activeShadowDistance;
+      sun.shadow.camera.right = activeShadowDistance;
+      sun.shadow.camera.top = activeShadowDistance;
+      sun.shadow.camera.bottom = -activeShadowDistance;
+      sun.shadow.camera.updateProjectionMatrix();
+    }
+
+    scratchFocus.set(focusX, focusY, focusZ);
+    const snappedRight = Math.round(scratchFocus.dot(sunRight) / texelSize) * texelSize;
+    const snappedUp = Math.round(scratchFocus.dot(sunUp) / texelSize) * texelSize;
+    const depthStep = Math.max(1, texelSize * 8);
+    const forwardProj = Math.round(scratchFocus.dot(sunForward) / depthStep) * depthStep;
+
+    scratchSnappedTarget
+      .set(0, 0, 0)
+      .addScaledVector(sunRight, snappedRight)
+      .addScaledVector(sunUp, snappedUp)
+      .addScaledVector(sunForward, forwardProj);
+
+    sun.target.position.copy(scratchSnappedTarget);
+    sun.position.copy(scratchSnappedTarget).add(baseSunPos);
+    sun.target.updateMatrixWorld();
+    sun.updateMatrixWorld();
+  };
+
+  updateShadowFocus(0, 0, 0, shadowDistance);
 
   const rim = new THREE.DirectionalLight(p.rimColor, 0.55);
   rim.position.set(-p.sunPos[0], 45, -p.sunPos[2]);
@@ -129,5 +184,5 @@ export function setupLightingRig(
   };
 
   resourceManager.register('other', 'mission:lights', dispose);
-  return { sun, fill, rim, dispose };
+  return { sun, fill, rim, updateShadowFocus, dispose };
 }

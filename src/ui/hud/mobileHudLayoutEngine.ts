@@ -1,10 +1,14 @@
 import {
   DEFAULT_THREE_FINGER_CONTROL_MAP,
   DEFAULT_TWO_FINGER_CONTROL_MAP,
+  DEFAULT_VEHICLE_CONTROL_MAP,
   InputSettings,
+  LEFT_HANDED_VEHICLE_CONTROL_MAP,
   TouchControlId,
   TouchControlLayoutMap,
   TouchControlNodeConfig,
+  VehicleTouchControlId,
+  VehicleTouchControlLayoutMap,
 } from '@/src/schemas/settings.schema';
 
 export type TouchInteractionZone = 'left_move' | 'left_claw' | 'right_aim' | 'bottom_center';
@@ -22,6 +26,25 @@ export interface ComputedTouchControlRect {
   shortLabel: string;
   zone: TouchInteractionZone;
   anchor: TouchControlAnchor;
+  visible: boolean;
+  zIndex: number;
+  minHitboxPx: number;
+  priority: number;
+  normalized: TouchControlNodeConfig;
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  centerX: number;
+  centerY: number;
+}
+
+export interface ComputedVehicleTouchControlRect {
+  id: VehicleTouchControlId;
+  label: string;
+  shortLabel: string;
   visible: boolean;
   zIndex: number;
   minHitboxPx: number;
@@ -69,6 +92,24 @@ export interface ComputedMobileHudLayout {
   visibleControls: ComputedTouchControlRect[];
   collisionsResolved: number;
   overlappingPairs: Array<[TouchControlId, TouchControlId]>;
+}
+
+export interface ComputedMobileVehicleHudLayout {
+  viewportWidth: number;
+  viewportHeight: number;
+  safeBounds: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+  topHudKeepOutBottomPx: number;
+  steeringMode: 'buttons' | 'wheel';
+  leftHanded: boolean;
+  controls: Record<VehicleTouchControlId, ComputedVehicleTouchControlRect>;
+  visibleControls: ComputedVehicleTouchControlRect[];
+  collisionsResolved: number;
+  overlappingPairs: Array<[VehicleTouchControlId, VehicleTouchControlId]>;
 }
 
 const CONTROL_METADATA: Record<
@@ -121,7 +162,7 @@ const CONTROL_METADATA: Record<
   },
   weapon_bar: {
     label: 'Weapon & Tactical Bar',
-    shortLabel: 'WEAPON / KIT',
+    shortLabel: 'WEAPON / RPG',
     zone: 'bottom_center',
     anchor: 'bottom_center',
     zIndex: 26,
@@ -154,6 +195,74 @@ const CONTROL_METADATA: Record<
     zIndex: 25,
     minHitboxPx: 44,
     priority: 6,
+  },
+};
+
+const VEHICLE_CONTROL_METADATA: Record<
+  VehicleTouchControlId,
+  {
+    label: string;
+    shortLabel: string;
+    zIndex: number;
+    minHitboxPx: number;
+    priority: number;
+  }
+> = {
+  veh_steer_left: {
+    label: 'Steer Left / Wheel',
+    shortLabel: 'LEFT',
+    zIndex: 28,
+    minHitboxPx: 58,
+    priority: 10,
+  },
+  veh_steer_right: {
+    label: 'Steer Right',
+    shortLabel: 'RIGHT',
+    zIndex: 28,
+    minHitboxPx: 58,
+    priority: 10,
+  },
+  veh_gas: {
+    label: 'Gas / Accelerate Pedal',
+    shortLabel: 'GAS',
+    zIndex: 28,
+    minHitboxPx: 58,
+    priority: 10,
+  },
+  veh_brake_reverse: {
+    label: 'Brake / Reverse Pedal',
+    shortLabel: 'BRAKE/REV',
+    zIndex: 27,
+    minHitboxPx: 54,
+    priority: 9,
+  },
+  veh_handbrake: {
+    label: 'Handbrake / Drift',
+    shortLabel: 'H-BRAKE',
+    zIndex: 26,
+    minHitboxPx: 46,
+    priority: 7,
+  },
+  veh_fire: {
+    label: 'Vehicle Roof Turret Fire',
+    shortLabel: 'TURRET',
+    zIndex: 27,
+    minHitboxPx: 52,
+    priority: 8,
+  },
+  veh_camera: {
+    label: 'Cycle Vehicle Camera',
+    shortLabel: 'CAM',
+    zIndex: 26,
+    minHitboxPx: 44,
+    priority: 6,
+  },
+  veh_exit: {
+    label: 'Exit Vehicle',
+    shortLabel: 'EXIT',
+    zIndex: 26,
+    minHitboxPx: 48,
+    priority: 8,
   },
 };
 
@@ -214,7 +323,6 @@ export function resolveActiveControlMap(input: InputSettings): TouchControlLayou
     };
   }
 
-  // Custom profile uses touchCustomLayout with fallback to two-finger defaults
   const custom = input.touchCustomLayout ?? DEFAULT_TWO_FINGER_CONTROL_MAP;
   return {
     move_joystick: { ...(custom.move_joystick ?? DEFAULT_TWO_FINGER_CONTROL_MAP.move_joystick) },
@@ -228,6 +336,23 @@ export function resolveActiveControlMap(input: InputSettings): TouchControlLayou
   };
 }
 
+export function resolveActiveVehicleControlMap(input: InputSettings): VehicleTouchControlLayoutMap {
+  const fallback = input.touchVehicleLeftHanded
+    ? LEFT_HANDED_VEHICLE_CONTROL_MAP
+    : DEFAULT_VEHICLE_CONTROL_MAP;
+  const custom = input.touchVehicleLayout ?? fallback;
+  return {
+    veh_steer_left: { ...(custom.veh_steer_left ?? fallback.veh_steer_left) },
+    veh_steer_right: { ...(custom.veh_steer_right ?? fallback.veh_steer_right) },
+    veh_gas: { ...(custom.veh_gas ?? fallback.veh_gas) },
+    veh_brake_reverse: { ...(custom.veh_brake_reverse ?? fallback.veh_brake_reverse) },
+    veh_handbrake: { ...(custom.veh_handbrake ?? fallback.veh_handbrake) },
+    veh_fire: { ...(custom.veh_fire ?? fallback.veh_fire) },
+    veh_camera: { ...(custom.veh_camera ?? fallback.veh_camera) },
+    veh_exit: { ...(custom.veh_exit ?? fallback.veh_exit) },
+  };
+}
+
 export function resolveFireVisibility(input: InputSettings): {
   leftFireVisible: boolean;
   rightFireVisible: boolean;
@@ -235,7 +360,6 @@ export function resolveFireVisibility(input: InputSettings): {
   let left = Boolean(input.leftFireEnabled);
   let right = Boolean(input.rightFireEnabled);
 
-  // Enforce non-negotiable safety invariant: at least one Fire control is always visible
   if (!left && !right) {
     if (input.touchControlProfile === 'three_finger') {
       left = true;
@@ -247,7 +371,10 @@ export function resolveFireVisibility(input: InputSettings): {
 }
 
 function updateRectFromCenter(
-  rect: ComputedTouchControlRect,
+  rect: Pick<
+    ComputedTouchControlRect,
+    'width' | 'height' | 'centerX' | 'centerY' | 'left' | 'top' | 'right' | 'bottom'
+  >,
   cx: number,
   cy: number,
   bounds: { left: number; top: number; right: number; bottom: number },
@@ -304,7 +431,6 @@ export function computeMobileHudLayout(
     bottom: vh - safeBottom,
   };
 
-  // Account for reduced viewport height in in-app browsers (e.g., Instagram in-app browser ~310px tall)
   const heightCompactFactor = clamp(vh / 390, 0.8, 1.08);
   const topHudKeepOutBottomPx = Math.round(safeTop + clamp(vh * 0.14, 44, 58));
 
@@ -314,7 +440,6 @@ export function computeMobileHudLayout(
   const grenadeCount = options.grenadeCount ?? 2;
   const c4DeployedCount = options.c4DeployedCount ?? 0;
 
-  // Compute pixel dimensions for each control while enforcing >= 44px minimum touch hitboxes
   const stickSize = Math.round(
     clamp(116 * input.touchJoystickScale * activeMap.move_joystick.scale * heightCompactFactor, 96, 154)
   );
@@ -338,7 +463,7 @@ export function computeMobileHudLayout(
   const secondarySize = (nodeScale: number) =>
     Math.round(clamp(45 * input.touchButtonScale * nodeScale * heightCompactFactor, 44, 64));
 
-  // Bottom-center tactical bar width adapts to active contextual items (Weapon Switch + Kit + optional Grenade/C4)
+  // Bottom-center tactical bar includes Weapon Switch + 1-Tap RPG + Kit + optional Grenade/C4
   const extraItemsCount = (grenadeCount > 0 ? 1 : 0) + (c4DeployedCount > 0 ? 1 : 0);
   const weaponBarHeight = Math.round(
     clamp(44 * input.touchButtonScale * activeMap.weapon_bar.scale * heightCompactFactor, 44, 56)
@@ -347,10 +472,10 @@ export function computeMobileHudLayout(
     ? 124
     : Math.round(
         clamp(
-          (136 + extraItemsCount * 52) *
-            Math.min(1.12, input.touchButtonScale * activeMap.weapon_bar.scale * heightCompactFactor),
-          132,
-          Math.max(150, vw * 0.34)
+          (188 + extraItemsCount * 46) *
+            Math.min(1.08, input.touchButtonScale * activeMap.weapon_bar.scale * heightCompactFactor),
+          176,
+          Math.max(196, vw * 0.34)
         )
       );
 
@@ -417,12 +542,26 @@ export function computeMobileHudLayout(
     ),
     ads: buildInitialRect('ads', adsSize, adsSize, !inVehicle, adsOffsetX, adsOffsetY),
     weapon_bar: buildInitialRect('weapon_bar', weaponBarWidth, weaponBarHeight, true),
-    reload: buildInitialRect('reload', secondarySize(activeMap.reload.scale), secondarySize(activeMap.reload.scale), !inVehicle),
-    crouch: buildInitialRect('crouch', secondarySize(activeMap.crouch.scale), secondarySize(activeMap.crouch.scale), !inVehicle),
-    jump: buildInitialRect('jump', secondarySize(activeMap.jump.scale), secondarySize(activeMap.jump.scale), !inVehicle),
+    reload: buildInitialRect(
+      'reload',
+      secondarySize(activeMap.reload.scale),
+      secondarySize(activeMap.reload.scale),
+      !inVehicle
+    ),
+    crouch: buildInitialRect(
+      'crouch',
+      secondarySize(activeMap.crouch.scale),
+      secondarySize(activeMap.crouch.scale),
+      !inVehicle
+    ),
+    jump: buildInitialRect(
+      'jump',
+      secondarySize(activeMap.jump.scale),
+      secondarySize(activeMap.jump.scale),
+      !inVehicle
+    ),
   };
 
-  // Enforce vertical separation between Left Index Fire (upper-left) and Left Move Stick (lower-left)
   if (controls.fire_left.visible && controls.move_joystick.visible) {
     const minStickTop = controls.fire_left.bottom + 10;
     if (controls.move_joystick.top < minStickTop && controls.fire_left.left < vw * 0.4) {
@@ -436,7 +575,6 @@ export function computeMobileHudLayout(
     }
   }
 
-  // Keep all interactive controls out of the central 48x48px crosshair box
   const crosshairBox = {
     left: Math.round(vw / 2 - 24),
     right: Math.round(vw / 2 + 24),
@@ -454,7 +592,6 @@ export function computeMobileHudLayout(
     }
   }
 
-  // Deterministic iterative collision-resolution solver (guarantees >= 8px gap between interactive hitboxes)
   const minGapPx = 8;
   let collisionsResolved = 0;
 
@@ -468,10 +605,8 @@ export function computeMobileHudLayout(
 
         if (!doRectsOverlap(a, b, minGapPx)) continue;
 
-        const overlapX =
-          Math.min(a.right, b.right) - Math.max(a.left, b.left) + minGapPx;
-        const overlapY =
-          Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) + minGapPx;
+        const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left) + minGapPx;
+        const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) + minGapPx;
 
         if (overlapX <= 0 || overlapY <= 0) continue;
 
@@ -482,7 +617,6 @@ export function computeMobileHudLayout(
           dy = 12;
         }
 
-        // Push along axis of least penetration (or radial vector for circular buttons)
         let pushX = 0;
         let pushY = 0;
         if (overlapX < overlapY) {
@@ -491,7 +625,6 @@ export function computeMobileHudLayout(
           pushY = (dy >= 0 ? 1 : -1) * (overlapY + 1);
         }
 
-        // Weight displacement by inverse priority so primary controls (Fire, Joystick) stay stable
         const totalPrio = a.priority + b.priority;
         const weightA = a.priority > b.priority ? 0.15 : a.priority < b.priority ? 0.85 : 0.5;
         const weightB = totalPrio > 0 ? 1 - weightA : 0.5;
@@ -522,7 +655,6 @@ export function computeMobileHudLayout(
     if (!anyMovedInPass) break;
   }
 
-  // Record any residual zero-gap overlaps (should be 0 across all supported viewports)
   const overlappingPairs: Array<[TouchControlId, TouchControlId]> = [];
   for (let i = 0; i < visibleList.length; i++) {
     for (let j = i + 1; j < visibleList.length; j++) {
@@ -532,7 +664,6 @@ export function computeMobileHudLayout(
     }
   }
 
-  // Compute Top-Left HUD shift & Left Move Zone boundary when Left Fire is active in the upper-left quadrant
   const fireLeft = controls.fire_left;
   const leftFireInTopLeft =
     fireLeft.visible && fireLeft.left < vw * 0.36 && fireLeft.top < vh * 0.48;
@@ -553,6 +684,194 @@ export function computeMobileHudLayout(
     topLeftHudLeftPx,
     leftMoveZoneTopPx,
     leftMoveZoneRightRatio: 0.4,
+    controls,
+    visibleControls: visibleList,
+    collisionsResolved,
+    overlappingPairs,
+  };
+}
+
+/**
+ * Authoritative layout engine for the PUBG Mobile-inspired VANGUARD Vehicle Driving HUD.
+ * Supports Button Steering (Dedicated Left/Right arrows) or Virtual Steering Wheel mode,
+ * Left-Handed preset (pedals on left, steering on right), per-control normalized positions/scales,
+ * and automatic pairwise collision resolution.
+ */
+export function computeMobileVehicleHudLayout(
+  input: InputSettings,
+  viewport: HudLayoutViewportInput
+): ComputedMobileVehicleHudLayout {
+  const vw = Math.max(320, Math.round(viewport.width || 844));
+  const vh = Math.max(240, Math.round(viewport.height || 390));
+
+  const safeLeft = Math.max(10, Math.round(viewport.safeLeft ?? 12));
+  const safeRight = Math.max(10, Math.round(viewport.safeRight ?? 12));
+  const safeTop = Math.max(8, Math.round(viewport.safeTop ?? 8));
+  const safeBottom = Math.max(10, Math.round(viewport.safeBottom ?? 10));
+
+  const safeBounds = {
+    left: safeLeft,
+    top: safeTop,
+    right: vw - safeRight,
+    bottom: vh - safeBottom,
+  };
+
+  const heightCompactFactor = clamp(vh / 390, 0.78, 1.08);
+  const topHudKeepOutBottomPx = Math.round(safeTop + clamp(vh * 0.14, 44, 58));
+
+  const activeMap = resolveActiveVehicleControlMap(input);
+  const steeringMode = input.touchVehicleSteeringMode ?? 'buttons';
+  const baseScale = (input.touchVehicleButtonScale ?? 1.0) * heightCompactFactor;
+
+  const buildVehRect = (
+    id: VehicleTouchControlId,
+    width: number,
+    height: number,
+    visible: boolean
+  ): ComputedVehicleTouchControlRect => {
+    const meta = VEHICLE_CONTROL_METADATA[id];
+    const node = activeMap[id];
+    const scale = clamp(node.scale ?? 1.0, 0.7, 1.45);
+    const finalW = Math.max(meta.minHitboxPx, Math.round(width * baseScale * scale));
+    const finalH = Math.max(meta.minHitboxPx, Math.round(height * baseScale * scale));
+
+    // In wheel mode, center the wheel between steer_left and steer_right x coordinates
+    let rawCx = node.x * vw;
+    const rawCy = node.y * vh;
+    if (id === 'veh_steer_left' && steeringMode === 'wheel') {
+      rawCx = ((activeMap.veh_steer_left.x + activeMap.veh_steer_right.x) * 0.5) * vw;
+    }
+
+    const rect: ComputedVehicleTouchControlRect = {
+      id,
+      label: id === 'veh_steer_left' && steeringMode === 'wheel' ? 'Steering Wheel' : meta.label,
+      shortLabel: id === 'veh_steer_left' && steeringMode === 'wheel' ? 'WHEEL' : meta.shortLabel,
+      visible,
+      zIndex: meta.zIndex,
+      minHitboxPx: meta.minHitboxPx,
+      priority: meta.priority,
+      normalized: { ...node },
+      width: finalW,
+      height: finalH,
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      centerX: 0,
+      centerY: 0,
+    };
+    updateRectFromCenter(rect, rawCx, rawCy, safeBounds, topHudKeepOutBottomPx);
+    return rect;
+  };
+
+  const steerW = steeringMode === 'wheel' ? 128 : 74;
+  const steerH = steeringMode === 'wheel' ? 128 : 66;
+
+  const controls: Record<VehicleTouchControlId, ComputedVehicleTouchControlRect> = {
+    veh_steer_left: buildVehRect('veh_steer_left', steerW, steerH, true),
+    veh_steer_right: buildVehRect('veh_steer_right', 74, 66, steeringMode === 'buttons'),
+    veh_gas: buildVehRect('veh_gas', 66, 98, true),
+    veh_brake_reverse: buildVehRect('veh_brake_reverse', 66, 64, true),
+    veh_handbrake: buildVehRect('veh_handbrake', 54, 52, true),
+    veh_fire: buildVehRect('veh_fire', 62, 62, true),
+    veh_camera: buildVehRect('veh_camera', 54, 44, true),
+    veh_exit: buildVehRect('veh_exit', 64, 44, true),
+  };
+
+  const crosshairBox = {
+    left: Math.round(vw / 2 - 24),
+    right: Math.round(vw / 2 + 24),
+    top: Math.round(vh / 2 - 24),
+    bottom: Math.round(vh / 2 + 24),
+  };
+
+  const visibleList = (Object.values(controls) as ComputedVehicleTouchControlRect[]).filter(
+    (c) => c.visible
+  );
+
+  for (const ctrl of visibleList) {
+    if (doRectsOverlap(ctrl, crosshairBox, 4)) {
+      const pushDownY = crosshairBox.bottom + ctrl.height / 2 + 8;
+      updateRectFromCenter(ctrl, ctrl.centerX, pushDownY, safeBounds, topHudKeepOutBottomPx);
+    }
+  }
+
+  const minGapPx = 8;
+  let collisionsResolved = 0;
+
+  for (let iter = 0; iter < 18; iter++) {
+    let anyMovedInPass = false;
+
+    for (let i = 0; i < visibleList.length; i++) {
+      for (let j = i + 1; j < visibleList.length; j++) {
+        const a = visibleList[i];
+        const b = visibleList[j];
+
+        if (!doRectsOverlap(a, b, minGapPx)) continue;
+
+        const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left) + minGapPx;
+        const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) + minGapPx;
+
+        if (overlapX <= 0 || overlapY <= 0) continue;
+
+        let dx = b.centerX - a.centerX;
+        let dy = b.centerY - a.centerY;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+          dx = j % 2 === 0 ? -12 : 12;
+          dy = 12;
+        }
+
+        let pushX = 0;
+        let pushY = 0;
+        if (overlapX < overlapY) {
+          pushX = (dx >= 0 ? 1 : -1) * (overlapX + 1);
+        } else {
+          pushY = (dy >= 0 ? 1 : -1) * (overlapY + 1);
+        }
+
+        const totalPrio = a.priority + b.priority;
+        const weightA = a.priority > b.priority ? 0.2 : a.priority < b.priority ? 0.8 : 0.5;
+        const weightB = totalPrio > 0 ? 1 - weightA : 0.5;
+
+        updateRectFromCenter(
+          a,
+          a.centerX - pushX * weightA,
+          a.centerY - pushY * weightA,
+          safeBounds,
+          topHudKeepOutBottomPx
+        );
+        updateRectFromCenter(
+          b,
+          b.centerX + pushX * weightB,
+          b.centerY + pushY * weightB,
+          safeBounds,
+          topHudKeepOutBottomPx
+        );
+
+        collisionsResolved++;
+        anyMovedInPass = true;
+      }
+    }
+
+    if (!anyMovedInPass) break;
+  }
+
+  const overlappingPairs: Array<[VehicleTouchControlId, VehicleTouchControlId]> = [];
+  for (let i = 0; i < visibleList.length; i++) {
+    for (let j = i + 1; j < visibleList.length; j++) {
+      if (doRectsOverlap(visibleList[i], visibleList[j], 0)) {
+        overlappingPairs.push([visibleList[i].id, visibleList[j].id]);
+      }
+    }
+  }
+
+  return {
+    viewportWidth: vw,
+    viewportHeight: vh,
+    safeBounds,
+    topHudKeepOutBottomPx,
+    steeringMode,
+    leftHanded: Boolean(input.touchVehicleLeftHanded),
     controls,
     visibleControls: visibleList,
     collisionsResolved,

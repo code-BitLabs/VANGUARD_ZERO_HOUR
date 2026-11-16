@@ -1,4 +1,3 @@
-import { Howler } from 'howler';
 import { ResourceManager } from '@/src/core/ResourceManager';
 import { AudioSettings } from '@/src/schemas/settings.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
@@ -52,6 +51,8 @@ export class AudioManager {
   private ambienceSource: AudioBufferSourceNode | null = null;
   private ambienceFilter: BiquadFilterNode | null = null;
   private ambienceNodeGain: GainNode | null = null;
+  private ambienceResourceId: string | null = null;
+  private ambienceCleanup: (() => void) | null = null;
   private musicIntervalId = 0;
   private settings: AudioSettings;
   private initialized = false;
@@ -98,7 +99,7 @@ export class AudioManager {
       if (this.ctx.state === 'suspended') {
         void this.ctx.resume();
       }
-      Howler.mute(this.settings.muted);
+      this.syncMasterGain();
     } catch {
       // Fail gracefully if Web Audio is blocked or unavailable
     }
@@ -106,7 +107,7 @@ export class AudioManager {
 
   suspend(): void {
     this.suspendedByLifecycle = true;
-    Howler.mute(true);
+    this.syncMasterGain(true);
     if (this.ctx && this.ctx.state === 'running') {
       void this.ctx.suspend().catch(() => {});
     }
@@ -114,24 +115,35 @@ export class AudioManager {
 
   resume(): void {
     this.suspendedByLifecycle = false;
-    Howler.mute(this.settings.muted);
+    this.syncMasterGain();
     if (this.ctx && this.ctx.state === 'suspended') {
       void this.ctx.resume().catch(() => {});
     }
   }
 
+  isSuspendedByLifecycle(): boolean {
+    return this.suspendedByLifecycle;
+  }
+
   applySettings(settings: AudioSettings): void {
     this.settings = settings;
-    Howler.mute(this.suspendedByLifecycle || settings.muted);
-    Howler.volume(settings.masterVolume);
-
     if (!this.ctx || !this.masterGain || !this.sfxGain || !this.musicGain || !this.ambienceGain) return;
     const now = this.ctx.currentTime;
-    const master = settings.muted ? 0 : settings.masterVolume;
-    this.masterGain.gain.setTargetAtTime(master, now, 0.02);
+    this.syncMasterGain();
     this.sfxGain.gain.setTargetAtTime(settings.sfxVolume, now, 0.02);
     this.musicGain.gain.setTargetAtTime(settings.musicVolume, now, 0.02);
     this.ambienceGain.gain.setTargetAtTime(settings.ambienceVolume, now, 0.02);
+  }
+
+  private syncMasterGain(immediate = false): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const master = this.suspendedByLifecycle || this.settings.muted ? 0 : this.settings.masterVolume;
+    if (immediate) {
+      this.masterGain.gain.setValueAtTime(master, now);
+    } else {
+      this.masterGain.gain.setTargetAtTime(master, now, 0.02);
+    }
   }
 
   updateListener(px: number, py: number, pz: number, fx: number, fy: number, fz: number): void {
@@ -195,7 +207,30 @@ export class AudioManager {
       this.ambienceSource = src;
       this.ambienceFilter = filter;
       this.ambienceNodeGain = gain;
-      this.resourceManager.registerAudioNode(gain, 'mission:audio', src);
+
+      let nodeDisposed = false;
+      const cleanupAmbience = () => {
+        if (nodeDisposed) return;
+        nodeDisposed = true;
+        try {
+          src.stop();
+          src.disconnect();
+        } catch {
+          // Ignore already-stopped audio nodes
+        }
+        try {
+          filter.disconnect();
+          gain.disconnect();
+        } catch {
+          // Ignore already-disconnected nodes
+        }
+        if (this.ambienceSource === src) this.ambienceSource = null;
+        if (this.ambienceFilter === filter) this.ambienceFilter = null;
+        if (this.ambienceNodeGain === gain) this.ambienceNodeGain = null;
+        if (this.ambienceCleanup === cleanupAmbience) this.ambienceCleanup = null;
+      };
+      this.ambienceCleanup = cleanupAmbience;
+      this.ambienceResourceId = this.resourceManager.register('audioNode', 'mission:audio', cleanupAmbience);
     }
 
     // Procedural tactical pulse bassline
@@ -231,6 +266,14 @@ export class AudioManager {
   }
 
   stopMissionLoops(): void {
+    if (this.ambienceResourceId) {
+      const id = this.ambienceResourceId;
+      this.ambienceResourceId = null;
+      this.resourceManager.release(id);
+    }
+    if (this.ambienceCleanup) {
+      this.ambienceCleanup();
+    }
     if (this.ambienceSource) {
       try {
         this.ambienceSource.stop();
@@ -293,6 +336,8 @@ export class AudioManager {
       void this.ctx.close();
       this.ctx = null;
     }
+    this.initialized = false;
+    this.suspendedByLifecycle = false;
     this.buffers.clear();
   }
 
@@ -311,8 +356,15 @@ export class AudioManager {
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
-    // Subtle pitch variance to prevent audio fatigue
-    src.playbackRate.value = 0.96 + Math.random() * 0.08;
+    const isPitchFixedCue =
+      kind === 'ui_click' ||
+      kind === 'hit_marker' ||
+      kind === 'headshot' ||
+      kind === 'lock_beep' ||
+      kind === 'lock_ready' ||
+      kind === 'c4_beep' ||
+      kind === 'nuke_siren';
+    src.playbackRate.value = isPitchFixedCue ? 1.0 : 0.95 + Math.random() * 0.1;
 
     const gain = this.ctx.createGain();
     gain.gain.value = volume;

@@ -923,7 +923,8 @@ export class ExplosiveManager {
           player.velocity.y = Math.max(player.velocity.y, Math.min(4.2, pushStrength * 0.45));
         }
         const selfScale = ev.fromPlayer && !isStrategic ? 0.35 : 0.48;
-        const dmg = ev.damage * selfScale * falloff * occ;
+        const rawSelfDmg = ev.damage * selfScale * falloff * occ;
+        const dmg = ev.fromPlayer && !isStrategic ? Math.min(45, rawSelfDmg) : rawSelfDmg;
         const applied = player.applyValidatedExplosionDamage(explosionId, dmg, ev.x, ev.z);
         if (applied > 0) {
           entitiesHit++;

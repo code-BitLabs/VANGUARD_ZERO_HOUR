@@ -126,16 +126,30 @@ export class AssetManager {
       ? this.getProceduralTexture(opts.pattern, opts.repeat?.[0] ?? 1, opts.repeat?.[1] ?? 1)
       : undefined;
 
-    const mat = new THREE.MeshStandardMaterial({
+    const defaultBumpScale =
+      opts.pattern === 'concrete' || opts.pattern === 'asphalt' || opts.pattern === 'sand' || opts.pattern === 'jungle_ground'
+        ? 0.024
+        : opts.pattern === 'metal_plate' || opts.pattern === 'crate_wood'
+          ? 0.015
+          : 0.01;
+
+    const bumpMap = opts.bumpMap ?? map;
+    const matParams: THREE.MeshStandardMaterialParameters = {
       color: opts.color ?? 0x808080,
       roughness: opts.roughness ?? 0.75,
       metalness: opts.metalness ?? 0.15,
-      map,
-      emissive: opts.emissive,
-      emissiveIntensity: opts.emissiveIntensity,
-      transparent: opts.transparent,
-      opacity: opts.opacity,
-    });
+    };
+    if (map) matParams.map = map;
+    if (bumpMap) {
+      matParams.bumpMap = bumpMap;
+      matParams.bumpScale = opts.bumpScale ?? defaultBumpScale;
+    }
+    if (opts.emissive !== undefined) matParams.emissive = opts.emissive;
+    if (opts.emissiveIntensity !== undefined) matParams.emissiveIntensity = opts.emissiveIntensity;
+    if (opts.transparent !== undefined) matParams.transparent = opts.transparent;
+    if (opts.opacity !== undefined) matParams.opacity = opts.opacity;
+
+    const mat = new THREE.MeshStandardMaterial(matParams);
 
     const resourceId = this.resourceManager.registerMaterial(mat, scope, scope === 'shared' ? `mat_${key}` : undefined);
     if (scope === 'shared') {

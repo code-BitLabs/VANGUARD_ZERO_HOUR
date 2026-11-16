@@ -1,6 +1,6 @@
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { MiniMapBlip, ObjectiveStatus } from '@/src/schemas/events.schema';
-import { AirUnitType, MissionConfig } from '@/src/schemas/mission.schema';
+import { AirUnitType, MissionConfig, ObjectiveActionMetadata } from '@/src/schemas/mission.schema';
 
 export interface MissionRuntimeSummary {
   victory: boolean;
@@ -26,6 +26,7 @@ export class MissionDirector {
     completedAtSec: number | null;
     markerPos: { x: number; y: number; z: number };
     targetAirUnitTypes?: AirUnitType[];
+    actionMeta?: ObjectiveActionMetadata;
   }> = [];
 
   public score = 0;
@@ -61,6 +62,7 @@ export class MissionDirector {
       completedAtSec: null,
       markerPos: { ...o.markerPos },
       targetAirUnitTypes: o.targetAirUnitTypes ? [...o.targetAirUnitTypes] : undefined,
+      actionMeta: o.actionMeta ? { ...o.actionMeta } : undefined,
     }));
     this.score = 0;
     this.kills = 0;
@@ -73,6 +75,80 @@ export class MissionDirector {
     this.missionEnded = false;
     this.showAlert(`${this.config.codeName}: ${this.config.title.toUpperCase()}`, 4.2);
     this.showSubtitle(`COMMAND: ${this.config.subtitle}. All squads weapons free.`, 5.0);
+  }
+
+  /**
+   * Derives a concise, platform-accurate tactical instruction from structured objective metadata
+   * and live objective progress so players always know what to do and which control to use.
+   */
+  getActiveActionDirective(
+    inputDevice: 'touch' | 'keyboard',
+    inVehicle: boolean,
+    rpgEquipped: boolean
+  ): string | null {
+    const activeNonExtract = this.objectives.find((o) => !o.completed && o.type !== 'vehicle_extract');
+    const activeExtract = this.objectives.find((o) => !o.completed && o.type === 'vehicle_extract');
+    const active = activeNonExtract ?? activeExtract;
+    if (!active) return null;
+
+    const remaining = Math.max(0, active.target - active.current);
+    const isTouch = inputDevice === 'touch';
+    const meta = active.actionMeta;
+    const targetName = meta?.targetLabel || active.title;
+
+    if (active.type === 'vehicle_extract' || meta?.actionKind === 'reach_extraction') {
+      if (inVehicle) {
+        return isTouch
+          ? `NEXT ACTION: Hold GAS and steer to the green ${targetName} marker`
+          : `NEXT ACTION: Hold [W] to drive into the green ${targetName} beacon`;
+      }
+      return isTouch
+        ? `NEXT ACTION: Sprint or tap [USE] near a truck to drive into the ${targetName}`
+        : `NEXT ACTION: Sprint or press [E] to board a vehicle and reach the ${targetName}`;
+    }
+
+    if (meta?.actionKind === 'destroy_convoy' || active.type === 'convoy_intercept') {
+      if (inVehicle) {
+        return isTouch
+          ? `NEXT ACTION: Pursue convoy (${remaining} left) — tap [FIRE] turret or exit & use [RPG]`
+          : `NEXT ACTION: Pursue convoy (${remaining} left) — [LMB] fire roof turret or use [7] RPG`;
+      }
+      return isTouch
+        ? `NEXT ACTION: Destroy ${remaining} ${targetName} — tap [RPG] button or [USE] to board Strike Jeep`
+        : `NEXT ACTION: Destroy ${remaining} ${targetName} — press [7] for RPG-7V or [E] to board Strike Jeep`;
+    }
+
+    if (meta?.actionKind === 'plant_charge_or_destroy' || active.type === 'plant_charge') {
+      return isTouch
+        ? `NEXT ACTION: Approach ${targetName} (${remaining} left) and tap [USE] or fire [RPG]`
+        : `NEXT ACTION: Approach ${targetName} (${remaining} left) and press [E] to plant charge or fire [7] RPG`;
+    }
+
+    if (meta?.actionKind === 'sabotage_or_shoot' || active.type === 'destroy_targets') {
+      return isTouch
+        ? `NEXT ACTION: Destroy ${remaining} ${targetName} — shoot, tap [RPG], or tap [USE] at close range`
+        : `NEXT ACTION: Destroy ${remaining} ${targetName} — shoot, press [7] RPG, or press [E] up close`;
+    }
+
+    if (
+      meta?.actionKind === 'lock_and_destroy_aircraft' ||
+      meta?.actionKind === 'destroy_aircraft' ||
+      active.type === 'air_defense'
+    ) {
+      if (rpgEquipped) {
+        return isTouch
+          ? `NEXT ACTION: Lead target and tap [FIRE] to launch RPG at ${targetName} (${remaining} left)`
+          : `NEXT ACTION: Lead target and press [LMB] to fire RPG at ${targetName} (${remaining} left)`;
+      }
+      return isTouch
+        ? `NEXT ACTION: Tap [RPG] or [8] Guided Launcher to shoot down ${remaining} ${targetName}`
+        : `NEXT ACTION: Press [7] RPG-7V or [8] Guided Missile (hold RMB to lock) to down ${remaining} ${targetName}`;
+    }
+
+    // Default: engage_infantry / eliminate_wave
+    return isTouch
+      ? `NEXT ACTION: Follow diamond HUD markers and eliminate ${remaining} ${targetName}`
+      : `NEXT ACTION: Follow diamond HUD markers and eliminate ${remaining} ${targetName} ([LMB] Fire / [RMB] Aim)`;
   }
 
   showAlert(text: string, duration = 3.2): void {
@@ -232,6 +308,33 @@ export class MissionDirector {
       out[o.id] = o.completedAtSec;
     }
     return out;
+  }
+
+  private readonly _blipPool: MiniMapBlip[] = [];
+
+  fillObjectiveBlips(out: MiniMapBlip[]): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.objectives.length; i++) {
+      const o = this.objectives[i];
+      if (o.completed) continue;
+      let slot = this._blipPool[slotIdx];
+      if (!slot) {
+        slot = {
+          id: o.id,
+          x: o.markerPos.x,
+          z: o.markerPos.z,
+          kind: 'objective',
+        };
+        this._blipPool.push(slot);
+      } else {
+        slot.id = o.id;
+        slot.x = o.markerPos.x;
+        slot.z = o.markerPos.z;
+        slot.kind = 'objective';
+      }
+      out.push(slot);
+      slotIdx++;
+    }
   }
 
   getObjectiveBlips(): MiniMapBlip[] {

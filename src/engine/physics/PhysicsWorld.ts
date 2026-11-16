@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import { CollisionSystem, RaycastHitResult } from './CollisionSystem';
@@ -40,8 +39,8 @@ export interface TerrainSlopeRegion {
 }
 
 /**
- * Single authoritative PhysicsWorld owning Rapier3D WASM rigid-body/collider integration,
- * SpatialHash broad-phase, three-mesh-bvh static mesh acceleration, custom FPS CharacterController,
+ * Single authoritative PhysicsWorld owning CollisionSystem, SpatialHash broad-phase,
+ * three-mesh-bvh static mesh acceleration, custom FPS CharacterController,
  * Vehicle OBB impulse deflection, and F4 physics telemetry.
  */
 export class PhysicsWorld {
@@ -57,39 +56,15 @@ export class PhysicsWorld {
   private terrainHeightFn: (x: number, z: number) => number = () => 0;
   private worldBoundLimit = PhysicsWorld.DEFAULT_WORLD_BOUND;
 
-  private rapierReady = false;
-  private rapierWorld: RAPIER.World | null = null;
-  private rapierColliders = new Map<string, RAPIER.Collider>();
   private bvhGeometries = new Set<THREE.BufferGeometry>();
 
   constructor() {
     ensureThreeMeshBvhPatched();
     this.responseSystem = new CollisionResponseSystem(this.collisionSystem, this.debugSystem);
-    this.initRapierAsync();
-  }
-
-  private initRapierAsync(): void {
-    try {
-      RAPIER.init()
-        .then(() => {
-          this.rapierReady = true;
-          if (!this.rapierWorld) {
-            this.rapierWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-            for (const box of this.spatialHash.getAllBoxes()) {
-              this.syncRapierCollider(box);
-            }
-          }
-        })
-        .catch(() => {
-          this.rapierReady = false;
-        });
-    } catch {
-      this.rapierReady = false;
-    }
   }
 
   isRapierInitialized(): boolean {
-    return this.rapierReady && this.rapierWorld !== null;
+    return false;
   }
 
   setWorldBoundLimit(limit: number): void {
@@ -107,10 +82,6 @@ export class PhysicsWorld {
   beginFrame(dt: number): void {
     this.collisionSystem.resetFrameCounters();
     this.debugSystem.tick(dt);
-    if (this.rapierReady && this.rapierWorld) {
-      this.rapierWorld.timestep = dt;
-      this.rapierWorld.step();
-    }
   }
 
   registerBvhMesh(mesh: THREE.Mesh): void {
@@ -126,7 +97,6 @@ export class PhysicsWorld {
       this.debugSystem.invalidLayerMaskCount++;
     }
     this.spatialHash.insert(box);
-    this.syncRapierCollider(box);
   }
 
   registerStaticCollider(box: SpatialAABB): void {
@@ -135,51 +105,14 @@ export class PhysicsWorld {
 
   updateCollider(box: SpatialAABB): void {
     this.spatialHash.update(box);
-    this.syncRapierCollider(box);
   }
 
   removeCollider(box: SpatialAABB): void {
     this.spatialHash.remove(box);
-    if (this.rapierWorld && this.rapierColliders.has(box.id)) {
-      const col = this.rapierColliders.get(box.id)!;
-      try {
-        this.rapierWorld.removeCollider(col, false);
-      } catch {
-        // Ignore if already removed during world reset
-      }
-      this.rapierColliders.delete(box.id);
-    }
   }
 
   getStaticColliderIds(): string[] {
     return this.spatialHash.getAllBoxes().map((b) => b.id);
-  }
-
-  private syncRapierCollider(box: SpatialAABB): void {
-    if (!this.rapierReady || !this.rapierWorld) return;
-    try {
-      if (this.rapierColliders.has(box.id)) {
-        const prev = this.rapierColliders.get(box.id)!;
-        this.rapierWorld.removeCollider(prev, false);
-        this.rapierColliders.delete(box.id);
-      }
-      const hx = Math.max(0.05, box.halfExtX ?? (box.maxX - box.minX) * 0.5);
-      const hy = Math.max(0.05, (box.maxY - box.minY) * 0.5);
-      const hz = Math.max(0.05, box.halfExtZ ?? (box.maxZ - box.minZ) * 0.5);
-      const cx = box.centerX ?? (box.minX + box.maxX) * 0.5;
-      const cy = (box.minY + box.maxY) * 0.5;
-      const cz = box.centerZ ?? (box.minZ + box.maxZ) * 0.5;
-
-      const desc = RAPIER.ColliderDesc.cuboid(hx, hy, hz).setTranslation(cx, cy, cz);
-      if (box.yaw && Math.abs(box.yaw) > 1e-4) {
-        const halfYaw = box.yaw * 0.5;
-        desc.setRotation({ x: 0, y: Math.sin(halfYaw), z: 0, w: Math.cos(halfYaw) });
-      }
-      const col = this.rapierWorld.createCollider(desc);
-      this.rapierColliders.set(box.id, col);
-    } catch {
-      // Safe fallback if WASM heap is resizing
-    }
   }
 
   addSlope(slope: TerrainSlopeRegion): void {
@@ -284,20 +217,22 @@ export class PhysicsWorld {
     );
   }
 
+  private readonly _areaQueryScratch: SpatialAABB[] = [];
+
   /**
    * Queries maximum roof/structure height in an area `(x ± radius, z ± radius)` so aircraft
    * maintain safe clearance above buildings and terrain.
    */
   getMaxObstacleHeightInArea(x: number, z: number, radius: number): number {
     let maxH = this.getGroundHeightAt(x, z);
-    const scratch: SpatialAABB[] = [];
+    this._areaQueryScratch.length = 0;
     const hits = this.spatialHash.queryAABB(
       x - radius,
       z - radius,
       x + radius,
       z + radius,
       COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER | COLLISION_LAYER.DESTRUCTIBLE,
-      scratch
+      this._areaQueryScratch
     );
     for (let i = 0; i < hits.length; i++) {
       if (hits[i].maxY > maxH) {
@@ -475,7 +410,7 @@ export class PhysicsWorld {
     }
 
     return {
-      solverBackend: 'Hybrid Rapier3D + Custom FPS Controller + SpatialHash/BVH',
+      solverBackend: 'Custom FPS Controller + SpatialHash/BVH',
       rapierInitialized: this.isRapierInitialized(),
       fixedTimestepSec: Number(PhysicsWorld.FIXED_TIMESTEP_SEC.toFixed(4)),
       worldBoundsMin: -this.worldBoundLimit,
@@ -518,16 +453,5 @@ export class PhysicsWorld {
       }
     }
     this.bvhGeometries.clear();
-
-    if (this.rapierWorld) {
-      for (const col of this.rapierColliders.values()) {
-        try {
-          this.rapierWorld.removeCollider(col, false);
-        } catch {
-          // ignore
-        }
-      }
-      this.rapierColliders.clear();
-    }
   }
 }

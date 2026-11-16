@@ -422,7 +422,7 @@ export function buildPhysicsMarkdownAuditReport(snapshot: CombatDebugSnapshot): 
     ``,
     `- **Generated**: ${new Date().toISOString()}`,
     `- **Mission**: #${snapshot.missionId} | **Elapsed**: ${snapshot.metrics.elapsedSec}s`,
-    `- **Solver Backend**: ${phys.solverBackend} (Rapier WASM Ready: ${phys.rapierInitialized ? 'YES' : 'FALLBACK'})`,
+    `- **Solver Backend**: ${phys.solverBackend}`,
     `- **Fixed Step**: ${(phys.fixedTimestepSec * 1000).toFixed(2)}ms (${Math.round(1 / phys.fixedTimestepSec)} Hz)`,
     `- **World Boundary**: [${phys.worldBoundsMin}m .. ${phys.worldBoundsMax}m]`,
     ``,

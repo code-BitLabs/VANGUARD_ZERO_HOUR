@@ -764,4 +764,80 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     weapons.dispose();
     localRes.disposeAll();
   });
+
+  it('Test N: weapon slide/bolt returns to slideRestZ after sustained fire and sprint-to-fire delay is enforced on sprint exit', async () => {
+    const { WeaponSystem } = await import('@/src/gameplay/WeaponSystem');
+    const { InputManager } = await import('@/src/engine/InputManager');
+    const { settingsStore } = await import('@/src/stores/settingsStore');
+    const localScene = new THREE.Scene();
+    const vmScene = new THREE.Scene();
+    const localRes = new ResourceManager();
+    const localVfx = new VFXPool(localScene, localRes);
+    const localProj = new ProjectileManager(localScene, localRes, localVfx, audio, telemetry);
+    const weapons = new WeaponSystem(vmScene, audio, localVfx, localProj);
+    const input = new InputManager(localRes, settingsStore.getState().input);
+    const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 300);
+
+    weapons.resetLoadout('assault_rifle');
+    const rigsMap = (weapons as unknown as { rigs: Map<string, { slideOrBolt: THREE.Object3D | null; slideRestZ: number }> }).rigs;
+    const arRig = rigsMap.get('assault_rifle')!;
+    expect(arRig.slideOrBolt).not.toBeNull();
+    const restZ = arRig.slideRestZ;
+    expect(restZ).toBeCloseTo(-0.14, 3);
+
+    // 1. Fire 15 shots across frames and verify slide kicks back then returns cleanly to restZ
+    input.setVirtualActionState('fire', true);
+    for (let i = 0; i < 60; i++) {
+      weapons.update(1 / 60, input, player, cam, collision, [], [], () => {}, false);
+      input.endFrame();
+    }
+    expect(weapons.shotsFired).toBeGreaterThan(5);
+    expect(arRig.slideOrBolt!.position.z).toBeGreaterThan(restZ);
+
+    // Release fire and let recoil settle for 1.0s
+    input.setVirtualActionState('fire', false);
+    for (let i = 0; i < 60; i++) {
+      weapons.update(1 / 60, input, player, cam, collision, [], [], () => {}, false);
+      input.endFrame();
+    }
+    expect(arRig.slideOrBolt!.position.z).toBeCloseTo(restZ, 3);
+
+    // 2. Sprint-to-fire delay: sprinting arms sprintToFireSec (0.18s for assault_rifle)
+    const shotsBeforeSprint = weapons.shotsFired;
+    player.isSprinting = true;
+    weapons.update(1 / 60, input, player, cam, collision, [], [], () => {}, false);
+    input.endFrame();
+
+    // Exit sprint and immediately hold fire: must NOT fire on the first 50ms (0.05s < 0.18s)
+    player.isSprinting = false;
+    input.setVirtualActionState('fire', true);
+    weapons.update(0.05, input, player, cam, collision, [], [], () => {}, false);
+    input.endFrame();
+    expect(weapons.shotsFired).toBe(shotsBeforeSprint);
+
+    // Advance past 0.18s sprintToFireSec -> weapon fires
+    weapons.update(0.15, input, player, cam, collision, [], [], () => {}, false);
+    input.endFrame();
+    expect(weapons.shotsFired).toBe(shotsBeforeSprint + 1);
+
+    input.setVirtualActionState('fire', false);
+    weapons.dispose();
+    localRes.disposeAll();
+  });
+
+  it('Test O: AssetManager attaches procedural bumpMap and positive bumpScale on patterned PBR materials', async () => {
+    const { AssetManager } = await import('@/src/core/AssetManager');
+    const localRes = new ResourceManager();
+    const assets = new AssetManager(localRes);
+    const mat = assets.getSharedMaterial('test_concrete_pbr', {
+      pattern: 'concrete',
+      roughness: 0.85,
+      metalness: 0.1,
+    });
+    expect(mat.map).toBeDefined();
+    expect(mat.bumpMap).toBe(mat.map);
+    expect(mat.bumpScale).toBeGreaterThan(0.01);
+    assets.dispose();
+    localRes.disposeAll();
+  });
 });

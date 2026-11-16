@@ -19,8 +19,10 @@ export function TitleScreen({
   const rank = getRankForXp(save.xp);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
-  const hasSeenBriefing = useMissionSelectionStore((s) => s.hasSeenCampaignBriefing);
+  const seenBriefings = useMissionSelectionStore((s) => s.seenMissionBriefings);
   const selectedMission = getMissionById(selectedMissionId);
+  const hasSeenVersionedBriefing =
+    seenBriefings[selectedMission.missionKey] === selectedMission.briefingVersion;
 
   const nav = (screen: 'campaign' | 'armory' | 'howToPlay') => {
     onUiClick();
@@ -100,10 +102,11 @@ export function TitleScreen({
             <Play className="w-4 h-4 fill-current" /> Play Campaign
           </Button>
 
-          {hasSeenBriefing && onQuickDeploy ? (
+          {hasSeenVersionedBriefing && onQuickDeploy ? (
             <Button
               variant="secondary"
               size="lg"
+              data-testid="quick-deploy-btn"
               onClick={() => {
                 onUiClick();
                 onQuickDeploy();
@@ -155,7 +158,7 @@ export function TitleScreen({
 
       {/* Subtle Bottom Control Hint */}
       <div className="font-mono text-[10px] sm:text-[11px] text-zinc-400 tracking-wider shrink-0">
-        TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · COMBAT CLUSTER FIRE/ADS | DESKTOP: WASD · MOUSE · [E] INTERACT
+        TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · [RPG] 1-TAP BAZOOKA | DESKTOP: WASD · MOUSE · [7] RPG · [E] VEHICLE
       </div>
     </div>
   );

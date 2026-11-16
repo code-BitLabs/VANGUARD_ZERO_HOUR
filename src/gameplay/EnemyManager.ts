@@ -4,7 +4,7 @@ import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { ENEMY_BY_ARCHETYPE } from '@/src/data/enemies';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
-import type { PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
+import type { CharacterMoveResult, PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
@@ -18,6 +18,7 @@ import { Difficulty } from '@/src/schemas/common.schema';
 import { EnemyArchetype, SquadRole } from '@/src/schemas/enemy.schema';
 import { MiniMapBlip } from '@/src/schemas/events.schema';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
+import { buildSoldierRig } from '@/src/world/rigs/EnemyRigBuilder';
 import { BallisticSolver } from './BallisticSolver';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import { CombatTelemetryRecorder, EnemyDebugInspectorRow } from './CombatTelemetryRecorder';
@@ -90,6 +91,7 @@ export interface EnemyUnit {
   weaponArm: THREE.Object3D;
   headMesh: THREE.Object3D;
   hasSpawnedDrone: boolean;
+  healthDropEvaluated: boolean;
 }
 
 function mapArchetypeToWeapon(archetype: EnemyArchetype, index: number): EnemyWeaponClass {
@@ -121,6 +123,29 @@ export class EnemyManager {
 
   private readonly _muzzlePos = new THREE.Vector3();
   private readonly _aimTarget = new THREE.Vector3();
+  private readonly _rocketDir = new THREE.Vector3();
+  private readonly _moveResultScratch: CharacterMoveResult = {
+    grounded: false,
+    hitCeiling: false,
+    hitWall: false,
+    hitHorizontal: false,
+    steppedUp: false,
+    clampedWorldBounds: false,
+    lastBlockerId: null,
+    wallNormalX: 0,
+    wallNormalY: 0,
+    wallNormalZ: 0,
+    penetrationCorrected: 0,
+    activeContacts: 0,
+    maxPenetrationDepth: 0,
+  };
+  private readonly _hitscanPool: Array<{
+    target: HitscanTarget;
+    unit: EnemyUnit | null;
+    cb: ((unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void) | null;
+  }> = [];
+  private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
+  private readonly _blipPool: MiniMapBlip[] = [];
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -191,7 +216,7 @@ export class EnemyManager {
       // Push spawn position out of any solid walls or barriers immediately
       collision.resolvePlayerCapsule(spawnPos, spawnVel, 0.4, 1.75, 0.45, 0.016, unitId);
 
-      const rig = this.buildSoldierRig(cfg.accentColor, archetype, scope);
+      const rig = buildSoldierRig(cfg.accentColor, archetype, scope, this.resourceManager);
       rig.root.position.copy(spawnPos);
       this.scene.add(rig.root);
       this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
@@ -272,9 +297,75 @@ export class EnemyManager {
         weaponArm: rig.weaponArm,
         headMesh: rig.headMesh,
         hasSpawnedDrone: false,
+        healthDropEvaluated: false,
       };
       this.syncUnitHitboxes(unit);
       this.enemies.push(unit);
+    }
+  }
+
+  fillHitscanTargets(
+    out: HitscanTarget[],
+    onEnemyHit: (unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void
+  ): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
+      let slot = this._hitscanPool[slotIdx];
+      if (!slot) {
+        const newSlot: {
+          target: HitscanTarget;
+          unit: EnemyUnit | null;
+          cb: ((unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void) | null;
+        } = {
+          unit: null,
+          cb: null,
+          target: {
+            id: u.id,
+            kind: 'enemy',
+            name: u.displayName,
+            alive: true,
+            position: u.bodyCenter,
+            hitRadius: 0.56 * scale,
+            headPosition: u.headPosition,
+            headRadius: 0.3 * scale,
+            lowerBodyPosition: u.lowerBodyCenter,
+            lowerBodyRadius: 0.42 * scale,
+            torsoBoxMin: u.torsoBoxMin,
+            torsoBoxMax: u.torsoBoxMax,
+            lowerBodyBoxMin: u.lowerBodyBoxMin,
+            lowerBodyBoxMax: u.lowerBodyBoxMax,
+            onHit: (damage, isHeadshot, hitPoint) => {
+              const cur = newSlot.unit;
+              if (!cur) return;
+              const killed = this.damageUnit(cur, damage, isHeadshot, hitPoint);
+              newSlot.cb?.(cur, damage, isHeadshot, killed);
+            },
+          },
+        };
+        this._hitscanPool.push(newSlot);
+        slot = newSlot;
+      }
+      slot.unit = u;
+      slot.cb = onEnemyHit;
+      const t = slot.target;
+      t.id = u.id;
+      t.name = u.displayName;
+      t.alive = u.alive;
+      t.position = u.bodyCenter;
+      t.hitRadius = 0.56 * scale;
+      t.headPosition = u.headPosition;
+      t.headRadius = 0.3 * scale;
+      t.lowerBodyPosition = u.lowerBodyCenter;
+      t.lowerBodyRadius = 0.42 * scale;
+      t.torsoBoxMin = u.torsoBoxMin;
+      t.torsoBoxMax = u.torsoBoxMax;
+      t.lowerBodyBoxMin = u.lowerBodyBoxMin;
+      t.lowerBodyBoxMax = u.lowerBodyBoxMax;
+      out.push(t);
+      slotIdx++;
     }
   }
 
@@ -997,7 +1088,9 @@ export class EnemyManager {
         1.75,
         0.45,
         dt,
-        u.id
+        u.id,
+        undefined,
+        this._moveResultScratch
       );
       u.lastColliderHit = moveRes.lastBlockerId;
       u.activeContacts = moveRes.activeContacts ?? 0;
@@ -1133,14 +1226,14 @@ export class EnemyManager {
     }
 
     if (weaponProf.isProjectile || cfg.canUseRockets) {
-      const rDir = new THREE.Vector3()
+      this._rocketDir
         .subVectors(this._aimTarget, this._muzzlePos)
         .normalize();
       this.projectiles.spawn({
         kind: 'enemy_rocket',
         fromPlayer: false,
-        origin: this._muzzlePos.clone(),
-        direction: rDir,
+        origin: this._muzzlePos,
+        direction: this._rocketDir,
         speed: 36,
         damage: weaponProf.baseDamage * diffProfile.damageMultiplier,
         blastRadius: 4.8,
@@ -1336,6 +1429,24 @@ export class EnemyManager {
     return c;
   }
 
+  fillPositionsForProximity(out: Array<{ position: THREE.Vector3; radius: number }>): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      let slot = this._proxPool[slotIdx];
+      if (!slot) {
+        slot = { position: u.bodyCenter, radius: 0.95 };
+        this._proxPool.push(slot);
+      } else {
+        slot.position = u.bodyCenter;
+        slot.radius = 0.95;
+      }
+      out.push(slot);
+      slotIdx++;
+    }
+  }
+
   getPositionsForProximity(): Array<{ position: THREE.Vector3; radius: number }> {
     const out: Array<{ position: THREE.Vector3; radius: number }> = [];
     for (let i = 0; i < this.enemies.length; i++) {
@@ -1344,6 +1455,26 @@ export class EnemyManager {
       }
     }
     return out;
+  }
+
+  fillMiniMapBlips(out: MiniMapBlip[]): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (!e.alive) continue;
+      let slot = this._blipPool[slotIdx];
+      if (!slot) {
+        slot = { id: e.id, x: e.position.x, z: e.position.z, kind: 'enemy' };
+        this._blipPool.push(slot);
+      } else {
+        slot.id = e.id;
+        slot.x = e.position.x;
+        slot.z = e.position.z;
+        slot.kind = 'enemy';
+      }
+      out.push(slot);
+      slotIdx++;
+    }
   }
 
   getMiniMapBlips(): MiniMapBlip[] {
@@ -1359,6 +1490,21 @@ export class EnemyManager {
   clear(): void {
     this.enemies = [];
     this.waveSeq = 0;
+    this.pathSyncAccum = 0;
+    for (let i = 0; i < this._hitscanPool.length; i++) {
+      this._hitscanPool[i].unit = null;
+      this._hitscanPool[i].cb = null;
+      this._hitscanPool[i].target.alive = false;
+      this._hitscanPool[i].target.position = this._muzzlePos;
+      this._hitscanPool[i].target.headPosition = this._muzzlePos;
+      this._hitscanPool[i].target.lowerBodyPosition = this._muzzlePos;
+      this._hitscanPool[i].target.torsoBoxMin = undefined;
+      this._hitscanPool[i].target.torsoBoxMax = undefined;
+      this._hitscanPool[i].target.lowerBodyBoxMin = undefined;
+      this._hitscanPool[i].target.lowerBodyBoxMax = undefined;
+    }
+    this._proxPool.length = 0;
+    this._blipPool.length = 0;
   }
 
   getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
@@ -1398,82 +1544,5 @@ export class EnemyManager {
       });
     }
     return out;
-  }
-
-  private buildSoldierRig(
-    accentHex: string,
-    archetype: EnemyArchetype,
-    scope: ResourceScope
-  ): {
-    root: THREE.Group;
-    leftLeg: THREE.Object3D;
-    rightLeg: THREE.Object3D;
-    weaponArm: THREE.Object3D;
-    headMesh: THREE.Object3D;
-  } {
-    const root = new THREE.Group();
-    const scale = archetype === 'heavy_armor' ? 1.18 : 1.0;
-    root.scale.setScalar(scale);
-
-    const armorMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(accentHex),
-      roughness: 0.65,
-      metalness: archetype === 'heavy_armor' ? 0.55 : 0.25,
-    });
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0x332b26, roughness: 0.8 });
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x181c22, metalness: 0.8, roughness: 0.35 });
-    const visorMat = new THREE.MeshStandardMaterial({
-      color: archetype === 'sniper' || archetype === 'drone_operator' ? 0x06b6d4 : 0xef4444,
-      emissive: archetype === 'sniper' || archetype === 'drone_operator' ? 0x0891b2 : 0xb91c1c,
-      emissiveIntensity: 0.85,
-    });
-
-    this.resourceManager.registerMaterial(armorMat, scope);
-    this.resourceManager.registerMaterial(skinMat, scope);
-    this.resourceManager.registerMaterial(gunMat, scope);
-    this.resourceManager.registerMaterial(visorMat, scope);
-
-    const torsoGeo = new THREE.BoxGeometry(0.52, 0.64, 0.32);
-    const legGeo = new THREE.BoxGeometry(0.19, 0.72, 0.2);
-    const headGeo = new THREE.BoxGeometry(0.28, 0.3, 0.28);
-    const visorGeo = new THREE.BoxGeometry(0.24, 0.08, 0.06);
-    const armGeo = new THREE.BoxGeometry(0.14, 0.14, 0.45);
-    const rifleGeo = new THREE.BoxGeometry(0.08, 0.1, 0.68);
-    [torsoGeo, legGeo, headGeo, visorGeo, armGeo, rifleGeo].forEach((g) =>
-      this.resourceManager.registerGeometry(g, scope)
-    );
-
-    const torso = new THREE.Mesh(torsoGeo, armorMat);
-    torso.position.y = 1.06;
-    torso.castShadow = true;
-    root.add(torso);
-
-    const leftLeg = new THREE.Mesh(legGeo, armorMat);
-    leftLeg.position.set(-0.14, 0.38, 0);
-    leftLeg.castShadow = true;
-    root.add(leftLeg);
-
-    const rightLeg = new THREE.Mesh(legGeo, armorMat);
-    rightLeg.position.set(0.14, 0.38, 0);
-    rightLeg.castShadow = true;
-    root.add(rightLeg);
-
-    const headMesh = new THREE.Group();
-    headMesh.position.set(0, 1.56, 0);
-    const head = new THREE.Mesh(headGeo, armorMat);
-    const visor = new THREE.Mesh(visorGeo, visorMat);
-    visor.position.set(0, 0.02, 0.14);
-    headMesh.add(head, visor);
-    root.add(headMesh);
-
-    const weaponArm = new THREE.Group();
-    weaponArm.position.set(0.32, 1.24, 0.15);
-    const arm = new THREE.Mesh(armGeo, skinMat);
-    const rifle = new THREE.Mesh(rifleGeo, gunMat);
-    rifle.position.set(-0.08, -0.02, 0.26);
-    weaponArm.add(arm, rifle);
-    root.add(weaponArm);
-
-    return { root, leftLeg, rightLeg, weaponArm, headMesh };
   }
 }

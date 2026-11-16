@@ -7,18 +7,19 @@ import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { getMissionById } from '@/src/data/missions';
 import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { VFXPool } from '@/src/effects/VFXPool';
-import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
+import { AirCombatManager, AirUnit } from '@/src/gameplay/AirCombatManager';
 import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from '@/src/gameplay/BallisticSolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { DiagnosticRulesEngine } from '@/src/gameplay/diagnostics/DiagnosticRulesEngine';
-import { EnemyManager } from '@/src/gameplay/EnemyManager';
+import { EnemyManager, EnemyUnit } from '@/src/gameplay/EnemyManager';
 import { ExplosiveCallbacks, ExplosiveManager } from '@/src/gameplay/ExplosiveManager';
+import { HealthPickupManager } from '@/src/gameplay/HealthPickupManager';
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
 import { PlayerController } from '@/src/gameplay/PlayerController';
 import { ExplosionEvent, ProjectileManager } from '@/src/gameplay/ProjectileManager';
 import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
-import { VehicleManager } from '@/src/gameplay/VehicleManager';
+import { VehicleEntity, VehicleManager } from '@/src/gameplay/VehicleManager';
 import { HitscanTarget, WeaponSystem } from '@/src/gameplay/WeaponSystem';
 import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
@@ -74,6 +75,7 @@ export class GameEngine {
   private readonly enemies: EnemyManager;
   private readonly vehicles: VehicleManager;
   private readonly airCombat: AirCombatManager;
+  private readonly healthPickups: HealthPickupManager;
 
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
@@ -92,10 +94,38 @@ export class GameEngine {
   private initialProbeFrames: number[] = [];
   private initialProbeSettled = false;
   private readonly _audioDir = new THREE.Vector3();
+  private readonly _hitscanTargetsScratch: HitscanTarget[] = [];
+  private readonly _lockCandidatesScratch: Array<{
+    id: string;
+    alive: boolean;
+    position: THREE.Vector3;
+    label: string;
+  }> = [];
+  private readonly _proxScratch: Array<{ position: THREE.Vector3; radius: number }> = [];
+  private readonly _blipsScratch: MiniMapBlip[] = [];
+  private readonly _turretRayHit: RayHit = {
+    hit: false,
+    distance: 110,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
   private readonly cachedExplosiveCallbacks: ExplosiveCallbacks = {
     onEnemyKilled: (unit, weaponLabel) => {
       gameSessionStore.getState().triggerHit(false, true, 120);
       this.missionDirector?.onEnemyKilled(false, 120);
+      if (this.activeScope) {
+        this.healthPickups.tryEvaluateEnemyDrop(
+          unit,
+          this.player.health,
+          this.player.maxHealth,
+          this.activeScope
+        );
+      }
       gameSessionStore.getState().pushKillFeed({
         id: `${unit.id}_${Date.now()}`,
         killer: 'VANGUARD-1',
@@ -238,6 +268,12 @@ export class GameEngine {
       this.coordinator,
       this.ballistics,
       this.telemetry
+    );
+    this.healthPickups = new HealthPickupManager(
+      this.renderer.scene,
+      this.resourceManager,
+      this.vfx,
+      this.audio
     );
 
     this.loop = new GameLoop({
@@ -579,6 +615,8 @@ export class GameEngine {
       }
     }
 
+    this.healthPickups.spawnMapMedStations(mission.mapId, this.collisionWorld, scope);
+
     this.missionDirector = new MissionDirector(mission, difficulty);
     this.reinforcementTimer = 28;
     this.dioramaLoaded = false;
@@ -626,6 +664,8 @@ export class GameEngine {
     const currentWeaponId = this.weapons.getActiveState().config.id;
     const scope: ResourceScope = `mission:${mission.id}`;
 
+    this.activeAbortController?.abort();
+    this.activeAbortController = null;
     this.audio.resume();
     this.audio.unlock();
     this.audio.stopMissionLoops();
@@ -726,6 +766,7 @@ export class GameEngine {
     this.enemies.clear();
     this.vehicles.clear();
     this.airCombat.clear();
+    this.healthPickups.clear();
     this.destruction.clear();
     this.collisionWorld.clear();
     this.chunkManager.clear(this.renderer.scene);
@@ -754,6 +795,7 @@ export class GameEngine {
       const handledInteract = this.tryContextualInteract();
       if (!handledInteract) {
         this.vehicles.togglePlayerVehicle(this.player, this.collisionWorld);
+        this.input.clearVirtualVehicleInputs();
       }
     }
 
@@ -914,61 +956,15 @@ export class GameEngine {
       );
     }
 
-    // Build combined hitscan & lock-on targets
-    const enemyTargets = this.enemies.getHitscanTargets((unit, dmg, isHead, killed) => {
-      gameSessionStore.getState().triggerHit(isHead, killed, dmg);
-      this.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
-      if (killed) {
-        this.missionDirector?.onEnemyKilled(isHead, 120);
-        gameSessionStore.getState().pushKillFeed({
-          id: `${unit.id}_${Date.now()}`,
-          killer: 'VANGUARD-1',
-          victim: unit.displayName,
-          weaponName: this.weapons.getActiveState().config.shortName,
-          isHeadshot: isHead,
-          timestamp: Date.now(),
-        });
-      }
-    });
+    // Build combined hitscan & lock-on targets without per-tick array/closure allocations
+    this._hitscanTargetsScratch.length = 0;
+    this.enemies.fillHitscanTargets(this._hitscanTargetsScratch, this.onEnemyHitscanHit);
+    this.airCombat.fillHitscanTargets(this._hitscanTargetsScratch, this.onAirHitscanHit);
+    this.vehicles.fillHitscanTargets(this._hitscanTargetsScratch, this.onVehicleHitscanHit);
 
-    const airTargets = this.airCombat.getHitscanTargets((unit, killed) => {
-      gameSessionStore.getState().triggerHit(false, killed, 25);
-      this.audio.play2D('hit_marker', 8, 0.5);
-      if (killed) {
-        this.missionDirector?.onAirUnitKilled(350, unit.type);
-        gameSessionStore.getState().pushKillFeed({
-          id: `${unit.id}_${Date.now()}`,
-          killer: 'VANGUARD-1',
-          victim: unit.displayName,
-          weaponName: this.weapons.getActiveState().config.shortName,
-          isHeadshot: false,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    const vehicleTargets = this.vehicles.getHitscanTargets((veh, killed) => {
-      gameSessionStore.getState().triggerHit(false, killed, 20);
-      this.audio.play2D('hit_marker', 7, 0.45);
-      if (killed) {
-        if (veh.isConvoyTarget) {
-          this.missionDirector?.onConvoyVehicleDestroyed(400);
-        } else {
-          this.missionDirector?.onEnemyKilled(false, 280);
-        }
-        gameSessionStore.getState().pushKillFeed({
-          id: `${veh.id}_${Date.now()}`,
-          killer: 'VANGUARD-1',
-          victim: veh.displayName,
-          weaponName: this.weapons.getActiveState().config.shortName,
-          isHeadshot: false,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    const allHitscan: HitscanTarget[] = [...enemyTargets, ...airTargets, ...vehicleTargets];
-    const lockCandidates = [...this.airCombat.getLockCandidates(), ...this.vehicles.getLockCandidates()];
+    this._lockCandidatesScratch.length = 0;
+    this.airCombat.fillLockCandidates(this._lockCandidatesScratch);
+    this.vehicles.fillLockCandidates(this._lockCandidatesScratch);
 
     const tGame0 = performance.now();
     this.weapons.update(
@@ -977,20 +973,14 @@ export class GameEngine {
       this.player,
       this.renderer.camera,
       this.collisionWorld,
-      allHitscan,
-      lockCandidates,
-      (colliderId, dmg) => {
-        this.destruction.applyDamage(
-          colliderId,
-          dmg,
-          this.handleExplosion,
-          (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
-        );
-      },
+      this._hitscanTargetsScratch,
+      this._lockCandidatesScratch,
+      this.onWeaponApplyDestructionDamage,
       inVehicle
     );
 
     // Vehicles & Roof Turret
+    const hadManualLookInput = this.input.hasPendingLookDelta();
     this.vehicles.update(
       dt,
       this.input,
@@ -998,97 +988,33 @@ export class GameEngine {
       this.renderer.camera,
       this.collisionWorld,
       this.worldData?.roadWaypoints ?? [],
-      (origin, dir) => {
-        // Check solid world/building/cover/destructible obstruction before scoring hits
-        const playerVehicleId = this.vehicles.getPlayerVehicle()?.collider.id;
-        const wallHit: RayHit = {
-          hit: false,
-          distance: 110,
-          pointX: 0,
-          pointY: 0,
-          pointZ: 0,
-          normalX: 0,
-          normalY: 1,
-          normalZ: 0,
-          collider: null,
-        };
-        const hitWall = this.collisionWorld.sweptSegmentTest(
-          origin.x,
-          origin.y,
-          origin.z,
-          dir.x,
-          dir.y,
-          dir.z,
-          110,
-          SOLID_OBSTRUCTION_MASK,
-          wallHit,
-          playerVehicleId
-        );
+      this.onTurretShotCheck,
+      this.onVehicleConvoyDestroyed,
+      settings.graphics.fov,
+      hadManualLookInput
+    );
 
-        let bestDist = hitWall ? wallHit.distance : 110;
-        let hitTarget: HitscanTarget | null = null;
-        let hitZone = 'upper_torso' as 'head' | 'upper_torso' | 'lower_body';
-        for (const t of allHitscan) {
-          if (!t.alive) continue;
-          const checkZone = (
-            center: THREE.Vector3,
-            radius: number,
-            zone: 'head' | 'upper_torso' | 'lower_body'
-          ) => {
-            const toX = center.x - origin.x;
-            const toY = center.y - origin.y;
-            const toZ = center.z - origin.z;
-            const proj = toX * dir.x + toY * dir.y + toZ * dir.z;
-            if (proj < 0 || proj > bestDist) return;
-            const perpSq = toX * toX + toY * toY + toZ * toZ - proj * proj;
-            if (perpSq <= (radius + 0.45) * (radius + 0.45)) {
-              bestDist = proj;
-              hitTarget = t;
-              hitZone = zone;
-            }
-          };
-          checkZone(t.position, t.hitRadius, 'upper_torso');
-          if (t.lowerBodyPosition && t.lowerBodyRadius) {
-            checkZone(t.lowerBodyPosition, t.lowerBodyRadius, 'lower_body');
-          }
-          if (t.headPosition && t.headRadius) {
-            checkZone(t.headPosition, t.headRadius, 'head');
-          }
-        }
-        if (hitTarget) {
-          const isHead = hitZone === 'head';
-          const zoneMult = hitZone === 'head' ? 1.5 : hitZone === 'lower_body' ? 0.85 : 1.0;
-          (hitTarget as HitscanTarget).onHit(Math.round(26 * zoneMult), isHead, (hitTarget as HitscanTarget).position, hitZone);
-        } else if (hitWall && wallHit.collider) {
-          if (wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) {
-            this.destruction.applyDamage(
-              wallHit.collider.id,
-              26,
-              this.handleExplosion,
-              (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
-            );
-            this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
-          } else {
-            this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'concrete');
-          }
-        }
-      },
-      () => this.missionDirector?.onConvoyVehicleDestroyed(400),
-      settings.graphics.fov
+    // Collectible 3D Heart Health Pickups
+    const nowDrivingVehicle = this.vehicles.getPlayerVehicle() !== null;
+    this.healthPickups.update(
+      dt,
+      this.player,
+      nowDrivingVehicle,
+      (msg, dur) => this.missionDirector?.showAlert(msg, dur),
+      (msg, dur) => this.missionDirector?.showSubtitle(msg, dur)
     );
 
     // Pooled projectiles (rockets, guided missiles, grenades, aerial bombs, TRIDENT-X)
     const tProj0 = performance.now();
-    const prox = [
-      ...this.enemies.getPositionsForProximity(),
-      ...this.airCombat.getPositionsForProximity(),
-    ];
+    this._proxScratch.length = 0;
+    this.enemies.fillPositionsForProximity(this._proxScratch);
+    this.airCombat.fillPositionsForProximity(this._proxScratch);
     const explosiveCallbacks = this.getExplosiveCallbacks();
     this.projectiles.update(
       dt,
       this.collisionWorld,
-      (ev) => this.handleExplosionEvent(ev),
-      prox
+      this.handleExplosionEvent,
+      this._proxScratch
     );
     const tProjEnd = performance.now();
     this.monitor.recordPhase('projectilesFlight', tProjEnd - tProj0);
@@ -1134,6 +1060,7 @@ export class GameEngine {
     }
 
     if (!this.player.alive) {
+      this.input.clearAllInputs();
       this.telemetry.recordPlayerDeath();
     }
     this.telemetry.setPlayerWeaponTelemetry(
@@ -1156,13 +1083,12 @@ export class GameEngine {
       gameSessionStore.getState().decayDamageArcs();
     }
 
-    // Tick Combat Engagement Coordinator leases and exposure telemetry
+    // Tick Combat Engagement Coordinator leases and exposure telemetry (zero allocation)
     this.coordinator.tick(this.telemetry.getElapsedSec());
-    const groundRows = this.enemies.getDebugInspectorRows(this.player);
-    const airRows = this.airCombat.getDebugInspectorRows(this.player);
-    const vehRows = this.vehicles.getDebugInspectorRows(this.player);
-    const allDebugUnits = [...groundRows, ...airRows, ...vehRows];
-    const anyEnemyHasLos = allDebugUnits.some((u) => u.hasLos);
+    const anyEnemyHasLos =
+      this.enemies.hasAnyEnemyWithLos() ||
+      this.airCombat.hasAnyUnitWithLos() ||
+      this.vehicles.hasAnyHostileWithLos();
     this.telemetry.tickExposure(dt, anyEnemyHasLos);
 
     const devActive = isDeveloperModeActiveForSetting(settings.developer.devModeEnabled);
@@ -1172,6 +1098,10 @@ export class GameEngine {
       const publishPeriod = debugOpen ? 0.1 : 0.45;
       if (this.debugPublishAccum >= publishPeriod) {
         this.debugPublishAccum = 0;
+        const groundRows = this.enemies.getDebugInspectorRows(this.player);
+        const airRows = this.airCombat.getDebugInspectorRows(this.player);
+        const vehRows = this.vehicles.getDebugInspectorRows(this.player);
+        const allDebugUnits = [...groundRows, ...airRows, ...vehRows];
         const drawInfo = this.renderer.getDrawInfo();
         const resSnap = this.resourceManager.getSnapshot();
         const audit = this.resourceManager.getLastUnloadAudit();
@@ -1302,6 +1232,183 @@ export class GameEngine {
     });
   };
 
+  private onEnemyHitscanHit = (unit: EnemyUnit, dmg: number, isHead: boolean, killed: boolean): void => {
+    gameSessionStore.getState().triggerHit(isHead, killed, dmg);
+    this.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
+    if (killed) {
+      this.missionDirector?.onEnemyKilled(isHead, 120);
+      if (this.activeScope) {
+        this.healthPickups.tryEvaluateEnemyDrop(
+          unit,
+          this.player.health,
+          this.player.maxHealth,
+          this.activeScope
+        );
+      }
+      gameSessionStore.getState().pushKillFeed({
+        id: `${unit.id}_${Date.now()}`,
+        killer: 'VANGUARD-1',
+        victim: unit.displayName,
+        weaponName: this.weapons.getActiveState().config.shortName,
+        isHeadshot: isHead,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  private onAirHitscanHit = (unit: AirUnit, killed: boolean): void => {
+    gameSessionStore.getState().triggerHit(false, killed, 25);
+    this.audio.play2D('hit_marker', 8, 0.5);
+    if (killed) {
+      this.missionDirector?.onAirUnitKilled(350, unit.type);
+      gameSessionStore.getState().pushKillFeed({
+        id: `${unit.id}_${Date.now()}`,
+        killer: 'VANGUARD-1',
+        victim: unit.displayName,
+        weaponName: this.weapons.getActiveState().config.shortName,
+        isHeadshot: false,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  private onVehicleHitscanHit = (veh: VehicleEntity, killed: boolean): void => {
+    gameSessionStore.getState().triggerHit(false, killed, 20);
+    this.audio.play2D('hit_marker', 7, 0.45);
+    if (killed) {
+      if (veh.isConvoyTarget) {
+        this.missionDirector?.onConvoyVehicleDestroyed(400);
+      } else {
+        this.missionDirector?.onEnemyKilled(false, 280);
+      }
+      gameSessionStore.getState().pushKillFeed({
+        id: `${veh.id}_${Date.now()}`,
+        killer: 'VANGUARD-1',
+        victim: veh.displayName,
+        weaponName: this.weapons.getActiveState().config.shortName,
+        isHeadshot: false,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  private onDestructibleTargetDestroyed = (ent: { kind: string }): void => {
+    this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind);
+  };
+
+  private onWeaponApplyDestructionDamage = (colliderId: string, dmg: number): void => {
+    this.destruction.applyDamage(
+      colliderId,
+      dmg,
+      this.handleExplosion,
+      this.onDestructibleTargetDestroyed
+    );
+  };
+
+  private onVehicleConvoyDestroyed = (): void => {
+    this.missionDirector?.onConvoyVehicleDestroyed(400);
+  };
+
+  private onSpawnDynamicDrone = (x: number, y: number, z: number): void => {
+    if (this.activeScope) {
+      this.airCombat.spawnDynamicDrone(x, y, z, this.activeScope);
+    }
+  };
+
+  private onTurretShotCheck = (origin: THREE.Vector3, dir: THREE.Vector3): void => {
+    const playerVehicleId = this.vehicles.getPlayerVehicle()?.collider.id;
+    this._turretRayHit.hit = false;
+    this._turretRayHit.distance = 110;
+    this._turretRayHit.collider = null;
+
+    const hitWall = this.collisionWorld.sweptSegmentTest(
+      origin.x,
+      origin.y,
+      origin.z,
+      dir.x,
+      dir.y,
+      dir.z,
+      110,
+      SOLID_OBSTRUCTION_MASK,
+      this._turretRayHit,
+      playerVehicleId
+    );
+
+    let bestDist = hitWall ? this._turretRayHit.distance : 110;
+    let hitTarget: HitscanTarget | null = null;
+    let hitZone: 'head' | 'upper_torso' | 'lower_body' = 'upper_torso';
+
+    for (let i = 0; i < this._hitscanTargetsScratch.length; i++) {
+      const t = this._hitscanTargetsScratch[i];
+      if (!t.alive) continue;
+
+      const cMain = t.position;
+      let toX = cMain.x - origin.x;
+      let toY = cMain.y - origin.y;
+      let toZ = cMain.z - origin.z;
+      let proj = toX * dir.x + toY * dir.y + toZ * dir.z;
+      if (proj >= 0 && proj <= bestDist) {
+        const r = t.hitRadius + 0.45;
+        if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
+          bestDist = proj;
+          hitTarget = t;
+          hitZone = 'upper_torso';
+        }
+      }
+
+      if (t.lowerBodyPosition && t.lowerBodyRadius) {
+        const cLow = t.lowerBodyPosition;
+        toX = cLow.x - origin.x;
+        toY = cLow.y - origin.y;
+        toZ = cLow.z - origin.z;
+        proj = toX * dir.x + toY * dir.y + toZ * dir.z;
+        if (proj >= 0 && proj <= bestDist) {
+          const r = t.lowerBodyRadius + 0.45;
+          if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
+            bestDist = proj;
+            hitTarget = t;
+            hitZone = 'lower_body';
+          }
+        }
+      }
+
+      if (t.headPosition && t.headRadius) {
+        const cHead = t.headPosition;
+        toX = cHead.x - origin.x;
+        toY = cHead.y - origin.y;
+        toZ = cHead.z - origin.z;
+        proj = toX * dir.x + toY * dir.y + toZ * dir.z;
+        if (proj >= 0 && proj <= bestDist) {
+          const r = t.headRadius + 0.45;
+          if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
+            bestDist = proj;
+            hitTarget = t;
+            hitZone = 'head';
+          }
+        }
+      }
+    }
+
+    if (hitTarget) {
+      const isHead = hitZone === 'head';
+      const zoneMult = hitZone === 'head' ? 1.5 : hitZone === 'lower_body' ? 0.85 : 1.0;
+      hitTarget.onHit(Math.round(26 * zoneMult), isHead, hitTarget.position, hitZone);
+    } else if (hitWall) {
+      const wallHit = this._turretRayHit as RayHit;
+      if (wallHit.collider && (wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE)) {
+        this.destruction.applyDamage(
+          wallHit.collider.id,
+          26,
+          this.handleExplosion,
+          this.onDestructibleTargetDestroyed
+        );
+        this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
+      } else {
+        this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'concrete');
+      }
+    }
+  };
+
   private onScheduleAI = (dt: number): void => {
     if (uiStore.getState().screen !== 'playing' || !this.activeScope || !this.workerBridge) return;
     const t0 = performance.now();
@@ -1313,11 +1420,7 @@ export class GameEngine {
       this.worldData?.coverNodes ?? [],
       this.workerBridge,
       this.governor.getProfile().aiMidIntervalSec,
-      (x, y, z) => {
-        if (this.activeScope) {
-          this.airCombat.spawnDynamicDrone(x, y, z, this.activeScope);
-        }
-      }
+      this.onSpawnDynamicDrone
     );
     this.airCombat.update(dt, this.player, this.collisionWorld);
 
@@ -1360,6 +1463,14 @@ export class GameEngine {
         weaponCfg.adsFov,
         this.weapons.isAds,
         dt
+      );
+    }
+    if (this.activeMission && this.lights) {
+      this.lights.updateShadowFocus(
+        this.player.position.x,
+        this.player.position.y,
+        this.player.position.z,
+        this.governor.getProfile().shadowDistance
       );
     }
     this.chunkManager.updateVisibility(this.renderer.camera, this.governor.getProfile().drawDistance);
@@ -1451,12 +1562,32 @@ export class GameEngine {
       }
     }
 
-    const blips: MiniMapBlip[] = [
-      ...this.enemies.getMiniMapBlips(),
-      ...this.airCombat.getMiniMapBlips(),
-      ...this.vehicles.getMiniMapBlips(),
-      ...this.missionDirector.getObjectiveBlips(),
-    ];
+    this._blipsScratch.length = 0;
+    this.enemies.fillMiniMapBlips(this._blipsScratch);
+    this.airCombat.fillMiniMapBlips(this._blipsScratch);
+    this.vehicles.fillMiniMapBlips(this._blipsScratch);
+    this.missionDirector.fillObjectiveBlips(this._blipsScratch);
+    const blips = this._blipsScratch.slice();
+
+    const rpgState = this.weapons.getWeaponState('rocket_launcher');
+    const rpgAmmoInMag = rpgState?.ammoInMag ?? 0;
+    const rpgReserveAmmo = rpgState?.reserveAmmo ?? 0;
+    const rpgEquipped = wState.config.id === 'rocket_launcher';
+
+    const touchOverride = uiStore.getState().touchHudOverride;
+    const touchMode = settingsStore.getState().input.touchMode;
+    const effectiveDevice: 'touch' | 'keyboard' =
+      touchOverride === true || touchMode === 'always_on'
+        ? 'touch'
+        : touchOverride === false || touchMode === 'always_off'
+          ? 'keyboard'
+          : this.input.getLastInputDevice();
+
+    const activeActionDirective = this.missionDirector.getActiveActionDirective(
+      effectiveDevice,
+      Boolean(veh),
+      rpgEquipped
+    );
 
     gameSessionStore.getState().updateHudSnapshot({
       health: Math.round(this.player.health),
@@ -1480,6 +1611,10 @@ export class GameEngine {
       crosshairSpread:
         (this.weapons.isAds ? wState.config.spreadAdsRad : wState.config.spreadHipRad) +
         this.player.currentSpeed * 0.002,
+      rpgAvailable: rpgAmmoInMag + rpgReserveAmmo > 0,
+      rpgAmmoInMag,
+      rpgReserveAmmo,
+      rpgEquipped,
       playerX: this.player.position.x,
       playerZ: this.player.position.z,
       playerYaw: this.player.yaw,
@@ -1488,8 +1623,12 @@ export class GameEngine {
       vehicleHealth: veh ? Math.round((veh.health / veh.maxHealth) * 100) : 100,
       vehicleMaxHealth: 100,
       vehicleSpeedKmh: veh ? Math.round(Math.abs(veh.speed) * 3.6) : 0,
+      vehicleGear: veh?.driveGear ?? 'FORWARD',
+      vehicleSteerDeg: veh ? Math.round(THREE.MathUtils.radToDeg(veh.steerAngle)) : 0,
+      vehicleHandbrake: veh?.handbrakeActive ?? false,
       vehicleCameraMode: this.vehicles.getCameraMode(),
       interactPrompt,
+      activeActionDirective,
       subtitleText: settingsStore.getState().accessibility.subtitles ? this.missionDirector.subtitleText : null,
       missionAlert: this.missionDirector.alertText,
       elapsedSec: Math.floor(this.missionDirector.elapsedSec),

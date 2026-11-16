@@ -89,12 +89,13 @@ export class CollisionWorld {
     stepHeight = 0.45,
     dt = 1 / 60,
     entityId = 'player',
-    layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID
+    layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID,
+    outResult?: CharacterMoveResult
   ): CharacterMoveResult {
     pos.x += vel.x * dt;
     pos.y += vel.y * dt;
     pos.z += vel.z * dt;
-    const out: CharacterMoveResult = {
+    const out: CharacterMoveResult = outResult ?? {
       grounded: false,
       hitCeiling: false,
       hitWall: false,
@@ -109,6 +110,19 @@ export class CollisionWorld {
       activeContacts: 0,
       maxPenetrationDepth: 0,
     };
+    out.grounded = false;
+    out.hitCeiling = false;
+    out.hitWall = false;
+    out.hitHorizontal = false;
+    out.steppedUp = false;
+    out.clampedWorldBounds = false;
+    out.lastBlockerId = null;
+    out.wallNormalX = 0;
+    out.wallNormalY = 0;
+    out.wallNormalZ = 0;
+    out.penetrationCorrected = 0;
+    out.activeContacts = 0;
+    out.maxPenetrationDepth = 0;
     this.physicsWorld.resolveCharacterCapsule(
       entityId,
       pos,

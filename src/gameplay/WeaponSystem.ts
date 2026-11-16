@@ -55,6 +55,7 @@ export class WeaponSystem {
   private weapons = new Map<WeaponId, WeaponRuntimeState>();
   private rigs = new Map<WeaponId, ViewModelRig>();
   private activeWeaponId: WeaponId = 'assault_rifle';
+  private previousPrimaryWeaponId: WeaponId = 'assault_rifle';
   private viewModelContainer = new THREE.Group();
   private viewModelMaterialBank: ViewModelMaterialBank;
   private viewModelSceneRef: THREE.Scene;
@@ -92,6 +93,9 @@ export class WeaponSystem {
   private readonly _right = new THREE.Vector3();
   private readonly _up = new THREE.Vector3();
   private readonly _hitPoint = new THREE.Vector3();
+  private readonly _muzzleWorld = new THREE.Vector3();
+  private readonly _shotDir = new THREE.Vector3();
+  private readonly _endPoint = new THREE.Vector3();
   private readonly _worldHit: RayHit = {
     hit: false,
     distance: 0,
@@ -158,6 +162,9 @@ export class WeaponSystem {
 
   selectWeapon(id: WeaponId, instant = false): void {
     if (!this.weapons.has(id)) return;
+    if (this.activeWeaponId !== 'rocket_launcher' && this.activeWeaponId !== 'guided_missile') {
+      this.previousPrimaryWeaponId = this.activeWeaponId;
+    }
     const prevRig = this.rigs.get(this.activeWeaponId);
     if (prevRig) prevRig.root.visible = false;
 
@@ -176,6 +183,14 @@ export class WeaponSystem {
 
   getActiveState(): WeaponRuntimeState {
     return this.weapons.get(this.activeWeaponId)!;
+  }
+
+  getWeaponState(id: WeaponId): WeaponRuntimeState | undefined {
+    return this.weapons.get(id);
+  }
+
+  getPreviousPrimaryWeaponId(): WeaponId {
+    return this.previousPrimaryWeaponId;
   }
 
   getActiveFireMode(): FireMode {
@@ -275,10 +290,11 @@ export class WeaponSystem {
       camera.getWorldDirection(this._rayDir);
       this._rayDir.y += 0.22;
       this._rayDir.normalize();
+      this._muzzleWorld.copy(this._rayOrigin).addScaledVector(this._rayDir, 0.7);
       this.projectiles.spawn({
         kind: 'hand_grenade',
         fromPlayer: true,
-        origin: this._rayOrigin.clone().addScaledVector(this._rayDir, 0.7),
+        origin: this._muzzleWorld,
         direction: this._rayDir,
         speed: 22,
         damage: 175,
@@ -289,8 +305,14 @@ export class WeaponSystem {
 
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     this.equipTimer = Math.max(0, this.equipTimer - dt);
+    if (player.isSprinting) {
+      this.sprintToFireTimer = cfg.sprintToFireSec;
+    } else if (this.wasSprinting && !player.isSprinting) {
+      this.sprintToFireTimer = Math.max(0, cfg.sprintToFireSec - dt);
+    } else {
+      this.sprintToFireTimer = Math.max(0, this.sprintToFireTimer - dt);
+    }
     this.wasSprinting = player.isSprinting;
-    this.sprintToFireTimer = 0;
     this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt);
     this.recoilKickZ = THREE.MathUtils.lerp(this.recoilKickZ, 0, Math.min(1, dt * 16));
 
@@ -445,9 +467,9 @@ export class WeaponSystem {
     this._up.set(0, 1, 0).applyQuaternion(camera.quaternion);
     this._rayOrigin.copy(camera.position);
 
-    // Muzzle world position for tracers/shells
-    const muzzleWorld = this._rayOrigin
-      .clone()
+    // Muzzle world position for tracers/shells (zero heap allocation)
+    const muzzleWorld = this._muzzleWorld
+      .copy(this._rayOrigin)
       .addScaledVector(this._rayDir, 0.85)
       .addScaledVector(this._right, this.isAds ? 0 : 0.18)
       .addScaledVector(this._up, -0.14);
@@ -491,8 +513,8 @@ export class WeaponSystem {
     for (let p = 0; p < cfg.pelletCount; p++) {
       const sx = (Math.random() - 0.5) * 2 * spread;
       const sy = (Math.random() - 0.5) * 2 * spread;
-      const dir = this._rayDir
-        .clone()
+      const dir = this._shotDir
+        .copy(this._rayDir)
         .addScaledVector(this._right, sx)
         .addScaledVector(this._up, sy)
         .normalize();
@@ -570,7 +592,7 @@ export class WeaponSystem {
         }
       }
 
-      const endPoint = this._rayOrigin.clone().addScaledVector(dir, bestDist);
+      const endPoint = this._endPoint.copy(this._rayOrigin).addScaledVector(dir, bestDist);
       if (p === 0 || p % 3 === 0) {
         this.vfx.spawnTracer(muzzleWorld.x, muzzleWorld.y, muzzleWorld.z, endPoint.x, endPoint.y, endPoint.z);
       }
@@ -695,8 +717,16 @@ export class WeaponSystem {
       rig.muzzleFlash.rotation.z += dt * 40;
     }
     if (rig.slideOrBolt) {
-      rig.slideOrBolt.position.z =
-        rig.slideOrBolt.position.z + (this.recoilKickZ * 0.5 - rig.slideOrBolt.position.z * 0.0) * 0.1;
+      if (this.activeWeaponId === 'rocket_launcher') {
+        const st = this.weapons.get('rocket_launcher');
+        rig.slideOrBolt.visible = Boolean(st && st.ammoInMag > 0 && !this.isReloading);
+      }
+      const targetSlideZ = rig.slideRestZ + this.recoilKickZ * 0.55;
+      rig.slideOrBolt.position.z = THREE.MathUtils.lerp(
+        rig.slideOrBolt.position.z,
+        targetSlideZ,
+        Math.min(1, dt * 28)
+      );
     }
 
     const targetX = this.isAds ? 0.0 : 0.24;

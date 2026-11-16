@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Howler } from 'howler';
 import * as THREE from 'three';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { ResourceManager } from '@/src/core/ResourceManager';
@@ -32,7 +31,7 @@ function makeSignals(overrides: Partial<GpuCapabilitySignals> = {}): GpuCapabili
 describe('Adaptive Graphics, Ownership, Telemetry & Lifecycle Suspend', () => {
   afterEach(() => {
     settingsStore.getState().resetDefaults();
-    Howler.mute(false);
+    vi.unstubAllGlobals();
   });
 
   it('classifies mobile Safari privacy-masked GPU (null rendererHint & null deviceMemory) gracefully without crashing', () => {
@@ -124,19 +123,86 @@ describe('Adaptive Graphics, Ownership, Telemetry & Lifecycle Suspend', () => {
     rm.disposeAll();
   });
 
-  it('suspends and resumes Howler and AudioContext on lifecycle transitions', () => {
+  it('suspends and resumes AudioContext and enforces lifecycle mute even when settings update while hidden', () => {
+    const gains: Array<{
+      gain: {
+        value: number;
+        setTargetAtTime: ReturnType<typeof vi.fn>;
+        setValueAtTime: ReturnType<typeof vi.fn>;
+      };
+      connect: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    const suspendSpy = vi.fn().mockResolvedValue(undefined);
+    const resumeSpy = vi.fn().mockResolvedValue(undefined);
+    const closeSpy = vi.fn().mockResolvedValue(undefined);
+
+    const mockCtx = {
+      state: 'running' as AudioContextState,
+      sampleRate: 44100,
+      currentTime: 1.0,
+      destination: {},
+      listener: {},
+      suspend: () => {
+        mockCtx.state = 'suspended';
+        return suspendSpy();
+      },
+      resume: () => {
+        mockCtx.state = 'running';
+        return resumeSpy();
+      },
+      close: closeSpy,
+      createGain: () => {
+        const node = {
+          gain: {
+            value: 1,
+            setTargetAtTime: vi.fn((val: number) => {
+              node.gain.value = val;
+            }),
+            setValueAtTime: vi.fn((val: number) => {
+              node.gain.value = val;
+            }),
+          },
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        };
+        gains.push(node);
+        return node;
+      },
+      createBuffer: (_ch: number, len: number) => ({
+        getChannelData: () => new Float32Array(len),
+      }),
+    };
+
+    const FakeAudioContext = vi.fn(function FakeAudioContextImpl() {
+      return mockCtx;
+    });
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+
     const rm = new ResourceManager();
-    const audio = new AudioManager(rm, SettingsBundleSchema.parse({}).audio);
-    const muteSpy = vi.spyOn(Howler, 'mute');
+    const initial = SettingsBundleSchema.parse({}).audio;
+    const audio = new AudioManager(rm, { ...initial, muted: false, masterVolume: 0.7 });
+    audio.unlock();
+
+    const masterGain = gains[0];
+    expect(masterGain).toBeDefined();
+    expect(masterGain.gain.value).toBeCloseTo(0.7, 5);
 
     audio.suspend();
-    expect(muteSpy).toHaveBeenCalledWith(true);
+    expect(audio.isSuspendedByLifecycle()).toBe(true);
+    expect(suspendSpy).toHaveBeenCalledTimes(1);
+    expect(masterGain.gain.value).toBe(0);
+
+    // Updating settings while tab is suspended must NOT unmute masterGain (FND-11)
+    audio.applySettings({ ...initial, muted: false, masterVolume: 0.9 });
+    expect(masterGain.gain.value).toBe(0);
 
     audio.resume();
-    expect(muteSpy).toHaveBeenCalledWith(false);
+    expect(audio.isSuspendedByLifecycle()).toBe(false);
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(masterGain.gain.value).toBeCloseTo(0.9, 5);
 
     rm.disposeAll();
-    muteSpy.mockRestore();
   });
 
   it('handles THREE.WebGLRenderer fallback metrics safely when headless', () => {

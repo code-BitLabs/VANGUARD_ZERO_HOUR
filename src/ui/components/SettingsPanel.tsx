@@ -14,6 +14,7 @@ import {
   TouchControlProfileSchema,
   TouchFireBehaviorSchema,
   TouchModeSchema,
+  VehicleSteeringModeSchema,
 } from '@/src/schemas/settings.schema';
 import { useAudioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
@@ -28,15 +29,16 @@ import { Select, Slider, Switch } from '@/src/ui/primitives/Controls';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/src/ui/primitives/Tabs';
 
 const BINDING_LABELS: Array<{ key: keyof ControlBindings; label: string }> = [
-  { key: 'forward', label: 'Move Forward' },
-  { key: 'backward', label: 'Move Backward' },
-  { key: 'left', label: 'Strafe Left' },
-  { key: 'right', label: 'Strafe Right' },
+  { key: 'forward', label: 'Move Forward / Vehicle Gas' },
+  { key: 'backward', label: 'Move Backward / Vehicle Brake & Reverse' },
+  { key: 'left', label: 'Strafe Left / Steer Left' },
+  { key: 'right', label: 'Strafe Right / Steer Right' },
   { key: 'sprint', label: 'Sprint' },
   { key: 'jump', label: 'Jump' },
+  { key: 'handbrake', label: 'Vehicle Handbrake / Drift' },
   { key: 'crouch', label: 'Crouch / Slide' },
   { key: 'reload', label: 'Reload' },
-  { key: 'interact', label: 'Interact / Vehicle' },
+  { key: 'interact', label: 'Interact / Enter & Exit Vehicle' },
   { key: 'vehicleCamera', label: 'Cycle Vehicle Camera' },
   { key: 'grenade', label: 'Throw Grenade' },
   { key: 'fireMode', label: 'Cycle Fire Mode' },
@@ -749,6 +751,62 @@ export function SettingsPanel({
                       { value: 'ads_on_fire', label: 'ADS While Firing' },
                     ]}
                   />
+                </SettingRow>
+
+                <SettingRow
+                  label="Vehicle Touch Steering Mode"
+                  hint="PUBG-style dedicated Left/Right steering buttons (default) or virtual steering wheel."
+                >
+                  <Select
+                    aria-label="Vehicle Touch Steering Mode"
+                    value={input.touchVehicleSteeringMode}
+                    onValueChange={(v) =>
+                      updateInput({ touchVehicleSteeringMode: VehicleSteeringModeSchema.parse(v) })
+                    }
+                    options={[
+                      { value: 'buttons', label: 'Steering Buttons (Left / Right)' },
+                      { value: 'wheel', label: 'Virtual Steering Wheel' },
+                    ]}
+                  />
+                </SettingRow>
+
+                <SettingRow
+                  label="Left-Handed Vehicle Driving HUD"
+                  hint="Places Gas & Brake/Reverse pedals on the left and Steering on the right."
+                >
+                  <Switch
+                    aria-label="Left-Handed Vehicle Driving HUD"
+                    checked={input.touchVehicleLeftHanded}
+                    onCheckedChange={(touchVehicleLeftHanded) =>
+                      updateInput({ touchVehicleLeftHanded })
+                    }
+                  />
+                </SettingRow>
+
+                <SettingRow label={`Vehicle HUD Button Scale (${Math.round(input.touchVehicleButtonScale * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Vehicle HUD Button Scale"
+                      value={input.touchVehicleButtonScale}
+                      min={0.75}
+                      max={1.35}
+                      step={0.05}
+                      onValueChange={(touchVehicleButtonScale) => updateInput({ touchVehicleButtonScale })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label={`Vehicle HUD Opacity (${Math.round(input.touchVehicleButtonOpacity * 100)}%)`}>
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Vehicle HUD Opacity"
+                      value={input.touchVehicleButtonOpacity}
+                      min={0.35}
+                      max={0.95}
+                      step={0.05}
+                      onValueChange={(touchVehicleButtonOpacity) => updateInput({ touchVehicleButtonOpacity })}
+                    />
+                  </div>
                 </SettingRow>
 
                 {(() => {

@@ -11,12 +11,14 @@ import {
   Heart,
   Pause,
   Radio,
+  Rocket,
   Shield,
 } from 'lucide-react';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { InputManager } from '@/src/engine/InputManager';
 import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
+import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
@@ -55,6 +57,8 @@ export function GameHUD({
   const liveFps = combatDebug?.performance.fps ?? diagnostics.fps;
   const viewport = useViewportMode();
   const compactHud = touchControlsVisible || viewport.isCompactLandscape;
+  const hasSeenVehicleHint = useMissionSelectionStore((s) => s.hasSeenVehicleControlHint);
+  const markVehicleHintSeen = useMissionSelectionStore((s) => s.markVehicleControlHintSeen);
 
   const [objectivesExpanded, setObjectivesExpanded] = useState(false);
   const [showHit, setShowHit] = useState(false);
@@ -411,6 +415,16 @@ export function GameHUD({
                 </div>
               )}
 
+              {/* Live Platform-Aware Tactical Action Directive */}
+              {hud.activeActionDirective && (
+                <div
+                  data-testid="hud-action-directive"
+                  className="mt-1 pt-1 border-t border-amber-500/25 font-mono text-[8.5px] leading-tight text-amber-300"
+                >
+                  {hud.activeActionDirective}
+                </div>
+              )}
+
               {/* Ultra-Compact Single-Line Mobile Vitals Integrated Inside Top-Left Strip */}
               <div className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between gap-2 font-mono text-[9px] leading-none">
                 <div className="flex items-center gap-1 text-cyan-400 flex-1">
@@ -441,7 +455,7 @@ export function GameHUD({
             </div>
           ) : (
             /* Desktop Objectives Panel */
-            <div className="bg-[#0B0E11]/82 border border-zinc-800/90 rounded-sm px-3 py-2 space-y-1.5 min-w-[215px]">
+            <div className="bg-[#0B0E11]/82 border border-zinc-800/90 rounded-sm px-3 py-2 space-y-1.5 min-w-[235px] max-w-[330px]">
               <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
                 Mission Objectives
               </div>
@@ -464,6 +478,14 @@ export function GameHUD({
                   </div>
                 );
               })}
+              {hud.activeActionDirective && (
+                <div
+                  data-testid="hud-action-directive"
+                  className="pt-1.5 border-t border-amber-500/30 font-mono text-[10px] text-amber-300 leading-snug"
+                >
+                  {hud.activeActionDirective}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -488,6 +510,7 @@ export function GameHUD({
                 <div className="leading-tight">
                   <div className="text-[9px] text-emerald-400 uppercase truncate max-w-[96px]">{hud.vehicleName}</div>
                   <div className="text-[11px] font-bold text-amber-400 tabular-nums whitespace-nowrap">
+                    {hud.vehicleGear === 'REVERSE' ? 'REV ' : 'FWD '}
                     {hud.vehicleSpeedKmh} KM/H · {hud.vehicleHealth}%
                   </div>
                 </div>
@@ -632,6 +655,31 @@ export function GameHUD({
             FALLOUT ZONE (-4.5 HP/S) · {hud.ordnance.falloutRemainingSec.toFixed(0)}s
           </div>
         )}
+
+        {/* Desktop First-Time Dismissible Vehicle Control Hint */}
+        {!touchControlsVisible && hud.inVehicle && !hasSeenVehicleHint && (
+          <div
+            data-testid="vehicle-control-hint"
+            className="pointer-events-auto bg-[#0B0E11]/95 border border-amber-400/80 px-3.5 py-1.5 rounded-sm shadow-xl flex items-center gap-3"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="font-mono text-[11px] text-zinc-100">
+              <strong className="text-amber-400">VEHICLE CONTROLS:</strong> [W] Gas · [S] Brake / Hold for Reverse · [A/D] Progressive Steer · [Space] Handbrake · [LMB] Turret · [E] Exit
+            </span>
+            <button
+              type="button"
+              data-testid="dismiss-vehicle-hint"
+              onClick={(e) => {
+                e.stopPropagation();
+                markVehicleHintSeen();
+              }}
+              className="px-2 py-0.5 bg-amber-500 text-zinc-950 font-mono text-[10px] font-bold uppercase rounded-xs"
+            >
+              Got It
+            </button>
+          </div>
+        )}
       </div>
 
       {!compactHud && hud.interactPrompt && (
@@ -701,12 +749,29 @@ export function GameHUD({
               <div className="font-display text-lg font-bold uppercase text-zinc-100 mt-0.5">
                 {hud.vehicleName}
               </div>
-              <div className="flex items-baseline gap-4 mt-1 font-mono tabular-nums">
+              <div className="flex items-baseline gap-3 mt-1 font-mono tabular-nums">
+                <span
+                  className={`px-1.5 py-0.5 text-xs font-bold rounded-xs ${
+                    hud.vehicleGear === 'REVERSE'
+                      ? 'bg-red-600/80 text-white'
+                      : hud.vehicleGear === 'BRAKING' || hud.vehicleGear === 'NEUTRAL_HOLD'
+                        ? 'bg-amber-500/80 text-zinc-950'
+                        : 'bg-emerald-500/25 border border-emerald-400/60 text-emerald-300'
+                  }`}
+                >
+                  {hud.vehicleGear === 'REVERSE'
+                    ? 'REV'
+                    : hud.vehicleGear === 'NEUTRAL_HOLD'
+                      ? 'N'
+                      : hud.vehicleGear === 'BRAKING'
+                        ? 'BRK'
+                        : 'FWD'}
+                </span>
                 <span className="text-2xl font-bold text-amber-400">{hud.vehicleSpeedKmh} KM/H</span>
                 <span className="text-xs text-zinc-400">HULL {hud.vehicleHealth}%</span>
               </div>
               <div className="mt-1 font-mono text-[10px] text-zinc-400">
-                LMB TURRET · [E] EXIT VEHICLE
+                [W/S] GAS/REV · [A/D] STEER · [SPACE] DRIFT · [E] EXIT
               </div>
             </>
           ) : (
@@ -742,10 +807,25 @@ export function GameHUD({
                 </div>
               )}
 
-              <div className="flex items-center gap-3 mt-1.5 font-mono text-[10px] text-zinc-400">
-                <span>[1-9] WEAPONS</span>
-                <span>•</span>
-                <span>[G] FRAG x{hud.grenades}</span>
+              <div className="flex items-center justify-between w-full gap-2 mt-1.5 font-mono text-[10px] text-zinc-400">
+                <span>[1-9] WEAPONS · [G] FRAG x{hud.grenades}</span>
+                <button
+                  type="button"
+                  data-testid="desktop-btn-rpg"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    inputManager?.queueWeaponSlot(hud.rpgEquipped ? 1 : 7);
+                  }}
+                  className={`pointer-events-auto px-2 py-0.5 rounded-xs border flex items-center gap-1 font-bold transition-colors ${
+                    hud.rpgEquipped
+                      ? 'bg-amber-500/30 border-amber-400 text-amber-200'
+                      : 'bg-[#141920] border-amber-500/50 text-amber-300 hover:border-amber-400'
+                  }`}
+                >
+                  <Rocket className="w-3 h-3" />
+                  <span>[7] RPG {hud.rpgAmmoInMag}/{hud.rpgReserveAmmo}</span>
+                </button>
               </div>
             </>
           )}

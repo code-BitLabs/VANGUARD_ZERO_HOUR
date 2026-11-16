@@ -37,6 +37,7 @@ export const WeaponSchema = z.object({
   reserveAmmo: z.number().int().nonnegative(),
   reloadTimeSec: z.number().positive(),
   equipTimeSec: z.number().positive(),
+  sprintToFireSec: z.number().nonnegative().default(0.16),
   rangeMeters: z.number().positive(),
   pelletCount: z.number().int().positive().default(1),
   projectileType: ProjectileTypeSchema,

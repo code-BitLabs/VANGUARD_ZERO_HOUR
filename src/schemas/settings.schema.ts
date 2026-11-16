@@ -17,6 +17,7 @@ export const ControlBindingsSchema = z.object({
   bombStrike: z.string().min(1).default('KeyV'),
   strategicNuke: z.string().min(1).default('KeyN'),
   vehicleCamera: z.string().min(1).default('KeyF'),
+  handbrake: z.string().min(1).default('Space'),
 });
 export type ControlBindings = z.infer<typeof ControlBindingsSchema>;
 
@@ -71,6 +72,9 @@ export type TouchFireBehavior = z.infer<typeof TouchFireBehaviorSchema>;
 export const TouchAdsModeSchema = z.enum(['toggle', 'hold']);
 export type TouchAdsMode = z.infer<typeof TouchAdsModeSchema>;
 
+export const VehicleSteeringModeSchema = z.enum(['buttons', 'wheel']);
+export type VehicleSteeringMode = z.infer<typeof VehicleSteeringModeSchema>;
+
 export const NormalizedTouchPositionSchema = z.object({
   x: z.number().min(0.04).max(0.96),
   y: z.number().min(0.08).max(0.94),
@@ -88,6 +92,18 @@ export const TouchControlIdSchema = z.enum([
   'weapon_bar',
 ]);
 export type TouchControlId = z.infer<typeof TouchControlIdSchema>;
+
+export const VehicleTouchControlIdSchema = z.enum([
+  'veh_steer_left',
+  'veh_steer_right',
+  'veh_gas',
+  'veh_brake_reverse',
+  'veh_handbrake',
+  'veh_fire',
+  'veh_camera',
+  'veh_exit',
+]);
+export type VehicleTouchControlId = z.infer<typeof VehicleTouchControlIdSchema>;
 
 export const TouchControlNodeConfigSchema = z.object({
   x: z.number().min(0.04).max(0.96),
@@ -113,6 +129,18 @@ export const TouchControlLayoutMapSchema = z.object({
 });
 export type TouchControlLayoutMap = z.infer<typeof TouchControlLayoutMapSchema>;
 
+export const VehicleTouchControlLayoutMapSchema = z.object({
+  veh_steer_left: TouchControlNodeConfigSchema.default({ x: 0.1, y: 0.74, scale: 1.0 }),
+  veh_steer_right: TouchControlNodeConfigSchema.default({ x: 0.23, y: 0.74, scale: 1.0 }),
+  veh_gas: TouchControlNodeConfigSchema.default({ x: 0.89, y: 0.67, scale: 1.05 }),
+  veh_brake_reverse: TouchControlNodeConfigSchema.default({ x: 0.76, y: 0.76, scale: 1.0 }),
+  veh_handbrake: TouchControlNodeConfigSchema.default({ x: 0.66, y: 0.83, scale: 0.95 }),
+  veh_fire: TouchControlNodeConfigSchema.default({ x: 0.79, y: 0.46, scale: 1.0 }),
+  veh_camera: TouchControlNodeConfigSchema.default({ x: 0.79, y: 0.22, scale: 0.95 }),
+  veh_exit: TouchControlNodeConfigSchema.default({ x: 0.9, y: 0.22, scale: 1.0 }),
+});
+export type VehicleTouchControlLayoutMap = z.infer<typeof VehicleTouchControlLayoutMapSchema>;
+
 export const DEFAULT_TWO_FINGER_CONTROL_MAP: TouchControlLayoutMap = TouchControlLayoutMapSchema.parse({});
 
 export const DEFAULT_THREE_FINGER_CONTROL_MAP: TouchControlLayoutMap = {
@@ -126,6 +154,20 @@ export const DEFAULT_THREE_FINGER_CONTROL_MAP: TouchControlLayoutMap = {
   weapon_bar: { x: 0.48, y: 0.88, scale: 1.0 },
 };
 
+export const DEFAULT_VEHICLE_CONTROL_MAP: VehicleTouchControlLayoutMap =
+  VehicleTouchControlLayoutMapSchema.parse({});
+
+export const LEFT_HANDED_VEHICLE_CONTROL_MAP: VehicleTouchControlLayoutMap = {
+  veh_gas: { x: 0.11, y: 0.67, scale: 1.05 },
+  veh_brake_reverse: { x: 0.24, y: 0.76, scale: 1.0 },
+  veh_handbrake: { x: 0.34, y: 0.83, scale: 0.95 },
+  veh_fire: { x: 0.21, y: 0.46, scale: 1.0 },
+  veh_steer_left: { x: 0.77, y: 0.74, scale: 1.0 },
+  veh_steer_right: { x: 0.9, y: 0.74, scale: 1.0 },
+  veh_camera: { x: 0.79, y: 0.22, scale: 0.95 },
+  veh_exit: { x: 0.9, y: 0.22, scale: 1.0 },
+};
+
 export function cloneControlLayoutMap(map: TouchControlLayoutMap): TouchControlLayoutMap {
   return {
     move_joystick: { ...map.move_joystick },
@@ -136,6 +178,21 @@ export function cloneControlLayoutMap(map: TouchControlLayoutMap): TouchControlL
     crouch: { ...map.crouch },
     jump: { ...map.jump },
     weapon_bar: { ...map.weapon_bar },
+  };
+}
+
+export function cloneVehicleControlLayoutMap(
+  map: VehicleTouchControlLayoutMap
+): VehicleTouchControlLayoutMap {
+  return {
+    veh_steer_left: { ...map.veh_steer_left },
+    veh_steer_right: { ...map.veh_steer_right },
+    veh_gas: { ...map.veh_gas },
+    veh_brake_reverse: { ...map.veh_brake_reverse },
+    veh_handbrake: { ...map.veh_handbrake },
+    veh_fire: { ...map.veh_fire },
+    veh_camera: { ...map.veh_camera },
+    veh_exit: { ...map.veh_exit },
   };
 }
 
@@ -155,6 +212,13 @@ export const InputSettingsSchema = z.object({
   touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
   touchFireButtonScale: z.number().min(0.75).max(1.45).default(1.0),
   touchButtonOpacity: z.number().min(0.35).max(0.95).default(0.72),
+  touchVehicleSteeringMode: VehicleSteeringModeSchema.default('buttons'),
+  touchVehicleLeftHanded: z.boolean().default(false),
+  touchVehicleButtonScale: z.number().min(0.75).max(1.45).default(1.0),
+  touchVehicleButtonOpacity: z.number().min(0.35).max(0.95).default(0.78),
+  touchVehicleLayout: VehicleTouchControlLayoutMapSchema.default(() =>
+    cloneVehicleControlLayoutMap(DEFAULT_VEHICLE_CONTROL_MAP)
+  ),
   autoSprint: z.boolean().default(true),
   touchAutoSprintThreshold: z.number().min(0.65).max(0.95).default(0.82),
   touchManualSprintButton: z.boolean().default(false),

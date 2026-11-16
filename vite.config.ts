@@ -36,9 +36,6 @@ export default defineConfig(() => {
             ) {
               return 'vendor-state';
             }
-            if (id.includes('node_modules/howler')) {
-              return 'vendor-audio';
-            }
             return undefined;
           },
         },

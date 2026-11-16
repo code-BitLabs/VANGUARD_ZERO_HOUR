@@ -84,6 +84,22 @@ export class PlayerController {
   private readonly _fwd = new THREE.Vector3();
   private readonly _right = new THREE.Vector3();
   private readonly _wish = new THREE.Vector3();
+  private readonly _camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  private readonly _moveResultScratch: CharacterMoveResult = {
+    grounded: false,
+    hitCeiling: false,
+    hitWall: false,
+    hitHorizontal: false,
+    steppedUp: false,
+    clampedWorldBounds: false,
+    lastBlockerId: null,
+    wallNormalX: 0,
+    wallNormalY: 0,
+    wallNormalZ: 0,
+    penetrationCorrected: 0,
+    activeContacts: 0,
+    maxPenetrationDepth: 0,
+  };
 
   private readonly _hitboxVolumes: PlayerHitboxVolumes = {
     stance: 'standing',
@@ -352,6 +368,13 @@ export class PlayerController {
     return this._samplePoints;
   }
 
+  heal(amount: number): number {
+    if (!this.alive || amount <= 0) return 0;
+    const before = this.health;
+    this.health = Math.min(this.maxHealth, this.health + amount);
+    return Number((this.health - before).toFixed(2));
+  }
+
   resupply(): void {
     this.health = Math.min(this.maxHealth, this.health + 55);
     this.armor = Math.min(this.maxArmor, this.armor + 65);
@@ -413,12 +436,24 @@ export class PlayerController {
       return;
     }
 
+    const axes = input.getMoveAxes();
+    this._fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+
     // Crouch & Slide triggers with overhead ceiling clearance verification
     if (input.wasActionPressed('crouch')) {
       if (this.isSprinting && this.grounded && !this.isSliding) {
         this.isSliding = true;
         this.slideTimer = 0.62;
-        this.slideDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)).normalize();
+        this.slideDir
+          .set(0, 0, 0)
+          .addScaledVector(this._fwd, axes.forward > 0.1 ? axes.forward : 1)
+          .addScaledVector(this._right, axes.right * 0.65);
+        if (this.slideDir.lengthSq() > 0.001) {
+          this.slideDir.normalize();
+        } else {
+          this.slideDir.copy(this._fwd);
+        }
         this.isCrouching = true;
       } else if (this.isCrouching) {
         if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
@@ -439,7 +474,6 @@ export class PlayerController {
       }
     }
 
-    const axes = input.getMoveAxes();
     const isFiringOrAiming =
       isAds ||
       input.isActionHeld('ads') ||
@@ -447,8 +481,8 @@ export class PlayerController {
       input.wasActionPressed('fire');
     let wantsSprint =
       input.isActionHeld('sprint') &&
-      axes.forward > 0.45 &&
-      Math.abs(axes.right) <= axes.forward * 0.85 &&
+      axes.forward > 0.38 &&
+      Math.abs(axes.right) <= axes.forward * 1.08 &&
       !isFiringOrAiming &&
       !this.isSliding;
     if (wantsSprint && this.isCrouching) {
@@ -477,11 +511,11 @@ export class PlayerController {
             ? baseWalk * 0.65
             : baseWalk;
 
-    this._fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-
     if (this.isSliding) {
-      this._wish.copy(this.slideDir);
+      this._wish
+        .copy(this.slideDir)
+        .addScaledVector(this._right, axes.right * 0.42)
+        .normalize();
     } else {
       this._wish
         .set(0, 0, 0)
@@ -526,7 +560,9 @@ export class PlayerController {
       capsuleHeight,
       this.stepHeight,
       dt,
-      'player'
+      'player',
+      undefined,
+      this._moveResultScratch
     );
     this.grounded = res.grounded;
     this.lastMoveResult = res;
@@ -588,13 +624,13 @@ export class PlayerController {
       this.position.z
     );
 
-    const euler = new THREE.Euler(
+    this._camEuler.set(
       Math.max(-1.45, Math.min(1.45, this.pitch + this.recoilPitchOffset)),
       this.yaw + this.recoilYawOffset,
       this.isSliding ? -0.05 : 0,
       'YXZ'
     );
-    camera.quaternion.setFromEuler(euler);
+    camera.quaternion.setFromEuler(this._camEuler);
 
     const targetFov = isAds ? adsFov : this.isSprinting ? Math.min(106, baseFov + 5) : baseFov;
     const nextFov = THREE.MathUtils.lerp(camera.fov, targetFov, Math.min(1, dt * 14));

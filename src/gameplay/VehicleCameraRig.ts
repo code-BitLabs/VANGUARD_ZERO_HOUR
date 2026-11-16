@@ -61,6 +61,8 @@ export class VehicleCameraRig {
   private smoothDist = 8.2;
   private smoothPivot = new THREE.Vector3();
   private pivotInitialized = false;
+  private lastVehicleYaw = 0;
+  private manualLookHoldTimer = 0;
 
   private readonly _pivot = new THREE.Vector3();
   private readonly _armDir = new THREE.Vector3();
@@ -108,10 +110,20 @@ export class VehicleCameraRig {
     return next;
   }
 
+  notifyManualLookInput(): void {
+    this.manualLookHoldTimer = 1.15;
+  }
+
+  getManualLookHoldTimer(): number {
+    return this.manualLookHoldTimer;
+  }
+
   resetForVehicleEntry(vehicle: VehicleCameraTarget, player: PlayerController): void {
     const isHeavy = vehicle.type === 'armored_truck' || vehicle.type === 'enemy_apc';
     this.smoothDist = this.mode === 'orbit' ? (isHeavy ? 12.2 : 10.8) : isHeavy ? 9.4 : 8.2;
     this.pivotInitialized = false;
+    this.lastVehicleYaw = vehicle.yaw;
+    this.manualLookHoldTimer = 0;
     player.yaw = vehicle.yaw;
     player.pitch = -0.14;
     this.setFpvHiddenVisibility(vehicle, this.mode !== 'driver_fpv');
@@ -122,6 +134,7 @@ export class VehicleCameraRig {
       this.setFpvHiddenVisibility(vehicle, true);
     }
     this.pivotInitialized = false;
+    this.manualLookHoldTimer = 0;
     this.debugRay.active = false;
   }
 
@@ -141,16 +154,31 @@ export class VehicleCameraRig {
     player: PlayerController,
     camera: THREE.PerspectiveCamera,
     collision: CollisionWorld,
-    baseFov: number
+    baseFov: number,
+    hasManualLookInput = false
   ): void {
     vehicle.meshRoot.updateMatrixWorld(true);
     const isHeavy = vehicle.type === 'armored_truck' || vehicle.type === 'enemy_apc';
     let targetFov = baseFov;
 
+    const vehYawDelta = this.pivotInitialized
+      ? wrapAngleRad(vehicle.yaw - this.lastVehicleYaw)
+      : 0;
+    this.lastVehicleYaw = vehicle.yaw;
+
+    if (hasManualLookInput) {
+      this.manualLookHoldTimer = 1.15;
+    } else {
+      this.manualLookHoldTimer = Math.max(0, this.manualLookHoldTimer - dt);
+    }
+
     if (this.mode === 'driver_fpv') {
       this.setFpvHiddenVisibility(vehicle, false);
       this.debugRay.active = false;
 
+      if (!hasManualLookInput) {
+        player.yaw = wrapAngleRad(player.yaw + vehYawDelta);
+      }
       // Clamp head look smoothly to ±106 deg around vehicle forward heading
       const relYaw = THREE.MathUtils.clamp(wrapAngleRad(player.yaw - vehicle.yaw), -1.85, 1.85);
       player.yaw = vehicle.yaw + relYaw;
@@ -191,6 +219,16 @@ export class VehicleCameraRig {
       // 'chase' or 'orbit' spring-arm exterior camera
       const isOrbit = this.mode === 'orbit';
       player.pitch = THREE.MathUtils.clamp(player.pitch, -0.95, 0.34);
+
+      // In Chase mode, smoothly follow vehicle heading when the player is not actively dragging look
+      if (!isOrbit && !hasManualLookInput && this.manualLookHoldTimer <= 0) {
+        player.yaw = wrapAngleRad(player.yaw + vehYawDelta * 0.88);
+        if (Math.abs(vehicle.speed) > 0.35) {
+          const diff = wrapAngleRad(vehicle.yaw - player.yaw);
+          const followRate = 3.2 + Math.min(1, Math.abs(vehicle.speed) / 14) * 3.8;
+          player.yaw = wrapAngleRad(player.yaw + diff * Math.min(1, dt * followRate));
+        }
+      }
 
       const desiredDist = isOrbit ? (isHeavy ? 12.2 : 10.8) : isHeavy ? 9.4 : 8.2;
       const pivotHeight = isHeavy ? 2.88 : 2.64;

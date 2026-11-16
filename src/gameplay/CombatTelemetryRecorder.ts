@@ -634,7 +634,7 @@ export class CombatTelemetryRecorder {
   };
 
   private latestPhysics: PhysicsWorldDiagnosticsSnapshot = {
-    solverBackend: 'Hybrid Rapier3D + Custom FPS Controller + SpatialHash/BVH',
+    solverBackend: 'Custom FPS Controller + SpatialHash/BVH',
     rapierInitialized: false,
     fixedTimestepSec: 0.0167,
     worldBoundsMin: -106,

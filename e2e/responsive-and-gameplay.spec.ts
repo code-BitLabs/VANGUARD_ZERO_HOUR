@@ -88,6 +88,16 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
 
   await page.goto('/');
   await page.getByRole('button', { name: /Play Campaign/i }).click();
+
+  // Verify Pre-Deployment Mission Briefing panel, version badge, controls guide, and Full Briefing Dossier modal (FND-16 / FND-17)
+  await expect(page.getByTestId('mission-briefing-panel')).toBeVisible();
+  await expect(page.getByTestId('briefing-version-badge')).toBeVisible();
+  await expect(page.getByTestId('briefing-controls-guide')).toBeVisible();
+  await page.getByTestId('open-mission-briefing').click();
+  await expect(page.getByTestId('mission-briefing-modal')).toBeVisible();
+  await page.getByTestId('close-mission-briefing').click();
+  await expect(page.getByTestId('mission-briefing-modal')).toHaveCount(0);
+
   await page.getByRole('button', { name: /Deploy Operation/i }).click();
 
   await expect(page.getByTestId('mobile-touch-controls')).toBeVisible({ timeout: 15_000 });
@@ -96,14 +106,26 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await expect(page.getByTestId('touch-btn-fire')).toBeVisible();
   await expect(page.getByTestId('touch-btn-ads')).toBeVisible();
   await expect(page.getByTestId('touch-btn-weapon-switch')).toBeVisible();
+  await expect(page.getByTestId('touch-btn-rpg')).toBeVisible();
   await expect(page.getByTestId('touch-btn-tactical-drawer')).toBeVisible();
   await expect(page.getByRole('button', { name: /Pause Mission/i })).toBeVisible();
 
-  // Compact Top HUD verification: compact objective indicator, single-line compass strip, inline weapon readout, and encounter-gated boss bar
+  // Compact Top HUD verification: compact objective indicator, actionable NEXT ACTION directive (FND-16), single-line compass strip, inline weapon readout, and encounter-gated boss bar
   await expect(page.getByTestId('hud-objectives-compact')).toBeVisible();
+  await expect(page.getByTestId('hud-action-directive')).toBeVisible();
+  await expect(page.getByTestId('hud-action-directive')).toContainText(/NEXT ACTION:/i);
   await expect(page.getByTestId('hud-compass-strip')).toBeVisible();
   await expect(page.getByTestId('hud-compact-weapon-readout')).toBeVisible();
   await expect(page.getByTestId('hud-boss-bar')).toHaveCount(0);
+
+  // Verify 1-tap RPG quick-equip button (FND-19) switches to RPG-7V without auto-firing
+  await page.getByTestId('touch-btn-rpg').dispatchEvent('pointerdown', {
+    pointerId: 31,
+    bubbles: true,
+    cancelable: true,
+    pointerType: 'touch',
+  });
+  await expect(page.getByTestId('hud-compact-weapon-readout')).toContainText(/AT-4X RPG/i);
 
   // Expand and collapse objective list
   await expect(page.getByTestId('hud-objectives-expanded-list')).toHaveCount(0);
@@ -238,7 +260,7 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   });
   expect(multitouchResult.ok).toBe(true);
 
-  // Switch to Three-Finger Claw Mode from Pause -> Settings -> Open 1:1 Full-Screen HUD Editor -> Save -> Resume & Test Controls
+  // Switch to Three-Finger Claw Mode from Pause -> Settings -> Open 1:1 Full-Screen HUD Editor -> Verify Infantry & Vehicle HUD modes -> Save -> Resume & Test Controls
   await page.getByRole('button', { name: /Pause Mission/i }).click();
   await expect(page.getByRole('heading', { name: /Mission Paused/i })).toBeVisible();
   await page.getByRole('button', { name: /Settings/i }).click();
@@ -246,9 +268,16 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await expect(page.getByTestId('control-layout-preview')).toBeVisible();
   await page.getByTestId('profile-three-finger').click();
 
-  // Launch 1:1 Full-Screen HUD Editor, verify nodes, and save/close
+  // Launch 1:1 Full-Screen HUD Editor, verify Infantry & Vehicle HUD nodes, and save/close
   await page.getByTestId('open-fullscreen-hud-editor').click();
   await expect(page.getByTestId('fullscreen-hud-editor')).toBeVisible();
+  await expect(page.getByTestId('editor-handle-fire_left')).toBeVisible();
+  await page.getByTestId('editor-mode-vehicle').click();
+  await expect(page.getByTestId('editor-veh-handle-veh_steer_left')).toBeVisible();
+  await expect(page.getByTestId('editor-veh-handle-veh_steer_right')).toBeVisible();
+  await expect(page.getByTestId('editor-veh-handle-veh_gas')).toBeVisible();
+  await expect(page.getByTestId('editor-veh-handle-veh_brake_reverse')).toBeVisible();
+  await page.getByTestId('editor-mode-infantry').click();
   await expect(page.getByTestId('editor-handle-fire_left')).toBeVisible();
   await page.getByTestId('close-fullscreen-hud-editor').click();
   await expect(page.getByTestId('fullscreen-hud-editor')).toHaveCount(0);

@@ -40,6 +40,7 @@ export interface EnemyShotParams {
   isSuppressedOrStaggered: boolean;
   isSuppressionFire: boolean;
   difficultyProfile: DifficultyCombatProfile;
+  ignoreColliderId?: string | null;
 }
 
 export interface EnemyShotResult {
@@ -104,6 +105,12 @@ export class BallisticSolver {
   private readonly _shotDir = new THREE.Vector3();
   private readonly _endPoint = new THREE.Vector3();
   private readonly _exposedPoint = new THREE.Vector3();
+  private readonly _losResult: VisibilityCheckResult = {
+    visible: false,
+    exposedPoint: this._exposedPoint,
+    blockerId: null,
+    exposedZone: null,
+  };
 
   constructor(
     private readonly vfx: VFXPool | null,
@@ -121,21 +128,32 @@ export class BallisticSolver {
     eyeOriginZ: number,
     player: PlayerController,
     collision: CollisionWorld,
-    maxRange: number
+    maxRange: number,
+    ignoreColliderId?: string | null
   ): VisibilityCheckResult {
     const samples = player.getVisibilitySamplePoints();
-    const candidates: Array<{ pt: THREE.Vector3; zone: PlayerHitZone }> = [
-      { pt: samples.chest, zone: 'upper_torso' },
-      { pt: samples.head, zone: 'head' },
-      { pt: samples.leftShoulder, zone: 'upper_torso' },
-      { pt: samples.rightShoulder, zone: 'upper_torso' },
-      { pt: samples.pelvis, zone: 'lower_body' },
-    ];
-
     let firstBlockerId: string | null = null;
 
-    for (let i = 0; i < candidates.length; i++) {
-      const target = candidates[i].pt;
+    for (let i = 0; i < 5; i++) {
+      let target: THREE.Vector3;
+      let zone: PlayerHitZone;
+      if (i === 0) {
+        target = samples.chest;
+        zone = 'upper_torso';
+      } else if (i === 1) {
+        target = samples.head;
+        zone = 'head';
+      } else if (i === 2) {
+        target = samples.leftShoulder;
+        zone = 'upper_torso';
+      } else if (i === 3) {
+        target = samples.rightShoulder;
+        zone = 'upper_torso';
+      } else {
+        target = samples.pelvis;
+        zone = 'lower_body';
+      }
+
       const dx = target.x - eyeOriginX;
       const dy = target.y - eyeOriginY;
       const dz = target.z - eyeOriginZ;
@@ -152,17 +170,17 @@ export class BallisticSolver {
         dz * invDist,
         Math.max(0.1, dist - 0.18),
         SOLID_OBSTRUCTION_MASK,
-        this._rayHit
+        this._rayHit,
+        ignoreColliderId
       );
 
       if (!blocked) {
         this._exposedPoint.copy(target);
-        return {
-          visible: true,
-          exposedPoint: this._exposedPoint,
-          blockerId: null,
-          exposedZone: candidates[i].zone,
-        };
+        this._losResult.visible = true;
+        this._losResult.exposedPoint = this._exposedPoint;
+        this._losResult.blockerId = null;
+        this._losResult.exposedZone = zone;
+        return this._losResult;
       }
 
       if (!firstBlockerId) {
@@ -171,12 +189,11 @@ export class BallisticSolver {
     }
 
     this._exposedPoint.copy(samples.chest);
-    return {
-      visible: false,
-      exposedPoint: this._exposedPoint,
-      blockerId: firstBlockerId,
-      exposedZone: null,
-    };
+    this._losResult.visible = false;
+    this._losResult.exposedPoint = this._exposedPoint;
+    this._losResult.blockerId = firstBlockerId;
+    this._losResult.exposedZone = null;
+    return this._losResult;
   }
 
   /**
@@ -269,7 +286,8 @@ export class BallisticSolver {
         this._shotDir.z,
         maxRayDist,
         SOLID_OBSTRUCTION_MASK,
-        this._rayHit
+        this._rayHit,
+        params.ignoreColliderId
       );
       const rayMs = performance.now() - tRay0;
 
@@ -495,7 +513,7 @@ export class BallisticSolver {
       hitZone: bestHitZone,
       damageApplied: totalDamageApplied,
       spreadRad: totalSpread,
-      endPoint: this._endPoint.clone(),
+      endPoint: this._endPoint,
     };
   }
 

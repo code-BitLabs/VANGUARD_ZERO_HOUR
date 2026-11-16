@@ -588,18 +588,26 @@ export class ProjectileManager {
     }
   }
 
+  private readonly _clusterOrigin = new THREE.Vector3();
+  private readonly _clusterDir = new THREE.Vector3();
+
   private spawnClusterBomblets(parent: PooledProjectile): void {
     const count = Math.min(8, Math.max(1, parent.profile.detonation.submunitionCount || 6));
     for (let i = 0; i < count; i++) {
       const ang = (i / count) * Math.PI * 2;
-      const spreadX = Math.cos(ang) * 0.42;
-      const spreadZ = Math.sin(ang) * 0.42;
-      const dir = new THREE.Vector3(spreadX, -1.0, spreadZ).normalize();
+      const cos = Math.cos(ang);
+      const sin = Math.sin(ang);
+      this._clusterDir.set(cos * 0.42, -1.0, sin * 0.42).normalize();
+      this._clusterOrigin.set(
+        parent.pos.x + cos * 1.2,
+        parent.pos.y - 0.5,
+        parent.pos.z + sin * 1.2
+      );
       this.spawn({
         kind: 'cluster_submunition',
         fromPlayer: parent.fromPlayer,
-        origin: parent.pos.clone().add(new THREE.Vector3(Math.cos(ang) * 1.2, -0.5, Math.sin(ang) * 1.2)),
-        direction: dir,
+        origin: this._clusterOrigin,
+        direction: this._clusterDir,
         speed: 18,
         sourceUnitId: parent.sourceUnitId,
         sourceSquadId: parent.sourceSquadId,

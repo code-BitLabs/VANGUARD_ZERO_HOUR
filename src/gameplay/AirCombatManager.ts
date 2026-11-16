@@ -19,6 +19,7 @@ import {
   AirFlightProfile,
 } from '@/src/schemas/explosive.schema';
 import { AirUnitType } from '@/src/schemas/mission.schema';
+import { buildAirRig } from '@/src/world/rigs/AirRigBuilder';
 import { BallisticSolver } from './BallisticSolver';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import {
@@ -107,6 +108,14 @@ export class AirCombatManager {
   private readonly _muzzlePos = new THREE.Vector3();
   private readonly _toWaypoint = new THREE.Vector3();
   private readonly _desiredVel = new THREE.Vector3();
+  private readonly _hitscanPool: Array<{
+    target: HitscanTarget;
+    unit: AirUnit | null;
+    cb: ((unit: AirUnit, killed: boolean) => void) | null;
+  }> = [];
+  private readonly _lockPool: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> = [];
+  private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
+  private readonly _blipPool: MiniMapBlip[] = [];
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -134,7 +143,7 @@ export class AirCombatManager {
     scope: ResourceScope
   ): void {
     const profile = AIR_FLIGHT_PROFILES[type];
-    const rig = this.buildAirRig(type, scope);
+    const rig = buildAirRig(type, scope, this.resourceManager);
     const effectiveRadius = Math.max(orbitRadius, profile.minTurnRadiusMeters * 0.75);
     const x = Math.cos(startAngle) * effectiveRadius;
     const z = Math.sin(startAngle) * effectiveRadius;
@@ -266,6 +275,54 @@ export class AirCombatManager {
     }
   }
 
+  fillHitscanTargets(
+    out: HitscanTarget[],
+    onAirHit: (unit: AirUnit, killed: boolean) => void
+  ): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.units.length; i++) {
+      const u = this.units[i];
+      if (!u.alive || u.crashing) continue;
+      const hitRadius = u.type === 'attack_drone' ? 1.5 : u.type === 'gunship' ? 4.4 : 3.2;
+      let slot = this._hitscanPool[slotIdx];
+      if (!slot) {
+        const newSlot: {
+          target: HitscanTarget;
+          unit: AirUnit | null;
+          cb: ((unit: AirUnit, killed: boolean) => void) | null;
+        } = {
+          unit: null,
+          cb: null,
+          target: {
+            id: u.id,
+            kind: 'air',
+            name: u.displayName,
+            alive: true,
+            position: u.position,
+            hitRadius,
+            onHit: (damage) => {
+              const cur = newSlot.unit;
+              if (!cur) return;
+              const killed = this.damageUnit(cur, damage);
+              newSlot.cb?.(cur, killed);
+            },
+          },
+        };
+        this._hitscanPool.push(newSlot);
+        slot = newSlot;
+      }
+      slot.unit = u;
+      slot.cb = onAirHit;
+      slot.target.id = u.id;
+      slot.target.name = u.displayName;
+      slot.target.alive = u.alive;
+      slot.target.position = u.position;
+      slot.target.hitRadius = hitRadius;
+      out.push(slot.target);
+      slotIdx++;
+    }
+  }
+
   getHitscanTargets(onAirHit: (unit: AirUnit, killed: boolean) => void): HitscanTarget[] {
     return this.units
       .filter((u) => u.alive && !u.crashing)
@@ -283,6 +340,33 @@ export class AirCombatManager {
       }));
   }
 
+  fillLockCandidates(
+    out: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }>
+  ): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.units.length; i++) {
+      const u = this.units[i];
+      if (!u.alive || u.crashing) continue;
+      let slot = this._lockPool[slotIdx];
+      if (!slot) {
+        slot = {
+          id: u.id,
+          alive: u.alive,
+          position: u.position,
+          label: u.displayName.toUpperCase(),
+        };
+        this._lockPool.push(slot);
+      } else {
+        slot.id = u.id;
+        slot.alive = u.alive;
+        slot.position = u.position;
+        slot.label = u.displayName.toUpperCase();
+      }
+      out.push(slot);
+      slotIdx++;
+    }
+  }
+
   getLockCandidates(): Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> {
     return this.units
       .filter((u) => u.alive && !u.crashing)
@@ -292,6 +376,25 @@ export class AirCombatManager {
         position: u.position,
         label: u.displayName.toUpperCase(),
       }));
+  }
+
+  fillPositionsForProximity(out: Array<{ position: THREE.Vector3; radius: number }>): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.units.length; i++) {
+      const u = this.units[i];
+      if (!u.alive || u.crashing) continue;
+      const radius = u.type === 'attack_drone' ? 1.8 : 3.8;
+      let slot = this._proxPool[slotIdx];
+      if (!slot) {
+        slot = { position: u.position, radius };
+        this._proxPool.push(slot);
+      } else {
+        slot.position = u.position;
+        slot.radius = radius;
+      }
+      out.push(slot);
+      slotIdx++;
+    }
   }
 
   getPositionsForProximity(): Array<{ position: THREE.Vector3; radius: number }> {
@@ -330,6 +433,26 @@ export class AirCombatManager {
       label: boss.displayName.toUpperCase(),
       healthPct: boss.health / boss.maxHealth,
     };
+  }
+
+  fillMiniMapBlips(out: MiniMapBlip[]): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.units.length; i++) {
+      const u = this.units[i];
+      if (!u.alive) continue;
+      let slot = this._blipPool[slotIdx];
+      if (!slot) {
+        slot = { id: u.id, x: u.position.x, z: u.position.z, kind: 'air' };
+        this._blipPool.push(slot);
+      } else {
+        slot.id = u.id;
+        slot.x = u.position.x;
+        slot.z = u.position.z;
+        slot.kind = 'air';
+      }
+      out.push(slot);
+      slotIdx++;
+    }
   }
 
   getMiniMapBlips(): MiniMapBlip[] {
@@ -915,6 +1038,15 @@ export class AirCombatManager {
 
   clear(): void {
     this.units = [];
+    for (let i = 0; i < this._hitscanPool.length; i++) {
+      this._hitscanPool[i].unit = null;
+      this._hitscanPool[i].cb = null;
+      this._hitscanPool[i].target.alive = false;
+      this._hitscanPool[i].target.position = this._muzzlePos;
+    }
+    this._lockPool.length = 0;
+    this._proxPool.length = 0;
+    this._blipPool.length = 0;
   }
 
   getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
@@ -954,83 +1086,5 @@ export class AirCombatManager {
       });
     }
     return out;
-  }
-
-  private buildAirRig(type: AirUnitType, scope: ResourceScope): { root: THREE.Group; rotor: THREE.Object3D | null } {
-    const root = new THREE.Group();
-    const hullMat = new THREE.MeshStandardMaterial({
-      color: type === 'attack_drone' ? 0x1e293b : type === 'gunship' ? 0x292524 : 0x374151,
-      metalness: 0.72,
-      roughness: 0.35,
-    });
-    const accentMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      emissive: 0xdc2626,
-      emissiveIntensity: 0.8,
-    });
-    this.resourceManager.registerMaterial(hullMat, scope);
-    this.resourceManager.registerMaterial(accentMat, scope);
-
-    let rotor: THREE.Object3D | null = null;
-
-    if (type === 'attack_drone') {
-      const coreGeo = new THREE.BoxGeometry(1.1, 0.35, 1.4);
-      const armGeo = new THREE.BoxGeometry(2.6, 0.1, 0.14);
-      const eyeGeo = new THREE.SphereGeometry(0.18, 8, 8);
-      [coreGeo, armGeo, eyeGeo].forEach((g) => this.resourceManager.registerGeometry(g, scope));
-      root.add(new THREE.Mesh(coreGeo, hullMat));
-      const arms = new THREE.Mesh(armGeo, hullMat);
-      arms.rotation.y = Math.PI / 4;
-      const arms2 = new THREE.Mesh(armGeo, hullMat);
-      arms2.rotation.y = -Math.PI / 4;
-      const eye = new THREE.Mesh(eyeGeo, accentMat);
-      eye.position.set(0, -0.08, 0.72);
-      root.add(arms, arms2, eye);
-      rotor = arms;
-    } else if (type === 'fighter_jet' || type === 'transport') {
-      const scale = type === 'transport' ? 1.5 : 1.0;
-      const fuseGeo = new THREE.CylinderGeometry(0.65 * scale, 0.85 * scale, 8.5 * scale, 10);
-      fuseGeo.rotateX(Math.PI / 2);
-      const wingGeo = new THREE.BoxGeometry(9.6 * scale, 0.16, 2.4 * scale);
-      const tailGeo = new THREE.BoxGeometry(0.18, 1.9 * scale, 1.5 * scale);
-      [fuseGeo, wingGeo, tailGeo].forEach((g) => this.resourceManager.registerGeometry(g, scope));
-      root.add(new THREE.Mesh(fuseGeo, hullMat));
-      const wing = new THREE.Mesh(wingGeo, hullMat);
-      wing.position.z = -0.4;
-      const tail = new THREE.Mesh(tailGeo, hullMat);
-      tail.position.set(0, 1.0 * scale, -3.4 * scale);
-      const burner = new THREE.Mesh(new THREE.SphereGeometry(0.45 * scale, 8, 8), accentMat);
-      this.resourceManager.registerGeometry(burner.geometry, scope);
-      burner.position.z = -4.3 * scale;
-      root.add(wing, tail, burner);
-    } else {
-      const scale = type === 'gunship' ? 1.45 : 1.0;
-      const bodyGeo = new THREE.BoxGeometry(1.9 * scale, 1.8 * scale, 6.2 * scale);
-      const boomGeo = new THREE.BoxGeometry(0.55 * scale, 0.55 * scale, 4.8 * scale);
-      const wingGeo = new THREE.BoxGeometry(4.4 * scale, 0.22, 1.1 * scale);
-      const bladeGeo = new THREE.BoxGeometry(9.2 * scale, 0.08, 0.35 * scale);
-      [bodyGeo, boomGeo, wingGeo, bladeGeo].forEach((g) => this.resourceManager.registerGeometry(g, scope));
-
-      root.add(new THREE.Mesh(bodyGeo, hullMat));
-      const boom = new THREE.Mesh(boomGeo, hullMat);
-      boom.position.set(0, 0.3 * scale, -4.6 * scale);
-      const stubWing = new THREE.Mesh(wingGeo, hullMat);
-      stubWing.position.set(0, -0.2 * scale, 0.4 * scale);
-      const podL = new THREE.Mesh(new THREE.SphereGeometry(0.28 * scale, 8, 8), accentMat);
-      this.resourceManager.registerGeometry(podL.geometry, scope);
-      podL.position.set(0, -0.8 * scale, 2.4 * scale);
-
-      const rotorGroup = new THREE.Group();
-      rotorGroup.position.set(0, 1.15 * scale, 0);
-      const b1 = new THREE.Mesh(bladeGeo, hullMat);
-      const b2 = new THREE.Mesh(bladeGeo, hullMat);
-      b2.rotation.y = Math.PI / 2;
-      rotorGroup.add(b1, b2);
-      rotor = rotorGroup;
-
-      root.add(boom, stubWing, podL, rotorGroup);
-    }
-
-    return { root, rotor };
   }
 }

@@ -11,6 +11,76 @@ export type ExtendedInputAction =
   | 'confirmNuke'
   | 'cancelNuke';
 
+export interface VehicleControlInput {
+  /** Normalized throttle [0..1] (W / ArrowUp / GAS button) */
+  gas: number;
+  /** Normalized brake & reverse [0..1] (S / ArrowDown / BRAKE-REV button) */
+  brakeReverse: number;
+  /** Normalized steering [-1..1] (-1 = Full Left, +1 = Full Right) */
+  steer: number;
+  /** Handbrake engaged (Space / HANDBRAKE button) */
+  handbrake: boolean;
+}
+
+const SECONDARY_ACTION_KEYS: Partial<Record<InputAction, readonly string[]>> = {
+  forward: ['ArrowUp'],
+  backward: ['ArrowDown'],
+  left: ['ArrowLeft'],
+  right: ['ArrowRight'],
+  sprint: ['ShiftRight'],
+  crouch: ['ControlRight', 'KeyC'],
+  handbrake: ['Space'],
+};
+
+function normalizeKeyCode(e: KeyboardEvent): string {
+  if (e.code && e.code.length > 0) return e.code;
+  const k = e.key?.toLowerCase();
+  switch (k) {
+    case 'w':
+      return 'KeyW';
+    case 's':
+      return 'KeyS';
+    case 'a':
+      return 'KeyA';
+    case 'd':
+      return 'KeyD';
+    case 'e':
+      return 'KeyE';
+    case 'r':
+      return 'KeyR';
+    case 'g':
+      return 'KeyG';
+    case 'f':
+      return 'KeyF';
+    case 'b':
+      return 'KeyB';
+    case 'c':
+      return 'KeyC';
+    case 'v':
+      return 'KeyV';
+    case 'n':
+      return 'KeyN';
+    case ' ':
+      return 'Space';
+    case 'arrowup':
+      return 'ArrowUp';
+    case 'arrowdown':
+      return 'ArrowDown';
+    case 'arrowleft':
+      return 'ArrowLeft';
+    case 'arrowright':
+      return 'ArrowRight';
+    case 'shift':
+      return 'ShiftLeft';
+    case 'control':
+      return 'ControlLeft';
+    case 'escape':
+      return 'Escape';
+    default:
+      return e.code || '';
+  }
+}
+
 export class InputManager {
   private heldKeys = new Set<string>();
   private justPressedKeys = new Set<string>();
@@ -22,6 +92,7 @@ export class InputManager {
   private pointerLocked = false;
   private attached = false;
   private prevGamepadButtons = new Set<number>();
+  private lastInputDevice: 'keyboard' | 'touch' = 'keyboard';
 
   private virtualMoveForward = 0;
   private virtualMoveRight = 0;
@@ -33,6 +104,16 @@ export class InputManager {
   private virtualJustPressedActions = new Set<string>();
   private queuedWeaponDelta = 0;
   private queuedWeaponSlot: number | null = null;
+
+  // Dedicated Normalized Vehicle Touch State (FND-15)
+  private virtualVehicleGas = 0;
+  private virtualVehicleBrakeReverse = 0;
+  private virtualVehicleSteerLeft = false;
+  private virtualVehicleSteerRight = false;
+  private virtualVehicleSteerWheel = 0;
+  private virtualVehicleHandbrake = false;
+
+  private virtualResetListeners = new Set<() => void>();
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -90,6 +171,16 @@ export class InputManager {
     );
     this.resourceManager.trackEventListener(
       document,
+      'visibilitychange',
+      () => {
+        if (document.hidden) {
+          this.clearAllInputs();
+        }
+      },
+      'shared'
+    );
+    this.resourceManager.trackEventListener(
+      document,
       'pointerlockchange',
       () => {
         const wasLocked = this.pointerLocked;
@@ -101,6 +192,17 @@ export class InputManager {
       },
       'shared'
     );
+  }
+
+  onVirtualInputsCleared(listener: () => void): () => void {
+    this.virtualResetListeners.add(listener);
+    return () => {
+      this.virtualResetListeners.delete(listener);
+    };
+  }
+
+  getLastInputDevice(): 'keyboard' | 'touch' {
+    return this.lastInputDevice;
   }
 
   updateSettings(settings: InputSettings): void {
@@ -126,8 +228,11 @@ export class InputManager {
   }
 
   setVirtualMoveAxes(forward: number, right: number): void {
-    const f = Math.max(-1, Math.min(1, forward));
-    const r = Math.max(-1, Math.min(1, right));
+    const f = Number.isFinite(forward) ? Math.max(-1, Math.min(1, forward)) : 0;
+    const r = Number.isFinite(right) ? Math.max(-1, Math.min(1, right)) : 0;
+    if (f !== 0 || r !== 0) {
+      this.lastInputDevice = 'touch';
+    }
     const len = Math.hypot(f, r);
     if (len > 1) {
       this.virtualMoveForward = f / len;
@@ -138,14 +243,57 @@ export class InputManager {
     }
   }
 
+  setVirtualVehiclePedal(pedal: 'gas' | 'brakeReverse', value: number): void {
+    const clamped = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+    if (clamped > 0) this.lastInputDevice = 'touch';
+    if (pedal === 'gas') {
+      this.virtualVehicleGas = clamped;
+    } else {
+      this.virtualVehicleBrakeReverse = clamped;
+    }
+  }
+
+  setVirtualVehicleSteerButton(side: 'left' | 'right', held: boolean): void {
+    if (held) this.lastInputDevice = 'touch';
+    if (side === 'left') {
+      this.virtualVehicleSteerLeft = held;
+    } else {
+      this.virtualVehicleSteerRight = held;
+    }
+  }
+
+  setVirtualVehicleSteerAxis(steer: number): void {
+    const clamped = Number.isFinite(steer) ? Math.max(-1, Math.min(1, steer)) : 0;
+    if (Math.abs(clamped) > 0.01) this.lastInputDevice = 'touch';
+    this.virtualVehicleSteerWheel = clamped;
+  }
+
+  setVirtualVehicleHandbrake(held: boolean): void {
+    if (held) this.lastInputDevice = 'touch';
+    this.virtualVehicleHandbrake = held;
+  }
+
+  clearVirtualVehicleInputs(): void {
+    this.virtualVehicleGas = 0;
+    this.virtualVehicleBrakeReverse = 0;
+    this.virtualVehicleSteerLeft = false;
+    this.virtualVehicleSteerRight = false;
+    this.virtualVehicleSteerWheel = 0;
+    this.virtualVehicleHandbrake = false;
+  }
+
   addVirtualLookDelta(dxPx: number, dyPx: number): void {
     if (!Number.isFinite(dxPx) || !Number.isFinite(dyPx)) return;
+    if (dxPx !== 0 || dyPx !== 0) {
+      this.lastInputDevice = 'touch';
+    }
     this.virtualLookDeltaX += dxPx;
     this.virtualLookDeltaY += dyPx;
   }
 
   setVirtualActionState(action: ExtendedInputAction, held: boolean): void {
     if (held) {
+      this.lastInputDevice = 'touch';
       if (!this.virtualHeldActions.has(action)) {
         this.virtualJustPressedActions.add(action);
       }
@@ -156,6 +304,7 @@ export class InputManager {
   }
 
   triggerVirtualActionPress(action: ExtendedInputAction): void {
+    this.lastInputDevice = 'touch';
     this.virtualJustPressedActions.add(action);
   }
 
@@ -188,6 +337,12 @@ export class InputManager {
     if (action in this.settings.bindings) {
       const code = this.settings.bindings[action as InputAction];
       if (this.heldKeys.has(code)) return true;
+      const alts = SECONDARY_ACTION_KEYS[action as InputAction];
+      if (alts) {
+        for (let i = 0; i < alts.length; i++) {
+          if (this.heldKeys.has(alts[i])) return true;
+        }
+      }
     }
 
     if (this.settings.gamepadEnabled) {
@@ -196,6 +351,7 @@ export class InputManager {
         if (action === 'sprint' && gp.buttons[10]?.pressed) return true;
         if (action === 'crouch' && gp.buttons[1]?.pressed) return true;
         if (action === 'jump' && gp.buttons[0]?.pressed) return true;
+        if (action === 'handbrake' && gp.buttons[0]?.pressed) return true;
       }
     }
     return false;
@@ -214,6 +370,12 @@ export class InputManager {
     if (action in this.settings.bindings) {
       const code = this.settings.bindings[action as InputAction];
       if (this.justPressedKeys.has(code)) return true;
+      const alts = SECONDARY_ACTION_KEYS[action as InputAction];
+      if (alts) {
+        for (let i = 0; i < alts.length; i++) {
+          if (this.justPressedKeys.has(alts[i])) return true;
+        }
+      }
     }
 
     if (this.settings.gamepadEnabled) {
@@ -349,6 +511,53 @@ export class InputManager {
     return { forward, right };
   }
 
+  /**
+   * Authoritative normalized vehicle controls shared by Desktop (W/S/A/D/Space) and
+   * Mobile PUBG-inspired driving HUD (Gas, Brake/Rev, Steer Left/Right or Wheel, Handbrake).
+   * Completely independent of camera look deltas.
+   */
+  getVehicleControls(): VehicleControlInput {
+    const keyGas = this.isActionHeld('forward') ? 1 : 0;
+    const keyBrakeRev = this.isActionHeld('backward') ? 1 : 0;
+    const keySteer =
+      (this.isActionHeld('right') ? 1 : 0) - (this.isActionHeld('left') ? 1 : 0);
+    const keyHandbrake = this.isActionHeld('handbrake') || this.heldKeys.has('Space');
+
+    const buttonSteer =
+      (this.virtualVehicleSteerRight ? 1 : 0) - (this.virtualVehicleSteerLeft ? 1 : 0);
+
+    // Support both dedicated vehicle pedals/buttons and fallback virtualMoveAxes
+    const fallbackGas = Math.max(0, this.virtualMoveForward);
+    const fallbackBrake = Math.max(0, -this.virtualMoveForward);
+
+    let gas = Math.max(keyGas, this.virtualVehicleGas, fallbackGas);
+    let brakeReverse = Math.max(keyBrakeRev, this.virtualVehicleBrakeReverse, fallbackBrake);
+    let steer =
+      keySteer !== 0
+        ? keySteer
+        : buttonSteer !== 0
+          ? buttonSteer
+          : Math.abs(this.virtualVehicleSteerWheel) > 0.01
+            ? this.virtualVehicleSteerWheel
+            : this.virtualMoveRight;
+
+    if (this.settings.gamepadEnabled) {
+      const gp = this.getGamepad();
+      if (gp && gp.axes.length >= 2) {
+        if (gp.axes[1] < -0.16) gas = Math.max(gas, -gp.axes[1]);
+        if (gp.axes[1] > 0.16) brakeReverse = Math.max(brakeReverse, gp.axes[1]);
+        if (Math.abs(gp.axes[0]) > 0.16) steer = gp.axes[0];
+      }
+    }
+
+    return {
+      gas: Math.max(0, Math.min(1, gas)),
+      brakeReverse: Math.max(0, Math.min(1, brakeReverse)),
+      steer: Math.max(-1, Math.min(1, steer)),
+      handbrake: Boolean(keyHandbrake || this.virtualVehicleHandbrake),
+    };
+  }
+
   consumeWheelDelta(): number {
     const d = this.wheelDelta + this.queuedWeaponDelta;
     this.wheelDelta = 0;
@@ -389,6 +598,14 @@ export class InputManager {
     this.wheelDelta = 0;
     this.queuedWeaponDelta = 0;
     this.queuedWeaponSlot = null;
+    this.clearVirtualVehicleInputs();
+    this.virtualResetListeners.forEach((cb) => {
+      try {
+        cb();
+      } catch {
+        // Ignore listener errors
+      }
+    });
   };
 
   private getGamepad(): Gamepad | null {
@@ -405,28 +622,35 @@ export class InputManager {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === 'Escape') {
+    const code = normalizeKeyCode(e);
+    if (!code) return;
+    if (code === 'Escape') {
       this.onEscapeRequested?.();
       return;
     }
-    if (!this.heldKeys.has(e.code)) {
-      this.justPressedKeys.add(e.code);
+    this.lastInputDevice = 'keyboard';
+    if (!this.heldKeys.has(code)) {
+      this.justPressedKeys.add(code);
     }
-    this.heldKeys.add(e.code);
+    this.heldKeys.add(code);
   };
 
   private handleKeyUp = (e: KeyboardEvent): void => {
-    this.heldKeys.delete(e.code);
+    const code = normalizeKeyCode(e);
+    if (!code) return;
+    this.heldKeys.delete(code);
   };
 
   private handleMouseMove = (e: MouseEvent): void => {
     if (!this.pointerLocked) return;
+    this.lastInputDevice = 'keyboard';
     this.mouseDeltaX += e.movementX || 0;
     this.mouseDeltaY += e.movementY || 0;
   };
 
   private handleMouseDown = (e: MouseEvent): void => {
     if (!this.pointerLocked) return;
+    this.lastInputDevice = 'keyboard';
     if (!this.mouseButtons.has(e.button)) {
       this.justPressedMouse.add(e.button);
     }
@@ -439,6 +663,7 @@ export class InputManager {
 
   private handleWheel = (e: WheelEvent): void => {
     if (!this.pointerLocked) return;
+    this.lastInputDevice = 'keyboard';
     this.wheelDelta += Math.sign(e.deltaY);
   };
 }

@@ -124,7 +124,7 @@ export interface ColliderWireframeBox {
 }
 
 export interface PhysicsWorldDiagnosticsSnapshot {
-  solverBackend: 'Hybrid Rapier3D + Custom FPS Controller + SpatialHash/BVH';
+  solverBackend: 'Custom FPS Controller + SpatialHash/BVH';
   rapierInitialized: boolean;
   fixedTimestepSec: number;
   worldBoundsMin: number;

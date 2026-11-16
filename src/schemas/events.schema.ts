@@ -93,6 +93,9 @@ export type TacticalOrdnanceHud = z.infer<typeof TacticalOrdnanceHudSchema>;
 export const VehicleCameraModeSchema = z.enum(['chase', 'driver_fpv', 'turret', 'orbit']);
 export type VehicleCameraMode = z.infer<typeof VehicleCameraModeSchema>;
 
+export const VehicleDriveGearSchema = z.enum(['FORWARD', 'BRAKING', 'NEUTRAL_HOLD', 'REVERSE']);
+export type VehicleDriveGear = z.infer<typeof VehicleDriveGearSchema>;
+
 export const HudSnapshotSchema = z.object({
   health: z.number().min(0).max(100),
   maxHealth: z.number().positive(),
@@ -105,6 +108,10 @@ export const HudSnapshotSchema = z.object({
   magSize: z.number().int().positive(),
   reserveAmmo: z.number().int().nonnegative(),
   grenades: z.number().int().nonnegative(),
+  rpgAvailable: z.boolean().default(true),
+  rpgAmmoInMag: z.number().int().nonnegative().default(1),
+  rpgReserveAmmo: z.number().int().nonnegative().default(6),
+  rpgEquipped: z.boolean().default(false),
   isReloading: z.boolean(),
   reloadProgress: z.number().min(0).max(1),
   isAds: z.boolean(),
@@ -121,8 +128,12 @@ export const HudSnapshotSchema = z.object({
   vehicleHealth: z.number().min(0).max(100),
   vehicleMaxHealth: z.number().positive(),
   vehicleSpeedKmh: z.number().nonnegative(),
+  vehicleGear: VehicleDriveGearSchema.default('NEUTRAL_HOLD'),
+  vehicleSteerDeg: z.number().default(0),
+  vehicleHandbrake: z.boolean().default(false),
   vehicleCameraMode: VehicleCameraModeSchema.default('chase'),
   interactPrompt: z.string().nullable(),
+  activeActionDirective: z.string().nullable().default(null),
   subtitleText: z.string().nullable(),
   missionAlert: z.string().nullable(),
   elapsedSec: z.number().nonnegative(),

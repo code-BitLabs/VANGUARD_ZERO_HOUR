@@ -14,14 +14,19 @@ import {
   EnemyAwarenessState,
 } from '@/src/schemas/combat.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
-import { MiniMapBlip, VehicleCameraMode } from '@/src/schemas/events.schema';
+import { MiniMapBlip, VehicleCameraMode, VehicleDriveGear } from '@/src/schemas/events.schema';
 import { VehicleType } from '@/src/schemas/mission.schema';
+import { buildVehicleRig } from '@/src/world/rigs/VehicleRigBuilder';
 import { BallisticSolver } from './BallisticSolver';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import { CombatTelemetryRecorder, EnemyDebugInspectorRow } from './CombatTelemetryRecorder';
 import { PlayerController } from './PlayerController';
 import { CameraSpringDebugRay, VehicleCameraRig } from './VehicleCameraRig';
 import { HitscanTarget } from './WeaponSystem';
+
+export const VEHICLE_REVERSE_ENTER_SPEED = 0.45;
+export const VEHICLE_REVERSE_EXIT_SPEED = 0.85;
+export const VEHICLE_REVERSE_CONFIRM_SEC = 0.16;
 
 export interface VehicleEntity {
   id: string;
@@ -39,6 +44,10 @@ export interface VehicleEntity {
   yaw: number;
   speed: number;
   maxSpeed: number;
+  steerAngle: number;
+  driveGear: VehicleDriveGear;
+  reverseConfirmTimer: number;
+  handbrakeActive: boolean;
   chassisPitch: number;
   chassisRoll: number;
   halfWidth: number;
@@ -97,6 +106,13 @@ export class VehicleManager {
     collider: null,
   };
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
+  private readonly _hitscanPool: Array<{
+    target: HitscanTarget;
+    veh: VehicleEntity | null;
+    cb: ((veh: VehicleEntity, killed: boolean) => void) | null;
+  }> = [];
+  private readonly _lockPool: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> = [];
+  private readonly _blipPool: MiniMapBlip[] = [];
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -124,6 +140,10 @@ export class VehicleManager {
     return this.cameraRig.getDebugRay();
   }
 
+  notifyManualLookInput(): void {
+    this.cameraRig.notifyManualLookInput();
+  }
+
   setDifficulty(difficulty: Difficulty): void {
     this.difficulty = difficulty;
   }
@@ -140,7 +160,7 @@ export class VehicleManager {
     isConvoyTarget: boolean,
     collision: CollisionWorld,
     scope: ResourceScope
-  ): void {
+  ): VehicleEntity {
     const names: Record<VehicleType, string> = {
       military_jeep: 'Strike Jeep',
       armored_truck: 'Armored Extraction Truck',
@@ -161,7 +181,7 @@ export class VehicleManager {
     };
 
     const y = collision.getGroundHeightAt(pos.x, pos.z);
-    const rig = this.buildVehicleRig(type, hostile, scope);
+    const rig = buildVehicleRig(type, hostile, scope, this.resourceManager);
     rig.root.position.set(pos.x, y, pos.z);
     rig.root.rotation.order = 'YXZ';
     rig.root.rotation.y = yaw;
@@ -204,7 +224,7 @@ export class VehicleManager {
     const weaponProf = ENEMY_WEAPON_PROFILES[type === 'enemy_apc' ? 'enemy_autocannon' : 'enemy_lmg'];
     const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
 
-    this.vehicles.push({
+    const entity: VehicleEntity = {
       id,
       squadId,
       type,
@@ -220,6 +240,10 @@ export class VehicleManager {
       yaw,
       speed: 0,
       maxSpeed: maxSpeedMap[type],
+      steerAngle: 0,
+      driveGear: 'NEUTRAL_HOLD',
+      reverseConfirmTimer: 0,
+      handbrakeActive: false,
       chassisPitch: 0,
       chassisRoll: 0,
       halfWidth: halfW,
@@ -257,7 +281,9 @@ export class VehicleManager {
       driverSeatLocal: rig.driverSeatLocal,
       turretOpticLocal: rig.turretOpticLocal,
       fpvHiddenMeshes: rig.fpvHiddenMeshes,
-    });
+    };
+    this.vehicles.push(entity);
+    return entity;
   }
 
   private syncVehicleCollider(v: VehicleEntity, collision: CollisionWorld): void {
@@ -307,6 +333,10 @@ export class VehicleManager {
   ): void {
     veh.occupiedByPlayer = false;
     veh.speed *= 0.25;
+    veh.steerAngle = 0;
+    veh.driveGear = 'NEUTRAL_HOLD';
+    veh.reverseConfirmTimer = 0;
+    veh.handbrakeActive = false;
     player.setOccupiedVehicleShield(null, null);
     this.cameraRig.onVehicleExit(veh);
 
@@ -463,6 +493,52 @@ export class VehicleManager {
     }
   }
 
+  fillHitscanTargets(
+    out: HitscanTarget[],
+    onHitCallback: (veh: VehicleEntity, killed: boolean) => void
+  ): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (!v.alive || !v.hostile) continue;
+      let slot = this._hitscanPool[slotIdx];
+      if (!slot) {
+        const newSlot: {
+          target: HitscanTarget;
+          veh: VehicleEntity | null;
+          cb: ((veh: VehicleEntity, killed: boolean) => void) | null;
+        } = {
+          veh: null,
+          cb: null,
+          target: {
+            id: v.id,
+            kind: 'vehicle',
+            name: v.displayName,
+            alive: true,
+            position: v.centerPos,
+            hitRadius: 2.35,
+            onHit: (damage) => {
+              const cur = newSlot.veh;
+              if (!cur) return;
+              const killed = this.damageVehicle(cur, damage * 0.65);
+              newSlot.cb?.(cur, killed);
+            },
+          },
+        };
+        this._hitscanPool.push(newSlot);
+        slot = newSlot;
+      }
+      slot.veh = v;
+      slot.cb = onHitCallback;
+      slot.target.id = v.id;
+      slot.target.name = v.displayName;
+      slot.target.alive = v.alive;
+      slot.target.position = v.centerPos;
+      out.push(slot.target);
+      slotIdx++;
+    }
+  }
+
   getHitscanTargets(onHitCallback: (veh: VehicleEntity, killed: boolean) => void): HitscanTarget[] {
     return this.vehicles
       .filter((v) => v.alive && v.hostile)
@@ -478,6 +554,33 @@ export class VehicleManager {
           onHitCallback(v, killed);
         },
       }));
+  }
+
+  fillLockCandidates(
+    out: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }>
+  ): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (!v.alive || !v.hostile) continue;
+      let slot = this._lockPool[slotIdx];
+      if (!slot) {
+        slot = {
+          id: v.id,
+          alive: v.alive,
+          position: v.centerPos,
+          label: v.displayName.toUpperCase(),
+        };
+        this._lockPool.push(slot);
+      } else {
+        slot.id = v.id;
+        slot.alive = v.alive;
+        slot.position = v.centerPos;
+        slot.label = v.displayName.toUpperCase();
+      }
+      out.push(slot);
+      slotIdx++;
+    }
   }
 
   getLockCandidates(): Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> {
@@ -500,7 +603,8 @@ export class VehicleManager {
     roadWaypoints: THREE.Vector3[],
     onTurretHitEnemyCheck: (origin: THREE.Vector3, dir: THREE.Vector3) => void,
     onConvoyDestroyed?: (v: VehicleEntity) => void,
-    baseFov = 78
+    baseFov = 78,
+    hasManualLookInput = false
   ): void {
     const nowSec = this.telemetry?.getElapsedSec() ?? 0;
     const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
@@ -514,16 +618,97 @@ export class VehicleManager {
       const halfL = v.halfLength;
 
       if (v.occupiedByPlayer) {
-        const axes = input.getMoveAxes();
-        const accel = axes.forward * 24;
-        if (Math.abs(axes.forward) > 0.1) {
-          v.speed = THREE.MathUtils.clamp(v.speed + accel * dt, -10, v.maxSpeed);
+        const ctrl = input.getVehicleControls();
+        v.handbrakeActive = ctrl.handbrake;
+
+        // 1. Progressive, speed-sensitive steering with smooth self-centering
+        const speedRatio = Math.min(1, Math.abs(v.speed) / Math.max(1, v.maxSpeed));
+        const maxSteerAuthority = 1.0 - speedRatio * 0.26;
+        const targetSteer = ctrl.steer * maxSteerAuthority;
+        if (Math.abs(ctrl.steer) > 0.02) {
+          v.steerAngle = THREE.MathUtils.lerp(v.steerAngle, targetSteer, Math.min(1, dt * 8.0));
         } else {
-          v.speed = THREE.MathUtils.lerp(v.speed, 0, Math.min(1, dt * 2.8));
+          const returnRate = 6.8 + speedRatio * 4.2;
+          v.steerAngle = THREE.MathUtils.lerp(v.steerAngle, 0, Math.min(1, dt * returnRate));
+          if (Math.abs(v.steerAngle) < 0.005) v.steerAngle = 0;
         }
 
-        const steerDir = Math.abs(v.speed) > 0.4 ? Math.sign(v.speed) : 1;
-        v.yaw -= axes.right * 1.9 * steerDir * dt * Math.min(1, Math.abs(v.speed) / 6 + 0.35);
+        // 2. Longitudinal Gas / Brake-to-Reverse State Machine with Hysteresis & 160ms Low-Speed Confirmation
+        const maxReverseSpeed = 11.5;
+        if (ctrl.handbrake) {
+          v.reverseConfirmTimer = 0;
+          if (Math.abs(v.speed) > 0.1) {
+            const decel = 34 * dt;
+            if (v.speed > 0) v.speed = Math.max(0, v.speed - decel);
+            else v.speed = Math.min(0, v.speed + decel);
+          } else {
+            v.speed = 0;
+          }
+          v.driveGear = Math.abs(v.speed) > VEHICLE_REVERSE_ENTER_SPEED ? 'BRAKING' : 'NEUTRAL_HOLD';
+        } else if (ctrl.gas > 0.04 && ctrl.brakeReverse <= 0.04) {
+          v.reverseConfirmTimer = 0;
+          if (v.speed < -0.15) {
+            // Braking out of reverse before accelerating forward
+            v.speed = Math.min(0, v.speed + 30 * ctrl.gas * dt);
+            v.driveGear = 'BRAKING';
+          } else {
+            v.speed = Math.min(v.maxSpeed, v.speed + 24 * ctrl.gas * dt);
+            if (v.speed > VEHICLE_REVERSE_EXIT_SPEED || ctrl.gas > 0.2) {
+              v.driveGear = 'FORWARD';
+            }
+          }
+        } else if (ctrl.brakeReverse > 0.04) {
+          if (v.speed > VEHICLE_REVERSE_ENTER_SPEED) {
+            // Moving forward above threshold: engage brakes first; never flip directly into reverse
+            v.speed = Math.max(0, v.speed - 28 * ctrl.brakeReverse * dt);
+            v.driveGear = 'BRAKING';
+            v.reverseConfirmTimer = 0;
+          } else if (v.driveGear !== 'REVERSE') {
+            // Vehicle has reached safe low speed (<= 0.45 m/s): hold neutral briefly to confirm reverse intent
+            v.speed = Math.min(0, v.speed);
+            v.driveGear = 'NEUTRAL_HOLD';
+            v.reverseConfirmTimer += dt;
+            if (v.reverseConfirmTimer >= VEHICLE_REVERSE_CONFIRM_SEC) {
+              v.driveGear = 'REVERSE';
+            }
+          }
+
+          if (v.driveGear === 'REVERSE') {
+            v.speed = Math.max(-maxReverseSpeed, v.speed - 16.5 * ctrl.brakeReverse * dt);
+          }
+        } else {
+          // Coasting with natural rolling resistance
+          v.reverseConfirmTimer = 0;
+          v.speed = THREE.MathUtils.lerp(v.speed, 0, Math.min(1, dt * 2.1));
+          if (Math.abs(v.speed) < 0.06) {
+            v.speed = 0;
+          }
+          if (v.speed > VEHICLE_REVERSE_EXIT_SPEED) {
+            v.driveGear = 'FORWARD';
+          } else if (v.speed < -VEHICLE_REVERSE_ENTER_SPEED) {
+            v.driveGear = 'REVERSE';
+          } else if (Math.abs(v.speed) <= VEHICLE_REVERSE_ENTER_SPEED) {
+            v.driveGear = 'NEUTRAL_HOLD';
+          }
+        }
+
+        // 3. Apply progressive yaw rotation from steerAngle when moving
+        const absSpeed = Math.abs(v.speed);
+        if (absSpeed > 0.04 && Math.abs(v.steerAngle) > 0.005) {
+          const steerDir = v.speed < -0.05 ? -1 : 1;
+          const handbrakeSlipBoost = ctrl.handbrake && absSpeed > 3.2 ? 1.38 : 1.0;
+          const turnAuthority = Math.min(1, absSpeed / 3.2 + 0.22);
+          v.yaw -= v.steerAngle * 2.2 * steerDir * handbrakeSlipBoost * turnAuthority * dt;
+        }
+
+        // Visual front wheel steer & rolling wheel spin
+        for (let wi = 0; wi < v.wheels.length; wi++) {
+          const wheel = v.wheels[wi];
+          wheel.rotation.x += v.speed * dt * 1.4;
+          if (wi < 2) {
+            wheel.rotation.y = -v.steerAngle * 0.48;
+          }
+        }
 
         const moveRes = collision.resolveVehicleMovement(
           v.position,
@@ -574,8 +759,9 @@ export class VehicleManager {
         player.position.copy(v.position);
 
         v.meshRoot.position.copy(v.position);
-        const targetRoll = axes.right * 0.055 * Math.min(1, Math.abs(v.speed) / 14);
-        const targetPitch = -axes.forward * 0.036;
+        const netLongitudinal = ctrl.gas - ctrl.brakeReverse;
+        const targetRoll = v.steerAngle * 0.06 * Math.min(1, Math.abs(v.speed) / 14);
+        const targetPitch = -netLongitudinal * 0.036;
         v.chassisRoll = THREE.MathUtils.lerp(v.chassisRoll, targetRoll, Math.min(1, dt * 8));
         v.chassisPitch = THREE.MathUtils.lerp(v.chassisPitch, targetPitch, Math.min(1, dt * 8));
         v.meshRoot.rotation.set(v.chassisPitch, v.yaw, v.chassisRoll, 'YXZ');
@@ -586,7 +772,7 @@ export class VehicleManager {
         v.meshRoot.updateMatrixWorld(true);
 
         // Multi-mode VehicleCameraRig (Chase, Driver FPV, Gunner Turret, Tactical Orbit)
-        this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov);
+        this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov, hasManualLookInput);
 
         if (input.isActionHeld('fire') && v.turretFireCooldown <= 0) {
           v.turretFireCooldown = 0.12;
@@ -617,8 +803,11 @@ export class VehicleManager {
             v.waypointIndex = (v.waypointIndex + 1) % roadWaypoints.length;
           } else {
             const targetYaw = Math.atan2(-dx, -dz);
-            v.yaw = targetYaw;
-            v.speed = v.maxSpeed;
+            let yawDiff = targetYaw - v.yaw;
+            while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+            while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+            v.yaw += THREE.MathUtils.clamp(yawDiff, -2.2 * dt, 2.2 * dt);
+            v.speed = THREE.MathUtils.lerp(v.speed, v.maxSpeed, Math.min(1, dt * 4.5));
             const moveRes = collision.resolveVehicleMovement(
               v.position,
               v.yaw,
@@ -662,17 +851,15 @@ export class VehicleManager {
         let blockerId: string | null = null;
 
         if (player.alive && dPlayer < 68 && this.ballistics) {
-          // Temporarily exclude own vehicle collider from self-blocking turret muzzle
-          collision.spatialHash.remove(v.collider);
           const losRes = this.ballistics.checkLineOfSight(
             v.position.x,
             v.position.y + 2.45,
             v.position.z,
             player,
             collision,
-            68
+            68,
+            v.collider.id
           );
-          collision.spatialHash.insert(v.collider);
           rawLos = losRes.visible;
           exposedTargetPoint = losRes.exposedPoint;
           blockerId = losRes.blockerId;
@@ -793,7 +980,6 @@ export class VehicleManager {
           }
 
           this._muzzlePos.set(v.position.x, v.position.y + 2.45, v.position.z);
-          collision.spatialHash.remove(v.collider);
           const shotRes = this.ballistics.fireWeaponRay(
             {
               unitId: v.id,
@@ -810,11 +996,11 @@ export class VehicleManager {
               isSuppressedOrStaggered: false,
               isSuppressionFire: false,
               difficultyProfile: diffProf,
+              ignoreColliderId: v.collider.id,
             },
             player,
             collision
           );
-          collision.spatialHash.insert(v.collider);
 
           this.audio.playSpatial('shot_lmg', v.position.x, v.position.y + 2, v.position.z, 5, 0.48);
           v.lastSpreadRad = shotRes.spreadRad;
@@ -921,6 +1107,27 @@ export class VehicleManager {
     return this.vehicles.filter((v) => v.alive && v.hostile);
   }
 
+  fillMiniMapBlips(out: MiniMapBlip[]): void {
+    let slotIdx = 0;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (!v.alive) continue;
+      let slot = this._blipPool[slotIdx];
+      const kind = v.hostile ? 'vehicle' : 'friendly_vehicle';
+      if (!slot) {
+        slot = { id: v.id, x: v.position.x, z: v.position.z, kind };
+        this._blipPool.push(slot);
+      } else {
+        slot.id = v.id;
+        slot.x = v.position.x;
+        slot.z = v.position.z;
+        slot.kind = kind;
+      }
+      out.push(slot);
+      slotIdx++;
+    }
+  }
+
   getMiniMapBlips(): MiniMapBlip[] {
     return this.vehicles
       .filter((v) => v.alive)
@@ -935,6 +1142,14 @@ export class VehicleManager {
   clear(): void {
     this.cameraRig.onVehicleExit(this.getPlayerVehicle());
     this.vehicles = [];
+    for (let i = 0; i < this._hitscanPool.length; i++) {
+      this._hitscanPool[i].veh = null;
+      this._hitscanPool[i].cb = null;
+      this._hitscanPool[i].target.alive = false;
+      this._hitscanPool[i].target.position = this._muzzlePos;
+    }
+    this._lockPool.length = 0;
+    this._blipPool.length = 0;
   }
 
   getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {
@@ -983,210 +1198,5 @@ export class VehicleManager {
     this.clear();
     this.charredMaterial?.dispose();
     this.charredMaterial = null;
-  }
-
-  private buildVehicleRig(
-    type: VehicleType,
-    hostile: boolean,
-    scope: ResourceScope
-  ): {
-    root: THREE.Group;
-    wheels: THREE.Object3D[];
-    turret: THREE.Object3D;
-    turretGun: THREE.Object3D;
-    driverSeatLocal: THREE.Vector3;
-    turretOpticLocal: THREE.Vector3;
-    fpvHiddenMeshes: THREE.Object3D[];
-  } {
-    const root = new THREE.Group();
-    root.rotation.order = 'YXZ';
-    const wheels: THREE.Object3D[] = [];
-    const fpvHiddenMeshes: THREE.Object3D[] = [];
-
-    const bodyColor = hostile ? (type === 'enemy_apc' ? 0x4b3b34 : 0x57534e) : 0x3b4936;
-    const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.65, metalness: 0.35 });
-    const trimMat = new THREE.MeshStandardMaterial({ color: 0x1e2228, roughness: 0.78, metalness: 0.45 });
-    const interiorMat = new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.88, metalness: 0.2 });
-    const tireMat = new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.9 });
-    const glassMat = new THREE.MeshStandardMaterial({
-      color: hostile ? 0xfca5a5 : 0x7dd3fc,
-      emissive: hostile ? 0x450a0a : 0x0c4a6e,
-      emissiveIntensity: 0.16,
-      metalness: 0.15,
-      roughness: 0.12,
-      transparent: true,
-      opacity: 0.24,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const headlightMat = new THREE.MeshStandardMaterial({
-      color: 0xfef08a,
-      emissive: 0xfde047,
-      emissiveIntensity: 0.9,
-      roughness: 0.2,
-    });
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, metalness: 0.8, roughness: 0.3 });
-
-    [bodyMat, trimMat, interiorMat, tireMat, glassMat, headlightMat, gunMat].forEach((m) =>
-      this.resourceManager.registerMaterial(m, scope)
-    );
-
-    const isHeavy = type === 'armored_truck' || type === 'enemy_apc';
-    const w = isHeavy ? 2.75 : 2.28;
-    const l = isHeavy ? 5.5 : 4.4;
-
-    // Lower hull chassis frame + sloped front hood + rear cargo deck (keeps cab open & sightlines clear)
-    const lowerHullGeo = new THREE.BoxGeometry(w, 0.62, l);
-    const hoodGeo = new THREE.BoxGeometry(w * 0.88, 0.36, l * 0.28);
-    const doorSillGeo = new THREE.BoxGeometry(0.14, 0.44, l * 0.42);
-    const rearBulkheadGeo = new THREE.BoxGeometry(w * 0.9, 0.56, l * 0.26);
-    const pillarGeo = new THREE.BoxGeometry(0.09, 0.92, 0.09);
-    const roofGeo = new THREE.BoxGeometry(w * 0.86, 0.08, l * 0.44);
-    const windGeo = new THREE.BoxGeometry(w * 0.78, 0.56, 0.05);
-    const dashGeo = new THREE.BoxGeometry(w * 0.78, 0.26, 0.36);
-    const seatGeo = new THREE.BoxGeometry(0.46, 0.55, 0.42);
-    const wheelRimGeo = new THREE.TorusGeometry(0.17, 0.025, 8, 16);
-    const lightGeo = new THREE.BoxGeometry(0.24, 0.14, 0.08);
-    const wheelGeo = new THREE.CylinderGeometry(0.54, 0.54, 0.4, 14);
-    wheelGeo.rotateZ(Math.PI / 2);
-
-    [
-      lowerHullGeo,
-      hoodGeo,
-      doorSillGeo,
-      rearBulkheadGeo,
-      pillarGeo,
-      roofGeo,
-      windGeo,
-      dashGeo,
-      seatGeo,
-      wheelRimGeo,
-      lightGeo,
-      wheelGeo,
-    ].forEach((g) => this.resourceManager.registerGeometry(g, scope));
-
-    const lowerHull = new THREE.Mesh(lowerHullGeo, bodyMat);
-    lowerHull.position.y = 0.82;
-    lowerHull.castShadow = true;
-    lowerHull.receiveShadow = true;
-    root.add(lowerHull);
-
-    const hood = new THREE.Mesh(hoodGeo, bodyMat);
-    hood.position.set(0, 1.24, -l * 0.33);
-    hood.castShadow = true;
-    hood.receiveShadow = true;
-    root.add(hood);
-
-    const cabCenterZ = isHeavy ? -0.95 : -0.22;
-    const cabHalfZ = l * 0.21;
-
-    // Side door sills & interior seats/dashboard
-    for (const sx of [-w * 0.43, w * 0.43]) {
-      const doorSill = new THREE.Mesh(doorSillGeo, bodyMat);
-      doorSill.position.set(sx, 1.32, cabCenterZ);
-      doorSill.castShadow = true;
-      root.add(doorSill);
-    }
-
-    const rearDeck = new THREE.Mesh(rearBulkheadGeo, bodyMat);
-    rearDeck.position.set(0, 1.38, l * 0.31);
-    rearDeck.castShadow = true;
-    root.add(rearDeck);
-
-    // Rollcage / A-B pillars supporting roof canopy cleanly without occluding forward windshield
-    const pillarZPositions = [cabCenterZ - cabHalfZ + 0.08, cabCenterZ + cabHalfZ - 0.08];
-    const pillarXPositions = [-w * 0.41, w * 0.41];
-    for (const pz of pillarZPositions) {
-      for (const px of pillarXPositions) {
-        const pillar = new THREE.Mesh(pillarGeo, trimMat);
-        pillar.position.set(px, 1.78, pz);
-        pillar.castShadow = true;
-        root.add(pillar);
-      }
-    }
-
-    // Overhead roof plate (hidden automatically only while in Driver FPV so looking up/around stays clear)
-    const roof = new THREE.Mesh(roofGeo, bodyMat);
-    roof.position.set(0, 2.26, cabCenterZ);
-    roof.castShadow = true;
-    root.add(roof);
-    fpvHiddenMeshes.push(roof);
-
-    // Transparent armored glass windshield
-    const windshield = new THREE.Mesh(windGeo, glassMat);
-    windshield.position.set(0, 1.82, cabCenterZ - cabHalfZ + 0.05);
-    windshield.rotation.x = 0.22;
-    windshield.renderOrder = 2;
-    root.add(windshield);
-
-    // Interior dashboard, seats, and steering wheel
-    const dash = new THREE.Mesh(dashGeo, interiorMat);
-    dash.position.set(0, 1.36, cabCenterZ - cabHalfZ + 0.24);
-    root.add(dash);
-
-    const driverX = isHeavy ? -0.52 : -0.44;
-    for (const sx of [driverX, -driverX]) {
-      const seat = new THREE.Mesh(seatGeo, interiorMat);
-      seat.position.set(sx, 1.36, cabCenterZ + 0.16);
-      root.add(seat);
-    }
-
-    const steeringWheel = new THREE.Mesh(wheelRimGeo, trimMat);
-    steeringWheel.position.set(driverX, 1.5, cabCenterZ - cabHalfZ + 0.36);
-    steeringWheel.rotation.x = -0.52;
-    root.add(steeringWheel);
-
-    // Headlights at front bumper (-Z)
-    for (const lx of [-w * 0.33, w * 0.33]) {
-      const hl = new THREE.Mesh(lightGeo, headlightMat);
-      hl.position.set(lx, 1.02, -l * 0.5 - 0.02);
-      root.add(hl);
-    }
-
-    const zOffsets = isHeavy ? [-1.85, 0, 1.85] : [-1.45, 1.45];
-    for (const wz of zOffsets) {
-      for (const wx of [-w * 0.48, w * 0.48]) {
-        const wheel = new THREE.Mesh(wheelGeo, tireMat);
-        wheel.position.set(wx, 0.54, wz);
-        wheel.castShadow = true;
-        root.add(wheel);
-        wheels.push(wheel);
-      }
-    }
-
-    // Roof turret mount + elevating gun assembly
-    const turret = new THREE.Group();
-    turret.rotation.order = 'YXZ';
-    turret.position.set(0, 2.34, isHeavy ? 0.15 : 0.12);
-    const turretGun = new THREE.Group();
-
-    const baseGeo = new THREE.CylinderGeometry(0.42, 0.52, 0.24, 12);
-    const cradleGeo = new THREE.BoxGeometry(0.28, 0.22, 0.48);
-    const barrelGeo = new THREE.CylinderGeometry(0.055, 0.07, 1.6, 8);
-    barrelGeo.rotateX(Math.PI / 2);
-    [baseGeo, cradleGeo, barrelGeo].forEach((g) => this.resourceManager.registerGeometry(g, scope));
-
-    turret.add(new THREE.Mesh(baseGeo, gunMat));
-    turretGun.position.set(0, 0.16, 0);
-    turretGun.add(new THREE.Mesh(cradleGeo, gunMat));
-    const barrel = new THREE.Mesh(barrelGeo, gunMat);
-    barrel.position.set(0, 0.02, -0.82);
-    turretGun.add(barrel);
-    turret.add(turretGun);
-    root.add(turret);
-    fpvHiddenMeshes.push(turret);
-
-    const driverSeatLocal = new THREE.Vector3(driverX, isHeavy ? 1.98 : 1.76, cabCenterZ - 0.05);
-    const turretOpticLocal = new THREE.Vector3(0, 2.74, turret.position.z);
-
-    return {
-      root,
-      wheels,
-      turret,
-      turretGun,
-      driverSeatLocal,
-      turretOpticLocal,
-      fpvHiddenMeshes,
-    };
   }
 }
