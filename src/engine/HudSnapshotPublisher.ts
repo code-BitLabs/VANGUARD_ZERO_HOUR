@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { isDeveloperModeActiveForSetting } from '@/src/config/devMode';
 import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
+import { CargoLiftManager } from '@/src/gameplay/CargoLiftManager';
 import { EnemyManager } from '@/src/gameplay/EnemyManager';
 import { ExplosiveManager } from '@/src/gameplay/ExplosiveManager';
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
@@ -31,6 +32,7 @@ export interface HudPublishContext {
   readonly missionDirector: MissionDirector | null;
   readonly activeMission: MissionConfig | null;
   readonly worldData: BuiltWorldData | null;
+  readonly cargoLiftManager?: CargoLiftManager | null;
   readonly camera?: THREE.PerspectiveCamera;
 }
 
@@ -77,7 +79,8 @@ export class HudSnapshotPublisher {
     activeVehicle: VehicleEntity | null,
     nearestVehicle: VehicleEntity | null,
     worldData: BuiltWorldData | null,
-    destruction: DestructionSystem
+    destruction: DestructionSystem,
+    liftPrompt: string | null = null
   ): string | null {
     if (activeVehicle) {
       return `[E] Exit ${activeVehicle.displayName}`;
@@ -106,11 +109,12 @@ export class HudSnapshotPublisher {
         }
       }
     }
-    return null;
+    return liftPrompt;
   }
 
   private projectObjectiveStatuses(
     objStatuses: ReturnType<MissionDirector['getObjectiveStatuses']>,
+    playerPos: THREE.Vector3,
     camera?: THREE.PerspectiveCamera
   ): void {
     if (!camera) return;
@@ -119,6 +123,7 @@ export class HudSnapshotPublisher {
     for (let i = 0; i < objStatuses.length; i++) {
       const o = objStatuses[i];
       if (!o.markerPos || o.completed) continue;
+      o.elevationDeltaM = Math.round(o.markerPos.y - playerPos.y);
 
       this._projScratch.set(o.markerPos.x, o.markerPos.y + 1.2, o.markerPos.z);
       this._toMarkerScratch.subVectors(this._projScratch, camera.position);
@@ -149,7 +154,7 @@ export class HudSnapshotPublisher {
     const veh = ctx.vehicles.getPlayerVehicle();
     const nearVeh = !veh ? ctx.vehicles.getNearestInteractableVehicle(ctx.player.position) : null;
     const objStatuses = missionDirector.getObjectiveStatuses();
-    this.projectObjectiveStatuses(objStatuses, ctx.camera);
+    this.projectObjectiveStatuses(objStatuses, ctx.player.position, ctx.camera);
 
     let firstActiveObj: (typeof objStatuses)[number] | null = null;
     for (let i = 0; i < objStatuses.length; i++) {
@@ -170,12 +175,18 @@ export class HudSnapshotPublisher {
       lockStatus: lockState.status,
     });
 
+    const liftCtx =
+      !veh && ctx.cargoLiftManager
+        ? ctx.cargoLiftManager.getPlayerInteractionContext(ctx.player.position)
+        : { prompt: null, activeSnapshot: null };
+
     const interactPrompt = this.resolveInteractPrompt(
       ctx.player,
       veh,
       nearVeh,
       ctx.worldData,
-      ctx.destruction
+      ctx.destruction,
+      liftCtx.prompt
     );
 
     let nearDemolitionCache = false;
@@ -340,6 +351,7 @@ export class HudSnapshotPublisher {
       activeBossLabel: boss?.label ?? null,
       activeBossHealthPct: boss?.healthPct ?? 0,
       ordnance: ordnanceHud,
+      liftStatus: liftCtx.activeSnapshot,
     };
   }
 

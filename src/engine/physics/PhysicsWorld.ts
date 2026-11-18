@@ -1,7 +1,14 @@
 import * as THREE from 'three';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import {
+  isOrientedSlopeRegion,
+  legacySlopeToOriented,
+  OrientedSlopeRegion,
+  sampleSlopeTopAt,
+} from '@/src/physics/OrientedSlope';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import {
+  CircleBoxContact2D,
   CollisionSystem,
   RaycastHitResult,
   VAULT_MAX_PROBE_DISTANCE,
@@ -58,11 +65,20 @@ export class PhysicsWorld {
   public readonly debugSystem = new PhysicsDebugSystem();
   public readonly responseSystem: CollisionResponseSystem;
 
-  private slopes: TerrainSlopeRegion[] = [];
+  private slopes: OrientedSlopeRegion[] = [];
   private terrainHeightFn: (x: number, z: number) => number = () => 0;
   private worldBoundLimit = PhysicsWorld.DEFAULT_WORLD_BOUND;
 
   private bvhGeometries = new Set<THREE.BufferGeometry>();
+  private readonly _supportQueryScratch: SpatialAABB[] = [];
+  private readonly _supportContact2D: CircleBoxContact2D = {
+    overlaps: false,
+    penetration: 0,
+    normalX: 0,
+    normalZ: 0,
+    contactX: 0,
+    contactZ: 0,
+  };
 
   constructor() {
     ensureThreeMeshBvhPatched();
@@ -91,11 +107,42 @@ export class PhysicsWorld {
   }
 
   registerBvhMesh(mesh: THREE.Mesh): void {
-    const geo = mesh.geometry as THREE.BufferGeometry & { computeBoundsTree?: () => void };
-    if (geo && typeof geo.computeBoundsTree === 'function' && !this.bvhGeometries.has(geo)) {
-      geo.computeBoundsTree();
-      this.bvhGeometries.add(geo);
+    if (!mesh || !mesh.isMesh) return;
+    if (mesh.userData?.skipBvh || mesh.userData?.dynamicPlatform) return;
+    const lowerName = (mesh.name || '').toLowerCase();
+    if (
+      !mesh.userData?.forceBvh &&
+      (lowerName.includes('trim') ||
+        lowerName.includes('baseboard') ||
+        lowerName.includes('glass') ||
+        lowerName.includes('mullion') ||
+        lowerName.includes('beacon') ||
+        lowerName.includes('foliage') ||
+        lowerName.includes('decal') ||
+        lowerName.includes('lift_platform') ||
+        lowerName.includes('lift_gate'))
+    ) {
+      return;
     }
+
+    const geo = mesh.geometry as THREE.BufferGeometry & {
+      computeBoundsTree?: () => void;
+      boundsTree?: unknown;
+    };
+    if (!geo || typeof geo.computeBoundsTree !== 'function') return;
+    if (this.bvhGeometries.has(geo)) return;
+    const posAttr = geo.getAttribute('position');
+    if (!posAttr || posAttr.count < 12) return;
+
+    mesh.updateWorldMatrix(true, false);
+    if (!geo.boundsTree) {
+      geo.computeBoundsTree();
+    }
+    this.bvhGeometries.add(geo);
+  }
+
+  getBvhGeometryCount(): number {
+    return this.bvhGeometries.size;
   }
 
   addStaticCollider(box: SpatialAABB): void {
@@ -121,26 +168,103 @@ export class PhysicsWorld {
     return this.spatialHash.getAllBoxes().map((b) => b.id);
   }
 
-  addSlope(slope: TerrainSlopeRegion): void {
-    this.slopes.push(slope);
+  addSlope(slope: TerrainSlopeRegion | OrientedSlopeRegion): void {
+    if (isOrientedSlopeRegion(slope)) {
+      this.slopes.push(slope);
+    } else {
+      this.slopes.push(legacySlopeToOriented(slope, this.slopes.length));
+    }
   }
 
-  getGroundHeightAt = (x: number, z: number): number => {
+  getSlopes(): readonly OrientedSlopeRegion[] {
+    return this.slopes;
+  }
+
+  getGroundHeightAt = (x: number, z: number, referenceFeetY?: number): number => {
     let h = this.terrainHeightFn(x, z);
     for (let i = 0; i < this.slopes.length; i++) {
-      const s = this.slopes[i];
-      if (x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ) {
-        const t = Math.max(0, Math.min(1, (z - s.startZ) / (s.endZ - s.startZ)));
-        const sh = s.startY + (s.endY - s.startY) * t;
-        if (sh > h) h = sh;
+      const sh = sampleSlopeTopAt(this.slopes[i], x, z, referenceFeetY, 0.55);
+      if (sh !== null && sh > h) {
+        h = sh;
       }
     }
     return h;
   };
 
   /**
+   * Resolves the highest valid walkable support surface (terrain, oriented slope, or static/lift box top)
+   * reachable at `(x, feetY, z)` with valid vertical capsule headroom.
+   */
+  getSupportHeightAt(
+    x: number,
+    feetY: number,
+    z: number,
+    capsuleHeight = 1.75,
+    stepHeight = 0.55,
+    maxSlopeDeg = 45,
+    layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID
+  ): number {
+    let bestY = this.terrainHeightFn(x, z);
+
+    for (let i = 0; i < this.slopes.length; i++) {
+      const s = this.slopes[i];
+      if (s.maxSlopeDeg > maxSlopeDeg) continue;
+      const sh = sampleSlopeTopAt(s, x, z, feetY, stepHeight);
+      if (sh !== null && sh > bestY) {
+        const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
+          this.spatialHash,
+          x,
+          sh,
+          z,
+          0.34,
+          capsuleHeight,
+          layerMask
+        );
+        if (clearance.clear) {
+          bestY = sh;
+        }
+      }
+    }
+
+    const queryR = 0.42;
+    const candidates = this.spatialHash.queryAABB(
+      x - queryR,
+      z - queryR,
+      x + queryR,
+      z + queryR,
+      layerMask,
+      this._supportQueryScratch
+    );
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
+      if (box.maxY > bestY && box.maxY <= feetY + stepHeight + 0.35) {
+        if (this.collisionSystem.testCircleBox2D(x, z, 0.35, box, this._supportContact2D)) {
+          const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
+            this.spatialHash,
+            x,
+            box.maxY,
+            z,
+            0.34,
+            capsuleHeight,
+            layerMask
+          );
+          if (clearance.clear) {
+            bestY = box.maxY;
+          }
+        }
+      }
+    }
+
+    return bestY;
+  }
+
+  private readonly getTerrainOnlyHeightAt = (x: number, z: number): number => {
+    return this.terrainHeightFn(x, z);
+  };
+
+  /**
    * Resolves a character capsule (Player or Enemy) with iterative collide-and-slide,
-   * verified step-climbing, overhead ceiling checks, and world boundary clamping.
+   * verified step-climbing, overhead ceiling checks, generalized slopes, and world boundary clamping.
    */
   resolveCharacterCapsule(
     entityId: string,
@@ -150,7 +274,8 @@ export class PhysicsWorld {
     height: number,
     stepHeight: number,
     layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID,
-    outResult?: CharacterMoveResult
+    outResult?: CharacterMoveResult,
+    maxSlopeDeg = 45
   ): boolean {
     return this.responseSystem.resolveCharacterCapsule(
       entityId,
@@ -162,8 +287,10 @@ export class PhysicsWorld {
       stepHeight,
       this.worldBoundLimit,
       layerMask,
-      this.getGroundHeightAt,
-      outResult
+      this.getTerrainOnlyHeightAt,
+      outResult,
+      this.slopes,
+      maxSlopeDeg
     );
   }
 

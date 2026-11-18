@@ -9,6 +9,7 @@ import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
 import { BallisticSolver } from '@/src/gameplay/BallisticSolver';
+import { CargoLiftManager, CargoLiftOccupantProxy } from '@/src/gameplay/CargoLiftManager';
 import { CombatDamageResolver } from '@/src/gameplay/CombatDamageResolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
@@ -87,6 +88,8 @@ export class GameEngine {
   private readonly healthPickups: HealthPickupManager;
   private readonly hudPublisher = new HudSnapshotPublisher();
   private readonly combatDamage: CombatDamageResolver;
+  private readonly cargoLiftManager = new CargoLiftManager(this.collisionWorld);
+  private readonly _liftOccupantScratch: CargoLiftOccupantProxy[] = [];
 
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
@@ -256,6 +259,9 @@ export class GameEngine {
       telemetry: this.telemetry,
       getMissionDirector: () => this.missionDirector,
       getActiveScope: () => this.activeScope,
+    });
+    this.cargoLiftManager.onPortalStateChange((u) => {
+      this.workerBridge?.updatePortalState(u.portalId, u.enabled, u.dynamicWaitCostSec, u.activeOccupants);
     });
 
     this.loop = new GameLoop({
@@ -651,11 +657,23 @@ export class GameEngine {
       this.reconstructCompletedDestructibles(mission, completedSet, destroyedTargetSet);
     }
 
+    this.cargoLiftManager.clear();
+    for (const liftDef of this.worldData.cargoLifts) {
+      this.cargoLiftManager.registerLift(liftDef);
+    }
+
     this.workerBridge = new WorkerBridge(this.resourceManager, scope);
-    this.workerBridge.uploadCollisionGrid(
+    this.workerBridge.uploadNavigationSurfaces(
       this.collisionWorld.spatialHash,
+      this.worldData.elevatedSurfaces,
+      this.worldData.navPortals,
       this.collisionWorld.getGroundHeightAt
     );
+    if (restoredCheckpoint) {
+      this.cargoLiftManager.normalizeForCheckpoint();
+    }
+    this.enemies.setCargoLiftManager(this.cargoLiftManager);
+    this.enemies.setWorkerBridge(this.workerBridge);
 
     this.telemetry.reset();
     this.telemetry.setMissionId(mission.id);
@@ -958,6 +976,9 @@ export class GameEngine {
     this.projectiles.resetAll();
     this.explosives.reset();
     this.enemies.clear();
+    this.enemies.setCargoLiftManager(null);
+    this.enemies.setWorkerBridge(null);
+    this.cargoLiftManager.clear();
     this.vehicles.clear();
     this.airCombat.clear();
     this.healthPickups.clear();
@@ -1138,6 +1159,10 @@ export class GameEngine {
         return true;
       }
     }
+    if (!this.vehicles.getPlayerVehicle() && this.cargoLiftManager.tryPlayerInteract(this.player.position)) {
+      this.audio.play2D('ui_click', 4, 0.45);
+      return true;
+    }
     return false;
   }
 
@@ -1164,6 +1189,11 @@ export class GameEngine {
     const settings = settingsStore.getState();
 
     this.player.touchAimFrictionScale = inVehicle ? 1.0 : this.computeTouchAimFrictionScale();
+
+    if (this.cargoLiftManager.getLiftCount() > 0) {
+      this.enemies.fillLiftOccupantProxies(this.player, this._liftOccupantScratch);
+      this.cargoLiftManager.updateFixed(dt, this._liftOccupantScratch);
+    }
 
     this.player.update(
       dt,
@@ -1637,6 +1667,7 @@ export class GameEngine {
       missionDirector: this.missionDirector,
       activeMission: this.activeMission,
       worldData: this.worldData,
+      cargoLiftManager: this.cargoLiftManager,
       camera: this.renderer.camera,
     });
   };
@@ -1709,6 +1740,7 @@ export class GameEngine {
     this.weapons.dispose();
     this.explosives.dispose();
     this.vehicles.dispose();
+    this.cargoLiftManager.dispose();
     this.destruction.dispose();
     this.unsubscribers.forEach((fn) => fn());
     this.unsubscribers = [];

@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import {
+  evaluateOrientedSlopeAt,
+  OrientedSlopeEvaluation,
+  OrientedSlopeRegion,
+} from '@/src/physics/OrientedSlope';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import { CircleBoxContact2D, CollisionSystem } from './CollisionSystem';
 import { PhysicsDebugSystem } from './PhysicsDebugSystem';
@@ -6,7 +11,7 @@ import { CharacterMoveResult, VehicleMoveResult } from './PhysicsTypes';
 
 /**
  * Handles iterative collide-and-slide character capsule resolution, horizontal-verified step climbing,
- * ceiling collision clamping, and vehicle OBB sliding impulse deflection.
+ * generalized multi-orientation slope traversal, underside ceiling clamping, and vehicle OBB deflection.
  */
 export class CollisionResponseSystem {
   private readonly queryScratch: SpatialAABB[] = [];
@@ -18,6 +23,17 @@ export class CollisionResponseSystem {
     contactX: 0,
     contactZ: 0,
   };
+  private readonly slopeEvalScratch: OrientedSlopeEvaluation = {
+    withinFootprint: false,
+    topY: 0,
+    bottomY: 0,
+    u: 0,
+    v: 0,
+    t: 0,
+    slopeDeg: 0,
+    supportsFeet: false,
+    hitsUndersideCeiling: false,
+  };
 
   constructor(
     private readonly collisionSystem: CollisionSystem,
@@ -28,7 +44,7 @@ export class CollisionResponseSystem {
    * Resolves a character capsule (Player or Enemy) against static and dynamic world geometry.
    * Uses iterative collide-and-slide (up to 4 passes) so acute corners never push the capsule through walls,
    * verifies horizontal overlap BEFORE stepping up, checks overhead clearance at the stepped height,
-   * and blocks upward head penetration into overhangs/ceilings.
+   * enforces generalized oriented slope ceilings/supports, and blocks upward head penetration into overhangs.
    */
   resolveCharacterCapsule(
     entityId: string,
@@ -41,7 +57,9 @@ export class CollisionResponseSystem {
     worldBoundLimit: number,
     layerMask: number,
     getTerrainHeightAt: (x: number, z: number) => number,
-    outResult?: CharacterMoveResult
+    outResult?: CharacterMoveResult,
+    slopes: readonly OrientedSlopeRegion[] = [],
+    maxSlopeDeg = 45
   ): boolean {
     const res: CharacterMoveResult = outResult ?? {
       grounded: false,
@@ -157,10 +175,21 @@ export class CollisionResponseSystem {
         // Landing on top of a platform / roof / crate when descending onto its top surface
         const topPenetration = box.maxY - feetY;
         if (vel.y <= 0.05 && topPenetration >= 0 && topPenetration <= 0.18 && this.contact2D.penetration > 0.04) {
-          pos.y = box.maxY;
-          if (vel.y < 0) vel.y = 0;
-          res.grounded = true;
-          continue;
+          const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
+            spatialHash,
+            pos.x,
+            box.maxY,
+            pos.z,
+            radius * 0.9,
+            height,
+            layerMask
+          );
+          if (clearance.clear) {
+            pos.y = box.maxY;
+            if (vel.y < 0) vel.y = 0;
+            res.grounded = true;
+            continue;
+          }
         }
 
         // Step-up check: ONLY when horizontally overlapping AND obstacle top is within stepHeight
@@ -249,8 +278,63 @@ export class CollisionResponseSystem {
       });
     }
 
-    // 3. Support standing on elevated horizontal surfaces (roofs, watchtower decks, stairs, crates)
+    // 2.5 Generalized OrientedSlopeRegion underside ceiling clamping
+    for (let i = 0; i < slopes.length; i++) {
+      const s = slopes[i];
+      if (!evaluateOrientedSlopeAt(s, pos.x, pos.y, pos.z, radius, height, stepHeight, this.slopeEvalScratch)) {
+        continue;
+      }
+      if (this.slopeEvalScratch.hitsUndersideCeiling) {
+        const ceilingY = this.slopeEvalScratch.bottomY;
+        const pen = pos.y + height - ceilingY;
+        pos.y = ceilingY - height - 0.005;
+        if (vel.y > 0) vel.y = 0;
+        res.hitCeiling = true;
+        res.lastBlockerId = s.id;
+        this.debugSystem.recordContact({
+          entityId,
+          colliderId: s.id,
+          colliderTag: 'stair_ramp',
+          pointX: pos.x,
+          pointY: ceilingY,
+          pointZ: pos.z,
+          normalX: 0,
+          normalY: -1,
+          normalZ: 0,
+          penetrationDepth: Math.max(0.01, pen),
+          impactSpeed: Math.abs(vel.y),
+        });
+      }
+    }
+
+    // 3. Support standing on terrain, generalized oriented slopes, and headroom-verified elevated surfaces
     let supportSurfaceY = getTerrainHeightAt(pos.x, pos.z);
+    let slopeSupported = false;
+
+    for (let i = 0; i < slopes.length; i++) {
+      const s = slopes[i];
+      if (s.maxSlopeDeg > maxSlopeDeg) continue;
+      if (!evaluateOrientedSlopeAt(s, pos.x, pos.y, pos.z, radius, height, stepHeight, this.slopeEvalScratch)) {
+        continue;
+      }
+      if (this.slopeEvalScratch.supportsFeet && this.slopeEvalScratch.topY > supportSurfaceY) {
+        const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
+          spatialHash,
+          pos.x,
+          this.slopeEvalScratch.topY,
+          pos.z,
+          radius * 0.85,
+          height,
+          layerMask
+        );
+        if (clearance.clear) {
+          supportSurfaceY = this.slopeEvalScratch.topY;
+          slopeSupported = true;
+        }
+      }
+    }
+
+    const boxStepTol = Math.max(0.28, Math.min(0.48, stepHeight));
     const supportCandidates = spatialHash.queryAABB(
       pos.x - radius * 0.85,
       pos.z - radius * 0.85,
@@ -261,14 +345,27 @@ export class CollisionResponseSystem {
     );
     for (let i = 0; i < supportCandidates.length; i++) {
       const box = supportCandidates[i];
-      if (pos.y + 0.28 >= box.maxY && box.maxY > supportSurfaceY) {
+      if (pos.y + boxStepTol >= box.maxY && box.maxY > supportSurfaceY) {
         if (this.collisionSystem.testCircleBox2D(pos.x, pos.z, radius * 0.85, box, this.contact2D)) {
-          supportSurfaceY = box.maxY;
+          const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
+            spatialHash,
+            pos.x,
+            box.maxY,
+            pos.z,
+            radius * 0.85,
+            height,
+            layerMask
+          );
+          if (clearance.clear) {
+            supportSurfaceY = box.maxY;
+            slopeSupported = false;
+          }
         }
       }
     }
 
-    if (pos.y <= supportSurfaceY + 0.04 && vel.y <= 0) {
+    const snapStickTolerance = slopeSupported && vel.y <= 0 && vel.y > -4.5 ? 0.24 : 0.04;
+    if (pos.y <= supportSurfaceY + snapStickTolerance && vel.y <= 0) {
       pos.y = supportSurfaceY;
       vel.y = 0;
       res.grounded = true;

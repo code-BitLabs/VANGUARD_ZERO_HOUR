@@ -25,6 +25,8 @@ export interface CheckpointSpawnPose {
   y: number;
   z: number;
   yaw: number;
+  surfaceY?: number;
+  normalizedFromLiftId?: string;
 }
 
 export interface MissionCheckpointSnapshot {
@@ -160,16 +162,21 @@ export function isWeaponRelevantForCheckpointAmmoFloor(
 
 function isSpawnPoseSafe(
   candX: number,
+  candFeetHintY: number,
   candZ: number,
   yaw: number,
   collisionWorld: CollisionWorld,
-  hazards: ReadonlyArray<CheckpointHazardPoint>
+  hazards: ReadonlyArray<CheckpointHazardPoint>,
+  normalizedFromLiftId?: string
 ): CheckpointSpawnPose | null {
   if (!Number.isFinite(candX) || !Number.isFinite(candZ)) return null;
   if (Math.abs(candX) > 100 || Math.abs(candZ) > 100) return null;
 
-  const groundY = collisionWorld.getGroundHeightAt(candX, candZ);
-  _clearancePos.set(candX, groundY, candZ);
+  const supportY =
+    candFeetHintY > 0.4
+      ? collisionWorld.getSupportHeightAt(candX, candFeetHintY + 0.6, candZ, 1.75, 0.65, 45)
+      : collisionWorld.getGroundHeightAt(candX, candZ);
+  _clearancePos.set(candX, supportY, candZ);
   if (!collisionWorld.canStandUp(_clearancePos, 0.45, 1.75, 'player')) {
     return null;
   }
@@ -183,9 +190,11 @@ function isSpawnPoseSafe(
 
   return {
     x: candX,
-    y: groundY + 1.7,
+    y: supportY + 1.7,
     z: candZ,
     yaw,
+    surfaceY: supportY,
+    normalizedFromLiftId,
   };
 }
 
@@ -195,12 +204,15 @@ export function validateSafeCheckpointSpawn(
   collisionWorld: CollisionWorld,
   hazards: ReadonlyArray<CheckpointHazardPoint>
 ): CheckpointSpawnPose {
+  const feetHintY = primaryAnchor.surfaceY ?? Math.max(0, primaryAnchor.y - 1.7);
   const direct = isSpawnPoseSafe(
     primaryAnchor.x,
+    feetHintY,
     primaryAnchor.z,
     primaryAnchor.yaw,
     collisionWorld,
-    hazards
+    hazards,
+    primaryAnchor.normalizedFromLiftId
   );
   if (direct) return direct;
 
@@ -210,16 +222,29 @@ export function validateSafeCheckpointSpawn(
       const angle = (step * Math.PI) / 4;
       const candX = primaryAnchor.x + Math.cos(angle) * r;
       const candZ = primaryAnchor.z + Math.sin(angle) * r;
-      const safe = isSpawnPoseSafe(candX, candZ, primaryAnchor.yaw, collisionWorld, hazards);
+      const safe = isSpawnPoseSafe(
+        candX,
+        feetHintY,
+        candZ,
+        primaryAnchor.yaw,
+        collisionWorld,
+        hazards,
+        primaryAnchor.normalizedFromLiftId
+      );
       if (safe) return safe;
     }
   }
 
-  const fbGroundY = collisionWorld.getGroundHeightAt(fallbackSpawn.x, fallbackSpawn.z);
+  const fbFeetHint = fallbackSpawn.surfaceY ?? Math.max(0, fallbackSpawn.y - 1.7);
+  const fbGroundY =
+    fbFeetHint > 0.4
+      ? collisionWorld.getSupportHeightAt(fallbackSpawn.x, fbFeetHint + 0.6, fallbackSpawn.z, 1.75, 0.65, 45)
+      : collisionWorld.getGroundHeightAt(fallbackSpawn.x, fallbackSpawn.z);
   return {
     x: fallbackSpawn.x,
     y: Math.max(fallbackSpawn.y, fbGroundY + 1.7),
     z: fallbackSpawn.z,
     yaw: fallbackSpawn.yaw,
+    surfaceY: fbGroundY,
   };
 }

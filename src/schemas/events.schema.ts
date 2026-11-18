@@ -58,6 +58,7 @@ export const ObjectiveStatusSchema = z.object({
       z: z.number(),
     })
     .optional(),
+  elevationDeltaM: z.number().optional(),
 });
 export type ObjectiveStatus = z.infer<typeof ObjectiveStatusSchema>;
 
@@ -128,6 +129,31 @@ export type VehicleCameraMode = z.infer<typeof VehicleCameraModeSchema>;
 export const VehicleDriveGearSchema = z.enum(['FORWARD', 'BRAKING', 'NEUTRAL_HOLD', 'REVERSE']);
 export type VehicleDriveGear = z.infer<typeof VehicleDriveGearSchema>;
 
+export const CargoLiftHudSnapshotSchema = z.object({
+  liftId: z.string(),
+  liftName: z.string(),
+  state: z.enum([
+    'idle',
+    'requested',
+    'boarding',
+    'doors_closing',
+    'traveling',
+    'docking',
+    'doors_opening',
+    'unloading',
+  ]),
+  travelDirection: z.enum(['up', 'down', 'none']),
+  currentFloorIndex: z.number().int().nonnegative(),
+  targetFloorIndex: z.number().int().nonnegative(),
+  currentFloorLabel: z.string(),
+  targetFloorLabel: z.string(),
+  currentElevationY: z.number(),
+  playerInside: z.boolean(),
+  occupantCount: z.number().int().nonnegative(),
+  maxOccupants: z.number().int().positive(),
+});
+export type CargoLiftHudSnapshotEvent = z.infer<typeof CargoLiftHudSnapshotSchema>;
+
 export const HudSnapshotSchema = z.object({
   health: z.number().min(0).max(250),
   maxHealth: z.number().positive().max(250),
@@ -194,5 +220,6 @@ export const HudSnapshotSchema = z.object({
   activeBossLabel: z.string().nullable(),
   activeBossHealthPct: z.number().min(0).max(1),
   ordnance: TacticalOrdnanceHudSchema.optional(),
+  liftStatus: CargoLiftHudSnapshotSchema.nullable().optional(),
 });
 export type HudSnapshot = z.infer<typeof HudSnapshotSchema>;

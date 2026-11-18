@@ -17,9 +17,15 @@ import {
 import { Difficulty } from '@/src/schemas/common.schema';
 import { EnemyArchetype, SquadRole } from '@/src/schemas/enemy.schema';
 import { IncomingThreatWarning, MiniMapBlip } from '@/src/schemas/events.schema';
+import {
+  AgentProfileId,
+  getAgentTraversalProfile,
+  PortalKind,
+} from '@/src/navigation/AgentTraversalProfile';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
 import { buildSoldierRig } from '@/src/world/rigs/EnemyRigBuilder';
 import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from './BallisticSolver';
+import { CargoLiftManager, CargoLiftOccupantProxy } from './CargoLiftManager';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import { CombatTelemetryRecorder, EnemyDebugInspectorRow } from './CombatTelemetryRecorder';
 import { PlayerController } from './PlayerController';
@@ -117,6 +123,13 @@ export interface EnemyUnit {
   telegraphTimerSec: number;
   telegraphDurationSec: number;
   telegraphKind: 'sniper' | 'rocket' | null;
+  agentProfile: AgentProfileId;
+  activePortalId: number;
+  activePortalKind: PortalKind | null;
+  targetLiftId: string | null;
+  targetFloorIndex: number;
+  portalWaitTimerSec: number;
+  isRidingLift: boolean;
 }
 
 const WHISKER_COS_35 = Math.cos((35 * Math.PI) / 180);
@@ -197,6 +210,9 @@ export class EnemyManager {
   }> = [];
   private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
   private readonly _blipPool: MiniMapBlip[] = [];
+  private readonly _liftProxyPool: CargoLiftOccupantProxy[] = [];
+  private cargoLiftManager: CargoLiftManager | null = null;
+  private activeWorkerBridge: WorkerBridge | null = null;
   private sniperLaserLine: THREE.Line | null = null;
   private sniperLaserPositions: Float32Array | null = null;
 
@@ -236,6 +252,50 @@ export class EnemyManager {
     this.coordinator?.setDifficulty(difficulty);
     for (let i = 0; i < this.enemies.length; i++) {
       this.syncUnitHitboxes(this.enemies[i]);
+    }
+  }
+
+  setCargoLiftManager(mgr: CargoLiftManager | null): void {
+    this.cargoLiftManager = mgr;
+  }
+
+  setWorkerBridge(bridge: WorkerBridge | null): void {
+    this.activeWorkerBridge = bridge;
+  }
+
+  fillLiftOccupantProxies(player: PlayerController, out: CargoLiftOccupantProxy[]): void {
+    out.length = 0;
+    let slotIdx = 0;
+    const ensureProxy = (
+      id: string,
+      isPlayer: boolean,
+      pos: THREE.Vector3,
+      vel: THREE.Vector3,
+      height: number
+    ) => {
+      let proxy = this._liftProxyPool[slotIdx];
+      if (!proxy) {
+        proxy = { id, isPlayer, pos, vel, height };
+        this._liftProxyPool.push(proxy);
+      } else {
+        proxy.id = id;
+        proxy.isPlayer = isPlayer;
+        proxy.pos = pos;
+        proxy.vel = vel;
+        proxy.height = height;
+      }
+      out.push(proxy);
+      slotIdx++;
+    };
+
+    if (player.alive) {
+      ensureProxy('player', true, player.position, player.velocity, player.isCrouching ? 1.15 : 1.8);
+    }
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      const prof = getAgentTraversalProfile(u.agentProfile);
+      ensureProxy(u.id, false, u.position, u.velocity, prof.standingHeight);
     }
   }
 
@@ -314,23 +374,52 @@ export class EnemyManager {
     customSquadId?: string
   ): void {
     const cfg = ENEMY_BY_ARCHETYPE[archetype];
+    const agentProfile: AgentProfileId =
+      archetype === 'heavy_armor' ? 'heavy_infantry' : 'standard_infantry';
+    const traversalProfile = getAgentTraversalProfile(agentProfile);
     const squadId = customSquadId ?? `squad_${++this.waveSeq}_${archetype}`;
     const rng = this.ballistics?.rng;
     const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
+    const elevatedSpawn = center.y > 0.4;
 
     for (let i = 0; i < count; i++) {
       const randA = rng ? rng.next() : Math.random();
       const randR = rng ? rng.next() : Math.random();
       const a = (i / Math.max(1, count)) * Math.PI * 2 + randA * 0.45;
-      const r = count === 1 ? 0 : 2 + randR * Math.max(0.5, radius - 2);
+      const r =
+        count <= 1
+          ? 0
+          : elevatedSpawn || radius < 2.5
+            ? Math.min(radius, 0.75 + randR * Math.max(0.25, radius - 0.75))
+            : 2 + randR * Math.max(0.5, radius - 2);
       const x = Math.max(-105, Math.min(105, center.x + Math.cos(a) * r));
       const z = Math.max(-105, Math.min(105, center.z + Math.sin(a) * r));
-      const y = collision.getGroundHeightAt(x, z);
+      const y = elevatedSpawn
+        ? collision.getSupportHeightAt(
+            x,
+            center.y + 0.8,
+            z,
+            traversalProfile.standingHeight,
+            traversalProfile.maxStepHeight,
+            traversalProfile.maxSlopeDeg
+          )
+        : collision.getGroundHeightAt(x, z);
       const spawnPos = new THREE.Vector3(x, y, z);
       const spawnVel = new THREE.Vector3(0, 0, 0);
       const unitId = `enemy_${++this.seq}`;
       // Push spawn position out of any solid walls or barriers immediately
-      collision.resolvePlayerCapsule(spawnPos, spawnVel, 0.4, 1.75, 0.45, 0.016, unitId);
+      collision.resolvePlayerCapsule(
+        spawnPos,
+        spawnVel,
+        traversalProfile.capsuleRadius,
+        traversalProfile.standingHeight,
+        traversalProfile.maxStepHeight,
+        0.016,
+        unitId,
+        undefined,
+        undefined,
+        traversalProfile.maxSlopeDeg
+      );
 
       const rig = buildSoldierRig(cfg.accentColor, archetype, scope, this.resourceManager);
       rig.root.position.copy(spawnPos);
@@ -439,6 +528,13 @@ export class EnemyManager {
         telegraphTimerSec: 0,
         telegraphDurationSec: 0,
         telegraphKind: null,
+        agentProfile,
+        activePortalId: -1,
+        activePortalKind: null,
+        targetLiftId: null,
+        targetFloorIndex: -1,
+        portalWaitTimerSec: 0,
+        isRidingLift: false,
       };
       this.syncUnitHitboxes(unit);
       this.enemies.push(unit);
@@ -598,6 +694,7 @@ export class EnemyManager {
       unit.alive = false;
       unit.state = 'DEAD';
       unit.deathTimer = 0;
+      this.cargoLiftManager?.cancelRequestsForEntity(unit.id);
       this.telemetry?.recordStateTransition(unit.id, unit.squadId, 'ground', prevBeforeDeath, 'DEAD');
       this.coordinator?.notifyUnitDisabled(unit.id, unit.squadId, 'ground', 'death');
       return true;
@@ -634,10 +731,12 @@ export class EnemyManager {
     aiMidIntervalSec: number,
     onSpawnDrone?: (x: number, y: number, z: number) => void
   ): void {
+    this.activeWorkerBridge = workerBridge;
     const px = player.position.x;
+    const py = player.position.y;
     const pz = player.position.z;
 
-    // Batch off-thread A* path requests every 0.45s using LKP or cover targets (NEVER wall-hack player pos!)
+    // Batch off-thread Hierarchical Multi-Elevation 3D A* path requests every 0.45s
     this.pathSyncAccum += dt;
     if (this.pathSyncAccum >= 0.45) {
       this.pathSyncAccum = 0;
@@ -645,6 +744,7 @@ export class EnemyManager {
         .filter(
           (e) =>
             e.alive &&
+            !e.isRidingLift &&
             e.state !== 'DEAD' &&
             e.state !== 'UNAWARE' &&
             e.state !== 'SUSPICIOUS' &&
@@ -652,20 +752,39 @@ export class EnemyManager {
         )
         .slice(0, 8);
       if (activeToRoute.length > 0 && workerBridge.isHealthy()) {
-        const queries = activeToRoute.map((e) => {
+        const queries3D = activeToRoute.map((e) => {
           const target =
             e.coverTarget && (e.state === 'REPOSITIONING' || e.state === 'RETREATING')
               ? e.coverTarget
               : (e.lastKnownPosition ?? e.patrolOrigin);
-          return { sx: e.position.x, sz: e.position.z, tx: target.x, tz: target.z };
+          const targetY =
+            e.coverTarget && (e.state === 'REPOSITIONING' || e.state === 'RETREATING')
+              ? e.coverTarget.y
+              : e.lastKnownPosition
+                ? Math.max(0, e.lastKnownPosition.y - 1.0)
+                : e.patrolOrigin.y;
+          return {
+            sx: e.position.x,
+            sy: e.position.y,
+            sz: e.position.z,
+            tx: target.x,
+            ty: Number.isFinite(targetY) ? targetY : py,
+            tz: target.z,
+            profileId: e.agentProfile,
+          };
         });
-        void workerBridge.requestPaths(queries).then((waypoints) => {
+        void workerBridge.requestPaths3D(queries3D).then((waypoints) => {
           if (!waypoints || this.enemies.length === 0) return;
           for (let i = 0; i < Math.min(waypoints.length, activeToRoute.length); i++) {
             const u = activeToRoute[i];
-            if (u.alive) {
-              u.waypoint.set(waypoints[i].wx, u.position.y, waypoints[i].wz);
+            const wp = waypoints[i];
+            if (u.alive && !u.isRidingLift) {
+              u.waypoint.set(wp.wx, wp.wy, wp.wz);
               u.hasValidWaypoint = true;
+              u.activePortalId = wp.portalId;
+              u.activePortalKind = wp.portalKind;
+              u.targetLiftId = wp.liftId;
+              u.targetFloorIndex = wp.targetFloorIndex;
             }
           }
         });
@@ -1411,13 +1530,55 @@ export class EnemyManager {
 
     let moveX = 0;
     let moveZ = 0;
+    let holdForLift = false;
+    const agentProf = getAgentTraversalProfile(u.agentProfile);
     const preferredRange =
       u.archetype === 'sniper' ? 52 : u.archetype === 'rocket_trooper' ? 40 : 22;
     const wpDist = Math.hypot(u.waypoint.x - u.position.x, u.waypoint.z - u.position.z);
-    if (u.hasValidWaypoint && wpDist <= 0.6) {
+    if (u.hasValidWaypoint && wpDist <= 0.6 && !u.targetLiftId) {
       u.hasValidWaypoint = false;
     }
-    const hasWaypoint = u.hasValidWaypoint && wpDist > 0.6;
+    const hasWaypoint = u.hasValidWaypoint && (wpDist > 0.6 || u.targetLiftId !== null);
+
+    // Multi-stop cargo lift coordination for AI vertical traversal
+    if (u.targetLiftId && this.cargoLiftManager) {
+      const portal =
+        u.activePortalId >= 0 ? this.activeWorkerBridge?.getPortalById(u.activePortalId) ?? null : null;
+      const fromFloor = portal?.fromFloorIndex ?? 0;
+      const toFloor = u.targetFloorIndex >= 0 ? u.targetFloorIndex : (portal?.toFloorIndex ?? 1);
+      const liftInfo = this.cargoLiftManager.getLiftRuntimeInfo(u.targetLiftId);
+
+      if (portal && Math.abs(u.position.y - portal.toY) < 0.75) {
+        // Arrived at target deck elevation: walk cleanly off lift toward portal exit
+        u.isRidingLift = false;
+        u.targetLiftId = null;
+        u.activePortalId = -1;
+        u.activePortalKind = null;
+        u.waypoint.set(portal.toX, portal.toY, portal.toZ);
+        u.hasValidWaypoint = true;
+      } else if (liftInfo) {
+        this.cargoLiftManager.requestLiftForAI(u.targetLiftId, u.id, fromFloor, toFloor);
+        const distToWait = portal
+          ? Math.hypot(portal.fromX - u.position.x, portal.fromZ - u.position.z)
+          : 99;
+        const canBoard = this.cargoLiftManager.canAiBoardLift(u.targetLiftId, u.id, fromFloor);
+        if (
+          u.isRidingLift ||
+          (liftInfo.state === 'traveling' || liftInfo.state === 'doors_closing' || liftInfo.state === 'docking')
+        ) {
+          if (wpDist < 2.2) {
+            u.isRidingLift = true;
+            holdForLift = true;
+          } else if (distToWait < 1.6 && !canBoard) {
+            holdForLift = true;
+          }
+        } else if (!canBoard && distToWait < 1.6) {
+          holdForLift = true;
+        }
+      }
+    } else {
+      u.isRidingLift = false;
+    }
 
     if (u.state === 'UNAWARE') {
       u.patrolTimer -= dt;
@@ -1425,11 +1586,14 @@ export class EnemyManager {
         u.patrolTimer = 3.5 + (this.ballistics?.rng.next() ?? 0.5) * 2.5;
         u.patrolYaw = this.normalizeAngle(u.patrolYaw + Math.PI * 0.65);
       }
+    } else if (holdForLift) {
+      moveX = 0;
+      moveZ = 0;
     } else if (u.state === 'RETREATING' && u.coverTarget) {
       moveX = (hasWaypoint ? u.waypoint.x : u.coverTarget.x) - u.position.x;
       moveZ = (hasWaypoint ? u.waypoint.z : u.coverTarget.z) - u.position.z;
     } else if (u.state === 'REPOSITIONING') {
-      if (u.role === 'flanker' && u.lastKnownPosition) {
+      if (u.role === 'flanker' && u.lastKnownPosition && !u.targetLiftId) {
         const side = parseInt(u.id.split('_')[1] ?? '1', 10) % 2 === 0 ? 1 : -1;
         const dx = u.lastKnownPosition.x - u.position.x;
         const dz = u.lastKnownPosition.z - u.position.z;
@@ -1447,7 +1611,7 @@ export class EnemyManager {
         u.lastKnownPosition.x - u.position.x,
         u.lastKnownPosition.z - u.position.z
       );
-      if (distToLkp > 4.5) {
+      if (distToLkp > 4.5 || u.targetLiftId !== null) {
         moveX = (hasWaypoint ? u.waypoint.x : u.lastKnownPosition.x) - u.position.x;
         moveZ = (hasWaypoint ? u.waypoint.z : u.lastKnownPosition.z) - u.position.z;
       }
@@ -1457,7 +1621,7 @@ export class EnemyManager {
     }
 
     const moveLen = Math.hypot(moveX, moveZ);
-    if (moveLen > 0.6 && u.state !== 'SUPPRESSING') {
+    if (moveLen > 0.6 && u.state !== 'SUPPRESSING' && !holdForLift) {
       u.isMoving = true;
       const spd =
         cfg.moveSpeed *
@@ -1593,13 +1757,14 @@ export class EnemyManager {
       const moveRes = collision.resolvePlayerCapsule(
         u.position,
         u.velocity,
-        0.4,
-        1.75,
-        0.45,
+        agentProf.capsuleRadius,
+        agentProf.standingHeight,
+        agentProf.maxStepHeight,
         dt,
         u.id,
         undefined,
-        this._moveResultScratch
+        this._moveResultScratch,
+        agentProf.maxSlopeDeg
       );
       if (moveRes.hitHorizontal && Math.hypot(moveRes.wallNormalX, moveRes.wallNormalZ) > 0.2) {
         const tx = -moveRes.wallNormalZ;
@@ -1871,8 +2036,9 @@ export class EnemyManager {
   }
 
   /**
-   * TRN-01D: Selects leeward cover 1.1m behind the cover node away from threatPos,
-   * verifying capsule standing clearance, >= 2.2m squad separation, and physical LOS occlusion.
+   * TRN-01D & TRN-17: Geometry-driven 3D anatomical multi-point cover evaluation.
+   * Resolves candidate support elevation across multi-level surfaces, checks standing clearance,
+   * squad separation >= 2.2m, crouched chest/head protection, and parapet pop-up firing viability.
    */
   findTacticalCover(
     unit: EnemyUnit,
@@ -1886,7 +2052,10 @@ export class EnemyManager {
     let bestZ = 0;
     let found = false;
     let bestScore = -1e9;
-    const threatGroundY = collision.getGroundHeightAt(threatPos.x, threatPos.z);
+    const prof = getAgentTraversalProfile(unit.agentProfile);
+    const threatEyeY =
+      (threatPos.y > 0.4 ? threatPos.y : collision.getGroundHeightAt(threatPos.x, threatPos.z)) +
+      1.45;
 
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
@@ -1898,10 +2067,20 @@ export class EnemyManager {
       const inv = 1 / dThreatNode;
       const candX = n.x + dx * inv * 1.1;
       const candZ = n.z + dz * inv * 1.1;
-      const candY = collision.getGroundHeightAt(candX, candZ);
+      const candY =
+        n.y > 0.4
+          ? collision.getSupportHeightAt(
+              candX,
+              n.y + 0.8,
+              candZ,
+              prof.standingHeight,
+              prof.maxStepHeight,
+              prof.maxSlopeDeg
+            )
+          : collision.getGroundHeightAt(candX, candZ);
       this._coverCandScratch.set(candX, candY, candZ);
 
-      if (!collision.canStandUp(this._coverCandScratch, 0.4, 1.75, unit.id)) {
+      if (!collision.canStandUp(this._coverCandScratch, prof.capsuleRadius, prof.standingHeight, unit.id)) {
         continue;
       }
 
@@ -1927,35 +2106,71 @@ export class EnemyManager {
       }
       if (claimedBySquad) continue;
 
-      // Verify physical LOS occlusion from threat crouch/chest height to candidate chest height
-      const rayStartY = threatGroundY + 1.05;
-      const rayEndY = candY + 1.05;
+      // Multi-point 3D anatomical raycasts (crouched chest +0.72m / head +1.08m, standing head +1.58m)
       const rdx = candX - threatPos.x;
-      const rdy = rayEndY - rayStartY;
       const rdz = candZ - threatPos.z;
-      const rDist = Math.hypot(rdx, rdy, rdz);
-      if (rDist < 0.8) continue;
+      const rdyCrouchChest = candY + 0.72 - threatEyeY;
+      const rDistCC = Math.hypot(rdx, rdyCrouchChest, rdz);
+      if (rDistCC < 0.8) continue;
 
-      const invR = 1 / rDist;
-      const occluded = collision.sweptSegmentTest(
+      const invCC = 1 / rDistCC;
+      const crouchChestBlocked = collision.sweptSegmentTest(
         threatPos.x,
-        rayStartY,
+        threatEyeY,
         threatPos.z,
-        rdx * invR,
-        rdy * invR,
-        rdz * invR,
-        rDist - 0.5,
+        rdx * invCC,
+        rdyCrouchChest * invCC,
+        rdz * invCC,
+        rDistCC - 0.45,
         SOLID_OBSTRUCTION_MASK,
         this._coverRayHit,
         unit.id
       );
-      if (!occluded || !this._coverRayHit.hit || !this._coverRayHit.collider) {
-        continue;
-      }
+      if (!crouchChestBlocked || !this._coverRayHit.hit) continue;
 
-      const dSelf = Math.hypot(unit.position.x - candX, unit.position.z - candZ);
+      const rdyCrouchHead = candY + 1.08 - threatEyeY;
+      const rDistCH = Math.hypot(rdx, rdyCrouchHead, rdz);
+      const invCH = 1 / Math.max(0.8, rDistCH);
+      const crouchHeadBlocked = collision.sweptSegmentTest(
+        threatPos.x,
+        threatEyeY,
+        threatPos.z,
+        rdx * invCH,
+        rdyCrouchHead * invCH,
+        rdz * invCH,
+        Math.max(0.3, rDistCH - 0.45),
+        SOLID_OBSTRUCTION_MASK,
+        this._coverRayHit,
+        unit.id
+      );
+      if (!crouchHeadBlocked || !this._coverRayHit.hit) continue;
+
+      // Check standing eye/head exposure: parapet cover shields crouch while allowing pop-up return fire
+      const rdyStandHead = candY + 1.58 - threatEyeY;
+      const rDistSH = Math.hypot(rdx, rdyStandHead, rdz);
+      const invSH = 1 / Math.max(0.8, rDistSH);
+      const standHeadBlocked = collision.sweptSegmentTest(
+        threatPos.x,
+        threatEyeY,
+        threatPos.z,
+        rdx * invSH,
+        rdyStandHead * invSH,
+        rdz * invSH,
+        Math.max(0.3, rDistSH - 0.45),
+        SOLID_OBSTRUCTION_MASK,
+        this._coverRayHit,
+        unit.id
+      );
+
+      const dSelf = Math.hypot(unit.position.x - candX, unit.position.y - candY, unit.position.z - candZ);
       const dThreatCand = Math.hypot(candX - threatPos.x, candZ - threatPos.z);
-      const score = (preferAway ? dThreatCand : -Math.abs(dThreatCand - 22)) - dSelf * 0.8;
+      const parapetBonus = !standHeadBlocked && !preferAway ? 3.5 : 1.0;
+      const elevationBonus = candY > threatPos.y + 3.0 ? 2.5 : 0;
+      const score =
+        (preferAway ? dThreatCand : -Math.abs(dThreatCand - 22)) -
+        dSelf * 0.8 +
+        parapetBonus +
+        elevationBonus;
       if (score > bestScore) {
         bestScore = score;
         bestX = candX;
@@ -2130,6 +2345,9 @@ export class EnemyManager {
   }
 
   clear(): void {
+    for (let i = 0; i < this.enemies.length; i++) {
+      this.cargoLiftManager?.cancelRequestsForEntity(this.enemies[i].id);
+    }
     this.enemies = [];
     this.waveSeq = 0;
     this.pathSyncAccum = 0;
@@ -2147,6 +2365,7 @@ export class EnemyManager {
     }
     this._proxPool.length = 0;
     this._blipPool.length = 0;
+    this._liftProxyPool.length = 0;
     if (this.sniperLaserLine) {
       this.sniperLaserLine.visible = false;
     }

@@ -7,7 +7,14 @@ import {
   VaultProbeResult,
 } from '@/src/engine/physics/CollisionSystem';
 import { CharacterMoveResult, VehicleMoveResult } from '@/src/engine/physics/PhysicsTypes';
+import {
+  createOrientedSlopeRegion,
+  OrientedSlopeRegion,
+} from '@/src/physics/OrientedSlope';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from './SpatialHash';
+
+export { createOrientedSlopeRegion };
+export type { OrientedSlopeRegion };
 
 export interface RayHit {
   hit: boolean;
@@ -21,7 +28,7 @@ export interface RayHit {
   collider: SpatialAABB | null;
 }
 
-export type SlopeRegion = TerrainSlopeRegion;
+export type SlopeRegion = TerrainSlopeRegion | OrientedSlopeRegion;
 
 /**
  * Authoritative CollisionWorld facade backed by the unified PhysicsWorld.
@@ -48,9 +55,20 @@ export class CollisionWorld {
     this.physicsWorld.setTerrainHeightFn(fn);
   }
 
-  getGroundHeightAt = (x: number, z: number): number => {
-    return this.physicsWorld.getGroundHeightAt(x, z);
+  getGroundHeightAt = (x: number, z: number, referenceFeetY?: number): number => {
+    return this.physicsWorld.getGroundHeightAt(x, z, referenceFeetY);
   };
+
+  getSupportHeightAt(
+    x: number,
+    feetY: number,
+    z: number,
+    capsuleHeight = 1.75,
+    stepHeight = 0.55,
+    maxSlopeDeg = 45
+  ): number {
+    return this.physicsWorld.getSupportHeightAt(x, feetY, z, capsuleHeight, stepHeight, maxSlopeDeg);
+  }
 
   getMaxObstacleHeightInArea(x: number, z: number, radius: number): number {
     return this.physicsWorld.getMaxObstacleHeightInArea(x, z, radius);
@@ -68,7 +86,8 @@ export class CollisionWorld {
     stepHeight = 0.45,
     entityId = 'player',
     layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID,
-    outResult?: CharacterMoveResult
+    outResult?: CharacterMoveResult,
+    maxSlopeDeg = 45
   ): boolean {
     return this.physicsWorld.resolveCharacterCapsule(
       entityId,
@@ -78,7 +97,8 @@ export class CollisionWorld {
       height,
       stepHeight,
       layerMask,
-      outResult
+      outResult,
+      maxSlopeDeg
     );
   }
 
@@ -95,7 +115,8 @@ export class CollisionWorld {
     dt = 1 / 60,
     entityId = 'player',
     layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID,
-    outResult?: CharacterMoveResult
+    outResult?: CharacterMoveResult,
+    maxSlopeDeg = 45
   ): CharacterMoveResult {
     pos.x += vel.x * dt;
     pos.y += vel.y * dt;
@@ -136,7 +157,8 @@ export class CollisionWorld {
       height,
       stepHeight,
       layerMask,
-      out
+      out,
+      maxSlopeDeg
     );
     out.hitHorizontal = out.hitWall;
     out.activeContacts = (out.hitWall ? 1 : 0) + (out.hitCeiling ? 1 : 0) + (out.grounded ? 1 : 0);

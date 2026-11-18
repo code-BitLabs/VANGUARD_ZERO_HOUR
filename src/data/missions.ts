@@ -108,7 +108,7 @@ const RAW_MISSIONS: MissionConfig[] = [
     initialWaves: [
       { archetype: 'infantry', count: 5, spawnArea: { x: -10, y: 0, z: 14 }, radius: 14 },
       { archetype: 'elite_assault', count: 3, spawnArea: { x: 14, y: 0, z: -6 }, radius: 12 },
-      { archetype: 'sniper', count: 2, spawnArea: { x: -22, y: 0, z: -22 }, radius: 8 },
+      { archetype: 'sniper', count: 2, spawnArea: { x: -28, y: 6.5, z: 30 }, radius: 4 },
       { archetype: 'rocket_trooper', count: 2, spawnArea: { x: 20, y: 0, z: -28 }, radius: 10 },
     ],
     airUnits: [
@@ -226,7 +226,8 @@ const RAW_MISSIONS: MissionConfig[] = [
       { archetype: 'vehicle_crew', count: 4, spawnArea: { x: 8, y: 0, z: 4 }, radius: 16 },
       { archetype: 'infantry', count: 4, spawnArea: { x: -18, y: 0, z: -38 }, radius: 14 },
       { archetype: 'heavy_armor', count: 2, spawnArea: { x: 16, y: 0, z: -48 }, radius: 10 },
-      { archetype: 'rocket_trooper', count: 2, spawnArea: { x: -24, y: 0, z: -52 }, radius: 10 },
+      { archetype: 'rocket_trooper', count: 2, spawnArea: { x: -28, y: 6.0, z: -32 }, radius: 3.5 },
+      { archetype: 'sniper', count: 2, spawnArea: { x: -24, y: 9.0, z: 14 }, radius: 1.4 },
     ],
     airUnits: [
       { type: 'fighter_jet', count: 1, altitude: 42, orbitRadius: 95 },
@@ -347,7 +348,8 @@ const RAW_MISSIONS: MissionConfig[] = [
     initialWaves: [
       { archetype: 'drone_operator', count: 3, spawnArea: { x: -18, y: 0, z: -12 }, radius: 14 },
       { archetype: 'elite_assault', count: 3, spawnArea: { x: 18, y: 0, z: -10 }, radius: 14 },
-      { archetype: 'sniper', count: 2, spawnArea: { x: 0, y: 0, z: -42 }, radius: 12 },
+      { archetype: 'sniper', count: 2, spawnArea: { x: -30, y: 6.5, z: -8 }, radius: 4 },
+      { archetype: 'sniper', count: 1, spawnArea: { x: -28, y: 16.0, z: 30 }, radius: 3 },
     ],
     airUnits: [
       { type: 'attack_drone', count: 4, altitude: 11, orbitRadius: 32 },
@@ -464,9 +466,9 @@ const RAW_MISSIONS: MissionConfig[] = [
     ],
     initialWaves: [
       { archetype: 'infantry', count: 5, spawnArea: { x: -8, y: 0, z: 18 }, radius: 14 },
-      { archetype: 'drone_operator', count: 2, spawnArea: { x: 16, y: 0, z: -12 }, radius: 12 },
+      { archetype: 'drone_operator', count: 2, spawnArea: { x: -22, y: 5.0, z: -16 }, radius: 2.4 },
       { archetype: 'heavy_armor', count: 2, spawnArea: { x: -18, y: 0, z: -32 }, radius: 10 },
-      { archetype: 'sniper', count: 2, spawnArea: { x: 22, y: 0, z: -42 }, radius: 10 },
+      { archetype: 'sniper', count: 2, spawnArea: { x: 18, y: 9.0, z: 4 }, radius: 1.4 },
     ],
     airUnits: [
       { type: 'helicopter', count: 1, altitude: 28, orbitRadius: 50 },
@@ -609,7 +611,8 @@ const RAW_MISSIONS: MissionConfig[] = [
     initialWaves: [
       { archetype: 'elite_assault', count: 4, spawnArea: { x: -14, y: 0, z: 22 }, radius: 14 },
       { archetype: 'heavy_armor', count: 3, spawnArea: { x: 18, y: 0, z: 2 }, radius: 12 },
-      { archetype: 'rocket_trooper', count: 3, spawnArea: { x: -18, y: 0, z: -26 }, radius: 14 },
+      { archetype: 'rocket_trooper', count: 2, spawnArea: { x: -28, y: 7.0, z: 22 }, radius: 4 },
+      { archetype: 'elite_assault', count: 2, spawnArea: { x: 0, y: 7.0, z: -24 }, radius: 1.4 },
       { archetype: 'drone_operator', count: 2, spawnArea: { x: 20, y: 0, z: -38 }, radius: 10 },
     ],
     airUnits: [

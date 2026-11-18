@@ -186,6 +186,13 @@ export function GameHUD({
               </div>
               <div className="mt-1 px-1.5 py-0.5 bg-[#0B0E11]/88 border border-amber-400/70 rounded-xs font-mono text-[9px] text-amber-300 whitespace-nowrap shadow-md">
                 OBJ · {formatObjectiveDistance(activeObjective) ?? 0}M
+                {Math.abs(activeObjective.elevationDeltaM ?? 0) >= 2 && (
+                  <span className="ml-1 text-cyan-300 font-bold">
+                    {(activeObjective.elevationDeltaM ?? 0) > 0
+                      ? `▲+${activeObjective.elevationDeltaM}M`
+                      : `▼${activeObjective.elevationDeltaM}M`}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -911,6 +918,27 @@ export function GameHUD({
               OK
             </button>
           )}
+        </div>
+      )}
+
+      {hud.liftStatus && !downedState?.active && (
+        <div
+          data-testid="hud-lift-status"
+          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/92 border border-cyan-400/60 px-3 py-1 rounded-sm font-mono text-[10px] text-zinc-100 shadow-lg flex items-center gap-2 whitespace-nowrap ${
+            compactHud ? 'bottom-28' : 'bottom-52'
+          }`}
+        >
+          <span className="text-cyan-400 font-bold uppercase">{hud.liftStatus.liftName}</span>
+          <span className="text-zinc-500">·</span>
+          <span className="text-amber-300">
+            {hud.liftStatus.state === 'traveling' || hud.liftStatus.state === 'doors_closing'
+              ? `${hud.liftStatus.currentFloorLabel} → ${hud.liftStatus.targetFloorLabel}`
+              : hud.liftStatus.currentFloorLabel}
+          </span>
+          <span className="text-zinc-500">·</span>
+          <span className="text-zinc-300 tabular-nums">
+            {hud.liftStatus.occupantCount}/{hud.liftStatus.maxOccupants}
+          </span>
         </div>
       )}
 

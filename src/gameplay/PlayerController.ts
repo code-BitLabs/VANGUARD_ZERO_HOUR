@@ -8,6 +8,7 @@ import {
 } from '@/src/engine/physics/CollisionSystem';
 import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import type { CharacterMoveResult, PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
+import { AGENT_TRAVERSAL_PROFILES } from '@/src/navigation/AgentTraversalProfile';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
@@ -685,7 +686,8 @@ export class PlayerController {
       safeDt,
       'player',
       PHYSICS_MASKS.CHARACTER_SOLID,
-      this._moveResultScratch
+      this._moveResultScratch,
+      AGENT_TRAVERSAL_PROFILES.player.maxSlopeDeg
     );
     this.lastMoveResult = res;
     this.grounded = res.grounded;
@@ -958,7 +960,8 @@ export class PlayerController {
       dt,
       'player',
       undefined,
-      this._moveResultScratch
+      this._moveResultScratch,
+      AGENT_TRAVERSAL_PROFILES.player.maxSlopeDeg
     );
     this.grounded = res.grounded;
     this.lastMoveResult = res;

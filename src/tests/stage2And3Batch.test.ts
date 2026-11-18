@@ -188,6 +188,9 @@ describe('Stage 2 Completion (TRN-02B) & Full Stage 3 (TRN-07, TRN-08, TRN-09) I
         ],
         animatedProps: [],
         extractionBeacon: null,
+        elevatedSurfaces: [],
+        navPortals: [],
+        cargoLifts: [],
       };
 
       player.spawn(0, 0, 0, 0);

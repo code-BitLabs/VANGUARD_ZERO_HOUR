@@ -1,6 +1,13 @@
 // Pure tactical A* navigation core with persistent typed buffers, 1-indexed binary min-heap,
-// explicit out-of-bounds sentinel handling, generation-counter search state, and Bresenham LOS string-pulling.
+// explicit out-of-bounds sentinel handling, generation-counter search state, Bresenham LOS string-pulling,
+// and Hierarchical Hybrid Multi-Elevation Surface + Portal Graph A* search.
 // Zero Three.js, DOM, or Web Worker globals so both navigation.worker.ts and Vitest unit/benchmark suites share one implementation.
+
+import {
+  canAgentUsePortal,
+  getAgentProfileByCode,
+  PortalKind,
+} from '@/src/navigation/AgentTraversalProfile';
 
 export const NAV_GRID_DEFAULTS = {
   width: 160,
@@ -11,6 +18,15 @@ export const NAV_GRID_DEFAULTS = {
   maxIter: 4096,
 } as const;
 
+export const TRAVERSAL_FLAGS = {
+  NONE: 0,
+  PORTAL_APPROACH: 1 << 0,
+  PORTAL_TRAVERSE: 1 << 1,
+  LIFT_WAIT_BOARD: 1 << 2,
+  LIFT_RIDE: 1 << 3,
+  PARTIAL_PATH: 1 << 4,
+} as const;
+
 export interface NavGridState {
   width: number;
   height: number;
@@ -18,6 +34,93 @@ export interface NavGridState {
   originX: number;
   originZ: number;
   blocked: Uint8Array;
+}
+
+export interface ElevatedNavSurfaceInput {
+  surfaceId: number;
+  name: string;
+  width: number;
+  height: number;
+  cellSize: number;
+  originX: number;
+  originZ: number;
+  elevationY: number;
+  minY: number;
+  maxY: number;
+  blocked: Uint8Array;
+}
+
+export interface NavPortalInput {
+  portalId: number;
+  portalKey: string;
+  kind: PortalKind;
+  liftId?: string;
+  fromSurfaceId: number;
+  toSurfaceId: number;
+  fromX: number;
+  fromY: number;
+  fromZ: number;
+  toX: number;
+  toY: number;
+  toZ: number;
+  fromFloorIndex: number;
+  toFloorIndex: number;
+  width: number;
+  clearanceHeight: number;
+  slopeDeg: number;
+  baseCost: number;
+  dynamicWaitCost: number;
+  allowedProfilesMask: number;
+  maxConcurrentOccupants: number;
+  activeOccupants: number;
+  enabled: boolean;
+  bidirectional: boolean;
+}
+
+export interface NavSurfaceState extends NavGridState {
+  surfaceId: number;
+  name: string;
+  elevationY: number;
+  minY: number;
+  maxY: number;
+}
+
+interface DirectedPortalEdge {
+  edgeIdx: number;
+  portalId: number;
+  portalKey: string;
+  kind: PortalKind;
+  liftId?: string;
+  entrySurfaceId: number;
+  exitSurfaceId: number;
+  entryX: number;
+  entryY: number;
+  entryZ: number;
+  exitX: number;
+  exitY: number;
+  exitZ: number;
+  fromFloorIndex: number;
+  toFloorIndex: number;
+  width: number;
+  clearanceHeight: number;
+  slopeDeg: number;
+  baseCost: number;
+  dynamicWaitCost: number;
+  allowedProfilesMask: number;
+  maxConcurrentOccupants: number;
+  activeOccupants: number;
+  enabled: boolean;
+}
+
+export interface NavigationMemoryStats {
+  groundGridBytes: number;
+  elevatedSurfacesBytes: number;
+  elevatedSurfaceCount: number;
+  portalGraphBytes: number;
+  portalCount: number;
+  directedEdgeCount: number;
+  scratchBytes: number;
+  totalBytes: number;
 }
 
 const DIRS_DX = new Int8Array([1, -1, 0, 0, 1, -1, 1, -1]);
@@ -92,7 +195,6 @@ export function hasGridLineOfSight(
     const stepZ = e2 < dx;
 
     if (stepX && stepZ) {
-      // Check both orthogonal neighbors before taking a diagonal step so corners are never clipped
       const n1 = cz * w + (cx + sx);
       const n2 = (cz + sz) * w + cx;
       if (blocked[n1] === 1 || blocked[n2] === 1) return false;
@@ -131,13 +233,20 @@ export function applyCellUpdates(updates: Uint16Array, g: NavGridState): number 
 }
 
 /**
- * Zero-allocation A* solver over a NavGridState using a 1-indexed binary min-heap
- * and generation counters. All buffers are allocated once per grid dimensions.
+ * Zero-allocation A* solver over single NavGridState + Hierarchical Hybrid Multi-Elevation
+ * surface graph with precomputed intra-surface portal distance table and capability profiles.
  */
 export class NavigationSolver {
   private grid: NavGridState | null = null;
+  private surfaces = new Map<number, NavSurfaceState>();
+  private elevatedSurfaceList: NavSurfaceState[] = [];
+  private portalInputs: NavPortalInput[] = [];
+  private directedEdges: DirectedPortalEdge[] = [];
+  private edgesByPortalId = new Map<number, DirectedPortalEdge[]>();
+  private edgePairDist = new Float32Array(0);
   private totalCells = 0;
 
+  // Persistent per-cell scratch buffers (sized to largest surface)
   private gScore = new Float32Array(0);
   private fScore = new Float32Array(0);
   private parent = new Int32Array(0);
@@ -149,9 +258,19 @@ export class NavigationSolver {
   private heapPos = new Int32Array(0);
   private heapGen = new Uint32Array(0);
   private heapSize = 0;
-
   private pathChainScratch = new Int32Array(0);
+
+  // Persistent abstract portal-graph Dijkstra buffers (sized to directedEdges.length)
+  private edgeCompatible = new Uint8Array(0);
+  private edgeStartDist = new Float32Array(0);
+  private edgeGoalDist = new Float32Array(0);
+  private edgeBestCost = new Float32Array(0);
+  private edgePrev = new Int32Array(0);
+  private edgeClosed = new Uint8Array(0);
+
   public readonly outWaypoint = new Float32Array(2);
+  public readonly outWaypoint3D = new Float32Array(3);
+  public readonly outMeta3D = new Int32Array(4);
 
   private currentSearchId = 0;
   public oobQueryCount = 0;
@@ -159,6 +278,7 @@ export class NavigationSolver {
   public lastExhaustedBudget = false;
   public lastGoalReached = false;
   public lastChainLength = 0;
+  public lastPathDistanceMeters = 0;
 
   initGrid(
     width: number,
@@ -168,17 +288,89 @@ export class NavigationSolver {
     originZ: number,
     blocked: Uint8Array
   ): void {
-    const total = width * height;
-    this.grid = {
+    const ground: NavSurfaceState = {
+      surfaceId: 0,
+      name: 'ground',
       width,
       height,
       cellSize,
       originX,
       originZ,
+      elevationY: 0,
+      minY: -4,
+      maxY: 2.5,
       blocked,
     };
+    this.grid = ground;
+    this.surfaces.clear();
+    this.surfaces.set(0, ground);
+    this.elevatedSurfaceList = [];
+    this.portalInputs = [];
+    this.directedEdges = [];
+    this.edgesByPortalId.clear();
+    this.edgePairDist = new Float32Array(0);
+    this.ensureCellScratchCapacity(width * height);
+  }
 
-    if (total !== this.totalCells) {
+  initMultiSurfaceNavigation(
+    groundGrid: {
+      width: number;
+      height: number;
+      cellSize: number;
+      originX: number;
+      originZ: number;
+      blocked: Uint8Array;
+    },
+    elevatedSurfaces: ElevatedNavSurfaceInput[],
+    portals: NavPortalInput[]
+  ): void {
+    const ground: NavSurfaceState = {
+      surfaceId: 0,
+      name: 'ground',
+      width: groundGrid.width,
+      height: groundGrid.height,
+      cellSize: groundGrid.cellSize,
+      originX: groundGrid.originX,
+      originZ: groundGrid.originZ,
+      elevationY: 0,
+      minY: -4,
+      maxY: 2.5,
+      blocked: groundGrid.blocked,
+    };
+    this.grid = ground;
+    this.surfaces.clear();
+    this.surfaces.set(0, ground);
+    this.elevatedSurfaceList = [];
+
+    let maxCells = groundGrid.width * groundGrid.height;
+    for (let i = 0; i < elevatedSurfaces.length; i++) {
+      const s = elevatedSurfaces[i];
+      if (s.surfaceId <= 0) continue;
+      const surfaceState: NavSurfaceState = {
+        surfaceId: s.surfaceId,
+        name: s.name,
+        width: s.width,
+        height: s.height,
+        cellSize: s.cellSize,
+        originX: s.originX,
+        originZ: s.originZ,
+        elevationY: s.elevationY,
+        minY: s.minY,
+        maxY: s.maxY,
+        blocked: s.blocked,
+      };
+      this.surfaces.set(s.surfaceId, surfaceState);
+      this.elevatedSurfaceList.push(surfaceState);
+      const c = s.width * s.height;
+      if (c > maxCells) maxCells = c;
+    }
+
+    this.ensureCellScratchCapacity(maxCells);
+    this.rebuildPortalGraph(portals);
+  }
+
+  private ensureCellScratchCapacity(total: number): void {
+    if (total > this.totalCells) {
       this.totalCells = total;
       this.gScore = new Float32Array(total);
       this.fScore = new Float32Array(total);
@@ -189,28 +381,285 @@ export class NavigationSolver {
       this.heapPos = new Int32Array(total);
       this.heapGen = new Uint32Array(total);
       this.pathChainScratch = new Int32Array(total);
-      this.currentSearchId = 0;
     } else {
       this.visitedGen.fill(0);
       this.closedGen.fill(0);
       this.heapGen.fill(0);
-      this.currentSearchId = 0;
     }
+    this.currentSearchId = 0;
     this.heapSize = 0;
+  }
+
+  private rebuildPortalGraph(portals: NavPortalInput[]): void {
+    this.portalInputs = portals.slice();
+    this.directedEdges = [];
+    this.edgesByPortalId.clear();
+
+    for (let i = 0; i < portals.length; i++) {
+      const p = portals[i];
+      const forward: DirectedPortalEdge = {
+        edgeIdx: this.directedEdges.length,
+        portalId: p.portalId,
+        portalKey: p.portalKey,
+        kind: p.kind,
+        liftId: p.liftId,
+        entrySurfaceId: p.fromSurfaceId,
+        exitSurfaceId: p.toSurfaceId,
+        entryX: p.fromX,
+        entryY: p.fromY,
+        entryZ: p.fromZ,
+        exitX: p.toX,
+        exitY: p.toY,
+        exitZ: p.toZ,
+        fromFloorIndex: p.fromFloorIndex,
+        toFloorIndex: p.toFloorIndex,
+        width: p.width,
+        clearanceHeight: p.clearanceHeight,
+        slopeDeg: p.slopeDeg,
+        baseCost: p.baseCost,
+        dynamicWaitCost: p.dynamicWaitCost,
+        allowedProfilesMask: p.allowedProfilesMask,
+        maxConcurrentOccupants: p.maxConcurrentOccupants,
+        activeOccupants: p.activeOccupants,
+        enabled: p.enabled,
+      };
+      this.directedEdges.push(forward);
+      const list = [forward];
+
+      if (p.bidirectional) {
+        const reverse: DirectedPortalEdge = {
+          edgeIdx: this.directedEdges.length,
+          portalId: p.portalId,
+          portalKey: p.portalKey,
+          kind: p.kind,
+          liftId: p.liftId,
+          entrySurfaceId: p.toSurfaceId,
+          exitSurfaceId: p.fromSurfaceId,
+          entryX: p.toX,
+          entryY: p.toY,
+          entryZ: p.toZ,
+          exitX: p.fromX,
+          exitY: p.fromY,
+          exitZ: p.fromZ,
+          fromFloorIndex: p.toFloorIndex,
+          toFloorIndex: p.fromFloorIndex,
+          width: p.width,
+          clearanceHeight: p.clearanceHeight,
+          slopeDeg: p.slopeDeg,
+          baseCost: p.baseCost,
+          dynamicWaitCost: p.dynamicWaitCost,
+          allowedProfilesMask: p.allowedProfilesMask,
+          maxConcurrentOccupants: p.maxConcurrentOccupants,
+          activeOccupants: p.activeOccupants,
+          enabled: p.enabled,
+        };
+        this.directedEdges.push(reverse);
+        list.push(reverse);
+      }
+
+      this.edgesByPortalId.set(p.portalId, list);
+    }
+
+    const E = this.directedEdges.length;
+    this.edgePairDist = new Float32Array(E * E);
+    this.edgePairDist.fill(Infinity);
+    this.edgeCompatible = new Uint8Array(E);
+    this.edgeStartDist = new Float32Array(E);
+    this.edgeGoalDist = new Float32Array(E);
+    this.edgeBestCost = new Float32Array(E);
+    this.edgePrev = new Int32Array(E);
+    this.edgeClosed = new Uint8Array(E);
+
+    this.recomputeIntraSurfacePortalDistances(null);
+  }
+
+  private recomputeIntraSurfacePortalDistances(onlySurfaceId: number | null): void {
+    const E = this.directedEdges.length;
+    for (let i = 0; i < E; i++) {
+      const a = this.directedEdges[i];
+      if (onlySurfaceId !== null && a.exitSurfaceId !== onlySurfaceId) continue;
+      const surf = this.surfaces.get(a.exitSurfaceId);
+      if (!surf) continue;
+      for (let j = 0; j < E; j++) {
+        const b = this.directedEdges[j];
+        if (b.entrySurfaceId !== a.exitSurfaceId) {
+          this.edgePairDist[i * E + j] = Infinity;
+          continue;
+        }
+        if (i === j || (a.portalId === b.portalId && a.exitSurfaceId === b.entrySurfaceId)) {
+          const dEuclid = Math.hypot(b.entryX - a.exitX, b.entryZ - a.exitZ);
+          if (dEuclid < 0.5) {
+            this.edgePairDist[i * E + j] = 0;
+            continue;
+          }
+        }
+        const ok = this.runLocalAStar(surf, a.exitX, a.exitZ, b.entryX, b.entryZ, 2400, true);
+        this.edgePairDist[i * E + j] =
+          ok && this.lastGoalReached ? this.lastPathDistanceMeters : Infinity;
+      }
+    }
   }
 
   getGrid(): NavGridState | null {
     return this.grid;
   }
 
-  applyCellUpdates(updates: Uint16Array): number {
-    if (!this.grid) return 0;
-    return applyCellUpdates(updates, this.grid);
+  getSurface(surfaceId: number): NavSurfaceState | null {
+    return this.surfaces.get(surfaceId) ?? null;
+  }
+
+  getSurfaceCount(): number {
+    return this.surfaces.size;
+  }
+
+  getPortalPairDistanceForTest(fromEdgeIdx: number, toEdgeIdx: number): number {
+    const E = this.directedEdges.length;
+    if (fromEdgeIdx < 0 || fromEdgeIdx >= E || toEdgeIdx < 0 || toEdgeIdx >= E) {
+      return Infinity;
+    }
+    return this.edgePairDist[fromEdgeIdx * E + toEdgeIdx];
+  }
+
+  applyCellUpdates(updates: Uint16Array, surfaceId = 0): number {
+    const surf = this.surfaces.get(surfaceId) ?? this.grid;
+    if (!surf) return 0;
+    const applied = applyCellUpdates(updates, surf);
+    if (applied > 0 && this.directedEdges.length > 0) {
+      this.recomputeIntraSurfacePortalDistances(surfaceId);
+    }
+    return applied;
+  }
+
+  updatePortalState(
+    portalId: number,
+    enabled?: boolean,
+    dynamicWaitCost?: number,
+    activeOccupants?: number
+  ): void {
+    const edges = this.edgesByPortalId.get(portalId);
+    if (!edges) return;
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (enabled !== undefined) e.enabled = enabled;
+      if (dynamicWaitCost !== undefined) e.dynamicWaitCost = Math.max(0, dynamicWaitCost);
+      if (activeOccupants !== undefined) e.activeOccupants = Math.max(0, activeOccupants);
+    }
+  }
+
+  getNavigationMemoryStats(): NavigationMemoryStats {
+    const groundGridBytes = this.grid ? this.grid.blocked.byteLength : 0;
+    let elevatedSurfacesBytes = 0;
+    for (let i = 0; i < this.elevatedSurfaceList.length; i++) {
+      elevatedSurfacesBytes += this.elevatedSurfaceList[i].blocked.byteLength + 64;
+    }
+    const E = this.directedEdges.length;
+    const portalGraphBytes =
+      this.edgePairDist.byteLength +
+      this.edgeCompatible.byteLength +
+      this.edgeStartDist.byteLength +
+      this.edgeGoalDist.byteLength +
+      this.edgeBestCost.byteLength +
+      this.edgePrev.byteLength +
+      this.edgeClosed.byteLength +
+      E * 128;
+    const scratchBytes =
+      this.gScore.byteLength +
+      this.fScore.byteLength +
+      this.parent.byteLength +
+      this.visitedGen.byteLength +
+      this.closedGen.byteLength +
+      this.heapNodes.byteLength +
+      this.heapPos.byteLength +
+      this.heapGen.byteLength +
+      this.pathChainScratch.byteLength;
+    return {
+      groundGridBytes,
+      elevatedSurfacesBytes,
+      elevatedSurfaceCount: this.elevatedSurfaceList.length,
+      portalGraphBytes,
+      portalCount: this.portalInputs.length,
+      directedEdgeCount: E,
+      scratchBytes,
+      totalBytes: groundGridBytes + elevatedSurfacesBytes + portalGraphBytes + scratchBytes,
+    };
   }
 
   /**
-   * Advances generation counter safely and resets all generation state on uint32 wraparound.
+   * Resolves which surface contains `(wx, wy, wz)`, matching elevated surfaces by exact
+   * horizontal footprint and vertical elevation proximity before falling back to ground (`0`).
    */
+  resolveSurfaceId(wx: number, wy: number, wz: number): number {
+    if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) return 0;
+    let bestId = 0;
+    let bestDiff = Infinity;
+
+    for (let i = 0; i < this.elevatedSurfaceList.length; i++) {
+      const s = this.elevatedSurfaceList[i];
+      if (wy < s.minY - 0.65 || wy > s.maxY + 2.4) continue;
+      if (
+        wx < s.originX ||
+        wx >= s.originX + s.width * s.cellSize ||
+        wz < s.originZ ||
+        wz >= s.originZ + s.height * s.cellSize
+      ) {
+        continue;
+      }
+      const idx = worldToCellIndex(wx, wz, s);
+      if (idx === -1) continue;
+      // Only lock onto elevated surface if cell or immediate neighbor is walkable on this elevated deck
+      if (s.blocked[idx] === 1 && !this.hasUnblockedNeighborCell(idx, s)) {
+        continue;
+      }
+      const diff = Math.abs(wy - s.elevationY);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestId = s.surfaceId;
+      }
+    }
+
+    return bestId;
+  }
+
+  private hasUnblockedNeighborCell(cellIdx: number, g: NavGridState): boolean {
+    const cx = cellIdx % g.width;
+    const cz = (cellIdx / g.width) | 0;
+    for (let d = 0; d < 8; d++) {
+      const nx = cx + DIRS_DX[d];
+      const nz = cz + DIRS_DZ[d];
+      if (nx < 0 || nx >= g.width || nz < 0 || nz >= g.height) continue;
+      if (g.blocked[nz * g.width + nx] === 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Finds the closest unblocked cell index when a start/portal endpoint happens to sit on a border wall cell.
+   */
+  private findNearestWalkableCell(cellIdx: number, g: NavGridState): number {
+    if (cellIdx !== -1 && g.blocked[cellIdx] === 0) return cellIdx;
+    if (cellIdx === -1) return -1;
+    const cx = cellIdx % g.width;
+    const cz = (cellIdx / g.width) | 0;
+    let bestIdx = -1;
+    let bestDistSq = Infinity;
+    for (let rz = -2; rz <= 2; rz++) {
+      for (let rx = -2; rx <= 2; rx++) {
+        const nx = cx + rx;
+        const nz = cz + rz;
+        if (nx < 0 || nx >= g.width || nz < 0 || nz >= g.height) continue;
+        const idx = nz * g.width + nx;
+        if (g.blocked[idx] === 0) {
+          const dSq = rx * rx + rz * rz;
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestIdx = idx;
+          }
+        }
+      }
+    }
+    return bestIdx;
+  }
+
   private beginSearchGeneration(): number {
     this.currentSearchId = (this.currentSearchId + 1) >>> 0;
     if (this.currentSearchId === 0) {
@@ -223,7 +672,6 @@ export class NavigationSolver {
     return this.currentSearchId;
   }
 
-  /** Test/diagnostic hook to verify wraparound behavior at 0xffffffff -> 0 -> 1 without running 4B searches. */
   setSearchGenerationForTest(gen: number): void {
     this.currentSearchId = gen >>> 0;
   }
@@ -308,7 +756,6 @@ export class NavigationSolver {
     return top;
   }
 
-  /** Exposes current open-heap debug snapshot for invariant verification in unit tests. */
   inspectHeapForTest(): {
     size: number;
     nodes: number[];
@@ -336,9 +783,8 @@ export class NavigationSolver {
   }
 
   /**
-   * Computes the next smooth waypoint from (sx, sz) toward (tx, tz) into `this.outWaypoint`.
-   * Returns `true` when both endpoints are in-bounds and a waypoint was resolved,
-   * or `false` if either endpoint is out-of-bounds or no grid is initialized.
+   * Computes the next smooth waypoint from (sx, sz) toward (tx, tz) on surface 0 into `this.outWaypoint`.
+   * Preserves exact Stage 1–4B 2D contract for all existing callers and tests.
    */
   computeNextWaypoint(
     sx: number,
@@ -355,11 +801,272 @@ export class NavigationSolver {
       this.lastExhaustedBudget = false;
       this.lastGoalReached = false;
       this.lastChainLength = 0;
+      this.lastPathDistanceMeters = 0;
+      return false;
+    }
+    return this.runLocalAStar(g, sx, sz, tx, tz, maxIter, false);
+  }
+
+  /**
+   * Hierarchical Hybrid Multi-Elevation A*:
+   * Routes across ground surface `0` and any number of bounded elevated surfaces `1..M`
+   * through capability-validated portals with precomputed intra-surface portal distances,
+   * dynamic cargo lift wait costs, and admissible 3D Euclidean heuristic.
+   * Writes lossless results into `outCoords` ([wx, wy, wz]) and `outMeta` ([surfaceId, portalId, traversalFlags, targetFloorIndex]).
+   */
+  computeNextWaypoint3D(
+    sx: number,
+    sy: number,
+    sz: number,
+    tx: number,
+    ty: number,
+    tz: number,
+    profileCode = 1,
+    outCoords: Float32Array = this.outWaypoint3D,
+    outMeta: Int32Array = this.outMeta3D,
+    maxIter: number = NAV_GRID_DEFAULTS.maxIter
+  ): boolean {
+    const startSurfId = this.resolveSurfaceId(sx, sy, sz);
+    const goalSurfId = this.resolveSurfaceId(tx, ty, tz);
+    const startSurf = this.surfaces.get(startSurfId) ?? this.grid;
+    const goalSurf = this.surfaces.get(goalSurfId) ?? this.grid;
+
+    if (!startSurf || !goalSurf) {
+      outCoords[0] = tx;
+      outCoords[1] = ty;
+      outCoords[2] = tz;
+      outMeta[0] = 0;
+      outMeta[1] = -1;
+      outMeta[2] = TRAVERSAL_FLAGS.PARTIAL_PATH;
+      outMeta[3] = -1;
       return false;
     }
 
-    const startIdx = worldToCellIndex(sx, sz, g);
-    const goalIdx = worldToCellIndex(tx, tz, g);
+    const startSurfY =
+      'elevationY' in startSurf && typeof startSurf.elevationY === 'number'
+        ? startSurf.elevationY
+        : 0;
+
+    // 1. Same-surface fast path
+    let savedSameSurfaceWx = tx;
+    let savedSameSurfaceWz = tz;
+    let savedSameSurfacePartial = false;
+
+    if (startSurfId === goalSurfId) {
+      const ok = this.runLocalAStar(startSurf, sx, sz, tx, tz, maxIter, true);
+      if (ok && this.lastGoalReached) {
+        outCoords[0] = this.outWaypoint[0];
+        outCoords[1] = startSurfY;
+        outCoords[2] = this.outWaypoint[1];
+        outMeta[0] = startSurfId;
+        outMeta[1] = -1;
+        outMeta[2] = TRAVERSAL_FLAGS.NONE;
+        outMeta[3] = -1;
+        return true;
+      }
+      if (ok) {
+        savedSameSurfaceWx = this.outWaypoint[0];
+        savedSameSurfaceWz = this.outWaypoint[1];
+        savedSameSurfacePartial = true;
+      }
+    }
+
+    // 2. Hierarchical Portal Graph Search (handles cross-elevation AND disconnected same-surface detours)
+    const E = this.directedEdges.length;
+    if (E > 0) {
+      const profile = getAgentProfileByCode(profileCode);
+      for (let i = 0; i < E; i++) {
+        const edge = this.directedEdges[i];
+        this.edgeCompatible[i] = canAgentUsePortal(profile, edge) ? 1 : 0;
+        this.edgeStartDist[i] = Infinity;
+        this.edgeGoalDist[i] = Infinity;
+        this.edgeBestCost[i] = Infinity;
+        this.edgePrev[i] = -1;
+        this.edgeClosed[i] = 0;
+      }
+
+      // Compute exact intra-surface start-to-portal and portal-to-goal distances
+      for (let i = 0; i < E; i++) {
+        if (this.edgeCompatible[i] === 0) continue;
+        const edge = this.directedEdges[i];
+        if (edge.entrySurfaceId === startSurfId) {
+          const ok = this.runLocalAStar(
+            startSurf,
+            sx,
+            sz,
+            edge.entryX,
+            edge.entryZ,
+            Math.min(maxIter, 1600),
+            true
+          );
+          if (ok && this.lastGoalReached) {
+            this.edgeStartDist[i] = this.lastPathDistanceMeters;
+          }
+        }
+        if (edge.exitSurfaceId === goalSurfId) {
+          const ok = this.runLocalAStar(
+            goalSurf,
+            edge.exitX,
+            edge.exitZ,
+            tx,
+            tz,
+            Math.min(maxIter, 1600),
+            true
+          );
+          if (ok && this.lastGoalReached) {
+            this.edgeGoalDist[i] = this.lastPathDistanceMeters;
+          }
+        }
+      }
+
+      // Seed edges reachable from start
+      for (let i = 0; i < E; i++) {
+        if (this.edgeCompatible[i] === 0 || this.edgeStartDist[i] === Infinity) continue;
+        const edge = this.directedEdges[i];
+        const occPenalty =
+          edge.maxConcurrentOccupants > 0 && edge.activeOccupants >= edge.maxConcurrentOccupants
+            ? 14
+            : 0;
+        this.edgeBestCost[i] =
+          this.edgeStartDist[i] + edge.baseCost + edge.dynamicWaitCost + occPenalty;
+      }
+
+      let bestFinalCost = Infinity;
+      let bestFinalEdge = -1;
+      let bestClosestHeuristic = Infinity;
+      let bestClosestEdge = -1;
+
+      // Exact A*/Dijkstra over E directed portal edges
+      for (let step = 0; step < E; step++) {
+        let pick = -1;
+        let pickF = Infinity;
+        for (let i = 0; i < E; i++) {
+          if (this.edgeClosed[i] === 1 || this.edgeBestCost[i] === Infinity) continue;
+          const edge = this.directedEdges[i];
+          const h = Math.hypot(tx - edge.exitX, ty - edge.exitY, tz - edge.exitZ);
+          const f = this.edgeBestCost[i] + h;
+          if (f < pickF) {
+            pickF = f;
+            pick = i;
+          }
+        }
+        if (pick === -1) break;
+        if (pickF >= bestFinalCost) break;
+
+        this.edgeClosed[pick] = 1;
+        const pickedEdge = this.directedEdges[pick];
+        const exitH = Math.hypot(tx - pickedEdge.exitX, ty - pickedEdge.exitY, tz - pickedEdge.exitZ);
+        if (exitH < bestClosestHeuristic) {
+          bestClosestHeuristic = exitH;
+          bestClosestEdge = pick;
+        }
+
+        if (this.edgeGoalDist[pick] < Infinity) {
+          const candidateTotal = this.edgeBestCost[pick] + this.edgeGoalDist[pick];
+          if (candidateTotal < bestFinalCost) {
+            bestFinalCost = candidateTotal;
+            bestFinalEdge = pick;
+          }
+        }
+
+        for (let nxt = 0; nxt < E; nxt++) {
+          if (this.edgeCompatible[nxt] === 0 || this.edgeClosed[nxt] === 1) continue;
+          const pairDist = this.edgePairDist[pick * E + nxt];
+          if (!Number.isFinite(pairDist)) continue;
+          const nxtEdge = this.directedEdges[nxt];
+          const occPenalty =
+            nxtEdge.maxConcurrentOccupants > 0 &&
+            nxtEdge.activeOccupants >= nxtEdge.maxConcurrentOccupants
+              ? 14
+              : 0;
+          const cand =
+            this.edgeBestCost[pick] +
+            pairDist +
+            nxtEdge.baseCost +
+            nxtEdge.dynamicWaitCost +
+            occPenalty;
+          if (cand < this.edgeBestCost[nxt]) {
+            this.edgeBestCost[nxt] = cand;
+            this.edgePrev[nxt] = pick;
+          }
+        }
+      }
+
+      const chosenTerminalEdge = bestFinalEdge !== -1 ? bestFinalEdge : bestClosestEdge;
+      const isComplete = bestFinalEdge !== -1;
+
+      if (chosenTerminalEdge !== -1) {
+        let firstEdgeIdx = chosenTerminalEdge;
+        while (this.edgePrev[firstEdgeIdx] !== -1) {
+          firstEdgeIdx = this.edgePrev[firstEdgeIdx];
+        }
+        const firstEdge = this.directedEdges[firstEdgeIdx];
+        const distToEntryXZ = Math.hypot(firstEdge.entryX - sx, firstEdge.entryZ - sz);
+        const distToEntryY = Math.abs(firstEdge.entryY - sy);
+        const partialMask = isComplete ? 0 : TRAVERSAL_FLAGS.PARTIAL_PATH;
+
+        // If at portal entry (within 1.5m), emit portal traversal or lift boarding instruction
+        if (distToEntryXZ <= 1.55 && distToEntryY <= 1.3) {
+          outCoords[0] = firstEdge.exitX;
+          outCoords[1] = firstEdge.exitY;
+          outCoords[2] = firstEdge.exitZ;
+          outMeta[0] = firstEdge.exitSurfaceId;
+          outMeta[1] = firstEdge.portalId;
+          outMeta[2] =
+            (firstEdge.kind === 'cargo_lift'
+              ? TRAVERSAL_FLAGS.LIFT_WAIT_BOARD | TRAVERSAL_FLAGS.PORTAL_TRAVERSE
+              : TRAVERSAL_FLAGS.PORTAL_TRAVERSE) | partialMask;
+          outMeta[3] = firstEdge.toFloorIndex;
+          return true;
+        }
+
+        // Route along current surface toward first portal entry
+        this.runLocalAStar(startSurf, sx, sz, firstEdge.entryX, firstEdge.entryZ, maxIter, true);
+        outCoords[0] = this.outWaypoint[0];
+        outCoords[1] = startSurfY;
+        outCoords[2] = this.outWaypoint[1];
+        outMeta[0] = startSurfId;
+        outMeta[1] = firstEdge.portalId;
+        outMeta[2] = TRAVERSAL_FLAGS.PORTAL_APPROACH | partialMask;
+        outMeta[3] = firstEdge.fromFloorIndex;
+        return true;
+      }
+    }
+
+    // 3. Partial fallback on start surface
+    if (savedSameSurfacePartial) {
+      outCoords[0] = savedSameSurfaceWx;
+      outCoords[1] = startSurfY;
+      outCoords[2] = savedSameSurfaceWz;
+      outMeta[0] = startSurfId;
+      outMeta[1] = -1;
+      outMeta[2] = TRAVERSAL_FLAGS.PARTIAL_PATH;
+      outMeta[3] = -1;
+      return true;
+    }
+
+    this.runLocalAStar(startSurf, sx, sz, tx, tz, maxIter, true);
+    outCoords[0] = this.outWaypoint[0];
+    outCoords[1] = startSurfY;
+    outCoords[2] = this.outWaypoint[1];
+    outMeta[0] = startSurfId;
+    outMeta[1] = -1;
+    outMeta[2] = this.lastGoalReached ? TRAVERSAL_FLAGS.NONE : TRAVERSAL_FLAGS.PARTIAL_PATH;
+    outMeta[3] = -1;
+    return this.lastGoalReached;
+  }
+
+  private runLocalAStar(
+    g: NavGridState,
+    sx: number,
+    sz: number,
+    tx: number,
+    tz: number,
+    maxIter: number,
+    allowNearestStartSnap: boolean
+  ): boolean {
+    let startIdx = worldToCellIndex(sx, sz, g);
+    let goalIdx = worldToCellIndex(tx, tz, g);
     if (startIdx === -1 || goalIdx === -1) {
       this.oobQueryCount++;
       this.outWaypoint[0] = tx;
@@ -368,7 +1075,19 @@ export class NavigationSolver {
       this.lastExhaustedBudget = false;
       this.lastGoalReached = false;
       this.lastChainLength = 0;
+      this.lastPathDistanceMeters = Infinity;
       return false;
+    }
+
+    if (allowNearestStartSnap) {
+      if (g.blocked[startIdx] === 1) {
+        const snapped = this.findNearestWalkableCell(startIdx, g);
+        if (snapped !== -1) startIdx = snapped;
+      }
+      if (g.blocked[goalIdx] === 1) {
+        const snappedGoal = this.findNearestWalkableCell(goalIdx, g);
+        if (snappedGoal !== -1) goalIdx = snappedGoal;
+      }
     }
 
     if (startIdx === goalIdx) {
@@ -378,6 +1097,7 @@ export class NavigationSolver {
       this.lastExhaustedBudget = false;
       this.lastGoalReached = g.blocked[goalIdx] === 0;
       this.lastChainLength = 1;
+      this.lastPathDistanceMeters = Math.hypot(tx - sx, tz - sz);
       return true;
     }
 
@@ -437,7 +1157,6 @@ export class NavigationSolver {
         if (this.closedGen[nIdx] === searchId) continue;
         if (blocked[nIdx] === 1) continue;
 
-        // Prevent diagonal corner-cutting across orthogonal blocked cells
         if (dx !== 0 && dz !== 0) {
           const adj1 = cz * w + (cx + dx);
           const adj2 = (cz + dz) * w + cx;
@@ -469,17 +1188,18 @@ export class NavigationSolver {
     this.lastGoalReached = goalReached;
 
     const targetNode = goalReached ? goalIdx : bestHeuristicNode;
+    this.lastPathDistanceMeters = this.gScore[targetNode] * g.cellSize;
+
     if (targetNode === startIdx) {
-      // Completely boxed-in or already at closest reachable cell outside blocked goal: stay at cell center
       cellIndexToWorld(startIdx, g, this.outWaypoint);
       this.lastChainLength = 1;
       return true;
     }
 
-    // Reconstruct path chain in reverse [targetNode .. startIdx], then reverse in place
     let len = 0;
     let trace = targetNode;
-    while (trace !== -1 && len < this.totalCells) {
+    const maxLen = w * h;
+    while (trace !== -1 && len < maxLen) {
       this.pathChainScratch[len++] = trace;
       if (trace === startIdx) break;
       trace = this.parent[trace];
@@ -491,7 +1211,6 @@ export class NavigationSolver {
       return true;
     }
 
-    // Reverse scratch slice [0 .. len - 1] so index 0 is startIdx and len - 1 is targetNode
     for (let lo = 0, hi = len - 1; lo < hi; lo++, hi--) {
       const tmp = this.pathChainScratch[lo];
       this.pathChainScratch[lo] = this.pathChainScratch[hi];
@@ -499,7 +1218,6 @@ export class NavigationSolver {
     }
     this.lastChainLength = len;
 
-    // Zero-alloc Bresenham LOS string-pulling: pick furthest directly visible cell along chain
     let chosenIdx = this.pathChainScratch[1];
     for (let i = len - 1; i >= 2; i--) {
       const cand = this.pathChainScratch[i];
@@ -512,7 +1230,6 @@ export class NavigationSolver {
     }
 
     if (goalReached && chosenIdx === goalIdx) {
-      // Direct unobstructed LOS all the way to goal cell: aim cleanly at exact world target
       this.outWaypoint[0] = tx;
       this.outWaypoint[1] = tz;
     } else {

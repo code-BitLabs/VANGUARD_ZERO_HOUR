@@ -1,10 +1,21 @@
 import * as THREE from 'three';
 import { AssetManager } from '@/src/core/AssetManager';
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
+import { CargoLiftDefinition } from '@/src/gameplay/CargoLiftManager';
+import { AGENT_PROFILE_ALL_INFANTRY_MASK } from '@/src/navigation/AgentTraversalProfile';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import { MapId } from '@/src/schemas/common.schema';
+import { ElevatedNavSurfaceDescriptor } from '@/src/workers/WorkerBridge';
+import { NavPortalInput } from '@/src/workers/navigationCore';
 import { createDestructibleCollider, DestructionSystem } from './DestructionSystem';
+import {
+  buildBuildingRooftopAccess,
+  buildElevatedSkybridge,
+  buildMultiStopCargoLift,
+  buildWalkableWatchtower,
+  VerticalWorldContext,
+} from './VerticalStructuresBuilder';
 import { WorldChunkManager } from './WorldChunkManager';
 
 export interface BuiltWorldData {
@@ -13,6 +24,9 @@ export interface BuiltWorldData {
   supplyCrates: Array<{ id: string; position: THREE.Vector3; used: boolean; mesh: THREE.Group }>;
   animatedProps: Array<{ update: (elapsed: number) => void }>;
   extractionBeacon: THREE.Group | null;
+  elevatedSurfaces: ElevatedNavSurfaceDescriptor[];
+  navPortals: NavPortalInput[];
+  cargoLifts: CargoLiftDefinition[];
 }
 
 export function buildWorldMap(
@@ -35,6 +49,26 @@ export function buildWorldMap(
   ];
   const supplyCrates: BuiltWorldData['supplyCrates'] = [];
   const animatedProps: BuiltWorldData['animatedProps'] = [];
+  const elevatedSurfaces: ElevatedNavSurfaceDescriptor[] = [];
+  const navPortals: NavPortalInput[] = [];
+  const cargoLifts: CargoLiftDefinition[] = [];
+  let surfaceCounter = 1;
+  let portalCounter = 0;
+
+  const verticalCtx: VerticalWorldContext = {
+    scene,
+    assetManager,
+    resourceManager,
+    collisionWorld,
+    chunkManager,
+    scope,
+    coverNodes,
+    elevatedSurfaces,
+    navPortals,
+    cargoLifts,
+    nextSurfaceId: () => surfaceCounter++,
+    nextPortalId: () => portalCounter++,
+  };
 
   // Terrain height function per map (keeps central roads flat & playable, edges rolling)
   const heightFn = (x: number, z: number): number => {
@@ -163,8 +197,9 @@ export function buildWorldMap(
     h: number,
     d: number,
     style: 'city' | 'bunker' | 'warehouse',
-    damagedTop = false
-  ) => {
+    damagedTop = false,
+    accessibleRoof = false
+  ): number => {
     const y = Math.max(0, heightFn(x, z));
     const groundH = Math.min(h, 4.0);
     const wallT = 0.5;
@@ -187,6 +222,7 @@ export function buildWorldMap(
       winTopY,
       style,
       damagedTop,
+      accessibleRoof,
       assetManager,
       resourceManager,
       scope
@@ -340,7 +376,7 @@ export function buildWorldMap(
 
     // 4. Ceiling / Upper Stories Collider (starts at y + groundH - 0.15 up to full building roof y + h)
     const ceilingMinY = y + groundH - 0.15;
-    const roofMaxY = Math.max(ceilingMinY + 0.5, y + h);
+    const roofMaxY = accessibleRoof ? y + h : Math.max(ceilingMinY + 0.5, y + h);
     collisionWorld.addStaticBox({
       id: `${id}_ceiling_upper`,
       minX: x - halfW,
@@ -350,12 +386,12 @@ export function buildWorldMap(
       maxY: roofMaxY,
       maxZ: z + halfD,
       layer: COLLISION_LAYER.WORLD,
-      tag: 'building_ceiling',
+      tag: accessibleRoof ? 'elevated_deck' : 'building_ceiling',
       entityId: id,
     });
 
-    // Only register upper stories as frustum occluder so ground-floor doorway sightlines are never culled
-    if (h >= 8) {
+    // Only register tall non-accessible upper stories as frustum occluders so rooftops remain rendered smoothly
+    if (h >= 8 && !accessibleRoof) {
       chunkManager.registerOccluder({
         minX: x - w * 0.44,
         minY: y + groundH,
@@ -365,83 +401,196 @@ export function buildWorldMap(
         maxZ: z + d * 0.44,
       });
     }
+    return y;
   };
 
-  // Helper to place open-leg watchtowers with 4 corner pillar colliders and an elevated deck
-  const placeWatchtower = (id: string, x: number, z: number) => {
-    const y = Math.max(0, heightFn(x, z));
-    const grp = buildWatchtower(assetManager, resourceManager, scope);
-    grp.position.set(x, y, z);
-    chunkManager.registerObject(grp, x, z, scene);
-    grp.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        collisionWorld.physicsWorld.registerBvhMesh(child);
-      }
+  const placeSupplyCrateAt = (id: string, kx: number, ky: number, kz: number) => {
+    const crate = buildSupplyCrate(assetManager, resourceManager, scope);
+    crate.position.set(kx, ky, kz);
+    chunkManager.registerObject(crate, kx, kz, scene);
+    collisionWorld.addStaticBox({
+      id,
+      minX: kx - 0.78,
+      minY: ky,
+      minZ: kz - 0.54,
+      maxX: kx + 0.78,
+      maxY: ky + 0.92,
+      maxZ: kz + 0.54,
+      layer: COLLISION_LAYER.COVER,
+      tag: 'supply_crate',
+    });
+    supplyCrates.push({
+      id,
+      position: new THREE.Vector3(kx, ky, kz),
+      used: false,
+      mesh: crate,
+    });
+  };
+
+  // Map-specific primary architecture, vertical structures & landmarks
+  if (mapId === 'warzone_city') {
+    const isNightM3 = missionId === 3;
+    const buildings: Array<[number, number, number, number, number, boolean]> = [
+      // 0: South-West boulevard building (M1 6.5m stair roof / M3 16m illuminated AA lift high-rise)
+      [-28, 30, 14, isNightM3 ? 16.0 : 6.5, 14, true],
+      // 1: South-East boulevard building (M1 22m backdrop / M3 16m illuminated AA lift high-rise)
+      [28, 28, 16, isNightM3 ? 16.0 : 22, 16, isNightM3],
+      // 2: Mid-North West building (M1 16m Cargo Lift high-rise / M3 6.5m stair roof)
+      [-30, -8, 16, isNightM3 ? 6.5 : 16.0, 18, true],
+      // 3: Mid-North East building (M1 & M3 6.5m stair overwatch roof)
+      [30, -10, 14, 6.5, 16, true],
+      [-26, -42, 18, 26, 14, false],
+      [26, -44, 16, 20, 16, false],
+      [-56, 8, 18, 28, 20, false],
+      [56, 6, 18, 25, 20, false],
+    ];
+    const baseYs: number[] = [];
+    buildings.forEach(([bx, bz, bw, bh, bd, accessible], idx) => {
+      const by = placeEnterableBuilding(
+        `city_bldg_${idx}`,
+        bx,
+        bz,
+        bw,
+        bh,
+        bd,
+        'city',
+        !accessible && idx % 2 === 0,
+        accessible
+      );
+      baseYs.push(by);
     });
 
+    if (!isNightM3) {
+      // M1 OP. IRON DAWN: 2-story exterior switchback rooftops on bldg 0 & bldg 3 + Cargo Lift on bldg 2 (16m)
+      buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_0',
+        x: -28,
+        baseY: baseYs[0],
+        z: 30,
+        width: 14,
+        depth: 14,
+        roofY: baseYs[0] + 6.5,
+        accessSide: '+x',
+        accessType: 'switchback_stair',
+      });
+      buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_3',
+        x: 30,
+        baseY: baseYs[3],
+        z: -10,
+        width: 14,
+        depth: 16,
+        roofY: baseYs[3] + 6.5,
+        accessSide: '-x',
+        accessType: 'switchback_stair',
+      });
+      const b2RoofSurf = buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_2',
+        x: -30,
+        baseY: baseYs[2],
+        z: -8,
+        width: 16,
+        depth: 18,
+        roofY: baseYs[2] + 16.0,
+        accessSide: '+x',
+        accessType: 'lift_only',
+        liftBridgeZ: -8,
+      });
+      buildMultiStopCargoLift(verticalCtx, {
+        liftId: 'lift_m1_north',
+        liftName: 'NORTH SECTOR LIFT',
+        shaftCenterX: -18.9,
+        shaftCenterZ: -8,
+        entryAxis: 'x',
+        entrySign: -1,
+        stops: [
+          { floorId: 'ground', label: 'GROUND (0.0M)', elevationY: 0, surfaceId: 0 },
+          {
+            floorId: 'rooftop',
+            label: 'OVERWATCH (+16.0M)',
+            elevationY: baseYs[2] + 16.0,
+            surfaceId: b2RoofSurf,
+          },
+        ],
+      });
+      placeSupplyCrateAt('supply_m1_roof_b2', -30, baseYs[2] + 16.0, -8);
+    } else {
+      // M3 OP. NIGHTFALL: 2 illuminated 16m AA Cargo Lift towers + 2 mid-rise 6.5m stair rooftops
+      const b0Surf = buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_0',
+        x: -28,
+        baseY: baseYs[0],
+        z: 30,
+        width: 14,
+        depth: 14,
+        roofY: baseYs[0] + 16.0,
+        accessSide: '+x',
+        accessType: 'lift_only',
+        liftBridgeZ: 30,
+      });
+      buildMultiStopCargoLift(verticalCtx, {
+        liftId: 'lift_m3_west',
+        liftName: 'AA WEST LIFT',
+        shaftCenterX: -17.9,
+        shaftCenterZ: 30,
+        entryAxis: 'x',
+        entrySign: -1,
+        stops: [
+          { floorId: 'ground', label: 'PLAZA (0.0M)', elevationY: 0, surfaceId: 0 },
+          { floorId: 'aa_deck', label: 'AA ROOF (+16.0M)', elevationY: baseYs[0] + 16.0, surfaceId: b0Surf },
+        ],
+      });
+      placeSupplyCrateAt('supply_m3_roof_west', -28, baseYs[0] + 16.0, 30);
 
-    for (const [lx, lz, tagIdx] of [
-      [-1.4, -1.4, 'NW'],
-      [1.4, -1.4, 'NE'],
-      [-1.4, 1.4, 'SW'],
-      [1.4, 1.4, 'SE'],
-    ] as const) {
-      collisionWorld.addStaticBox({
-        id: `${id}_leg_${tagIdx}`,
-        minX: x + lx - 0.3,
-        minY: y,
-        minZ: z + lz - 0.3,
-        maxX: x + lx + 0.3,
-        maxY: y + 9.0,
-        maxZ: z + lz + 0.3,
-        layer: COLLISION_LAYER.WORLD,
-        tag: 'building_pillar',
-        entityId: id,
+      const b1Surf = buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_1',
+        x: 28,
+        baseY: baseYs[1],
+        z: 28,
+        width: 16,
+        depth: 16,
+        roofY: baseYs[1] + 16.0,
+        accessSide: '-x',
+        accessType: 'lift_only',
+        liftBridgeZ: 28,
+      });
+      buildMultiStopCargoLift(verticalCtx, {
+        liftId: 'lift_m3_east',
+        liftName: 'AA EAST LIFT',
+        shaftCenterX: 16.9,
+        shaftCenterZ: 28,
+        entryAxis: 'x',
+        entrySign: 1,
+        stops: [
+          { floorId: 'ground', label: 'PLAZA (0.0M)', elevationY: 0, surfaceId: 0 },
+          { floorId: 'aa_deck', label: 'AA ROOF (+16.0M)', elevationY: baseYs[1] + 16.0, surfaceId: b1Surf },
+        ],
+      });
+      placeSupplyCrateAt('supply_m3_roof_east', 28, baseYs[1] + 16.0, 28);
+
+      buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_2',
+        x: -30,
+        baseY: baseYs[2],
+        z: -8,
+        width: 16,
+        depth: 18,
+        roofY: baseYs[2] + 6.5,
+        accessSide: '+x',
+        accessType: 'switchback_stair',
+      });
+      buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: 'city_bldg_3',
+        x: 30,
+        baseY: baseYs[3],
+        z: -10,
+        width: 14,
+        depth: 16,
+        roofY: baseYs[3] + 6.5,
+        accessSide: '-x',
+        accessType: 'switchback_stair',
       });
     }
-
-    // Elevated platform deck at y = 8.8..9.2m and roof at y = 10.6..12.2m
-    collisionWorld.addStaticBox({
-      id: `${id}_deck`,
-      minX: x - 2.1,
-      minY: y + 8.8,
-      minZ: z - 2.1,
-      maxX: x + 2.1,
-      maxY: y + 9.25,
-      maxZ: z + 2.1,
-      layer: COLLISION_LAYER.WORLD,
-      tag: 'building_ceiling',
-      entityId: id,
-    });
-    collisionWorld.addStaticBox({
-      id: `${id}_roof`,
-      minX: x - 2.2,
-      minY: y + 10.6,
-      minZ: z - 2.2,
-      maxX: x + 2.2,
-      maxY: y + 12.2,
-      maxZ: z + 2.2,
-      layer: COLLISION_LAYER.WORLD,
-      tag: 'building_roof',
-      entityId: id,
-    });
-  };
-
-  // Map-specific primary architecture & landmarks
-  if (mapId === 'warzone_city') {
-    const buildings: Array<[number, number, number, number, number]> = [
-      [-28, 30, 14, 18, 14],
-      [28, 28, 16, 22, 16],
-      [-30, -8, 16, 24, 18],
-      [30, -10, 14, 16, 16],
-      [-26, -42, 18, 26, 14],
-      [26, -44, 16, 20, 16],
-      [-56, 8, 18, 28, 20],
-      [56, 6, 18, 25, 20],
-    ];
-    buildings.forEach(([bx, bz, bw, bh, bd], idx) => {
-      placeEnterableBuilding(`city_bldg_${idx}`, bx, bz, bw, bh, bd, 'city', idx % 2 === 0);
-    });
 
     // Night searchlights for Mission 3
     if (missionId === 3) {
@@ -500,23 +649,59 @@ export function buildWorldMap(
       });
     }
   } else if (mapId === 'desert_base') {
-    const bunkers: Array<[number, number, number, number, number]> = [
-      [-28, -32, 14, 6, 12],
-      [28, -36, 14, 6, 12],
-      [0, -64, 24, 9, 14],
+    const bunkers: Array<[number, number, number, number, number, boolean]> = [
+      [-28, -32, 14, 6, 12, true],
+      [28, -36, 14, 6, 12, true],
+      [0, -64, 24, 9, 14, false],
     ];
-    bunkers.forEach(([bx, bz, bw, bh, bd], i) => {
-      placeEnterableBuilding(`bunker_${i}`, bx, bz, bw, bh, bd, 'bunker');
+    const bunkerBaseYs: number[] = [];
+    bunkers.forEach(([bx, bz, bw, bh, bd, accessible], i) => {
+      bunkerBaseYs.push(
+        placeEnterableBuilding(`bunker_${i}`, bx, bz, bw, bh, bd, 'bunker', false, accessible)
+      );
     });
-    // Watchtowers with open physical leg pillars
+    buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'bunker_0',
+      x: -28,
+      baseY: bunkerBaseYs[0],
+      z: -32,
+      width: 14,
+      depth: 12,
+      roofY: bunkerBaseYs[0] + 6.0,
+      accessSide: '+x',
+      accessType: 'single_ramp',
+    });
+    buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'bunker_1',
+      x: 28,
+      baseY: bunkerBaseYs[1],
+      z: -36,
+      width: 14,
+      depth: 12,
+      roofY: bunkerBaseYs[1] + 6.0,
+      accessSide: '-x',
+      accessType: 'single_ramp',
+    });
+    placeSupplyCrateAt('supply_m2_bunker0_roof', -28, bunkerBaseYs[0] + 6.0, -32);
+
+    // All 4 Desert Watchtowers upgraded with 2.4m switchback stair-ramps (9.0m decks + ElevatedNavSurfaces)
     for (const [tx, tz] of [
       [-24, 14],
       [24, 12],
       [-34, -56],
       [34, -56],
     ]) {
-      placeWatchtower(`tower_${tx}_${tz}`, tx, tz);
+      const ty = Math.max(0, heightFn(tx, tz));
+      buildWalkableWatchtower(
+        verticalCtx,
+        `tower_${tx}_${tz}`,
+        tx,
+        tz,
+        ty,
+        tx < 0 ? '+x' : '-x'
+      );
     }
+
     // 3 Destructible Fuel Storage Tanks
     [
       { x: 20, z: -42 },
@@ -541,15 +726,60 @@ export function buildWorldMap(
       });
     });
   } else if (mapId === 'jungle_zone') {
-    // Military camp huts
-    for (const [cx, cz] of [
-      [-22, -16],
-      [22, -18],
-      [0, -46],
-    ]) {
-      placeEnterableBuilding(`camp_${cx}_${cz}`, cx, cz, 10, 5, 8, 'bunker');
+    // 2 River-Valley Walkable Watchtowers overlooking the 3 bridges
+    for (const [tx, tz, side] of [
+      [-18, 4, '-x'],
+      [18, 4, '+x'],
+    ] as const) {
+      const ty = Math.max(0, heightFn(tx, tz));
+      buildWalkableWatchtower(
+        verticalCtx,
+        `jungle_tower_${tx < 0 ? 'west' : 'east'}`,
+        tx,
+        tz,
+        ty,
+        side
+      );
     }
-    // Instanced dense canopy trees (64 trees in 1 InstancedMesh pair = 2 draw calls!)
+
+    // Military camp huts with accessible ramps & North Command Lift
+    const campConfigs: Array<[number, number, number, 'single_ramp' | 'lift_only']> = [
+      [-22, -16, 5.0, 'single_ramp'],
+      [22, -18, 5.0, 'single_ramp'],
+      [0, -46, 8.5, 'lift_only'],
+    ];
+    for (const [cx, cz, ch, accessType] of campConfigs) {
+      const cy = placeEnterableBuilding(`camp_${cx}_${cz}`, cx, cz, 10, ch, 8, 'bunker', false, true);
+      const surfId = buildBuildingRooftopAccess(verticalCtx, {
+        buildingId: `camp_${cx}_${cz}`,
+        x: cx,
+        baseY: cy,
+        z: cz,
+        width: 10,
+        depth: 8,
+        roofY: cy + ch,
+        accessSide: cx > 0 ? '-x' : '+x',
+        accessType,
+        liftBridgeZ: cz,
+      });
+      if (accessType === 'lift_only') {
+        buildMultiStopCargoLift(verticalCtx, {
+          liftId: 'lift_m4_cmd',
+          liftName: 'COMMAND DECK LIFT',
+          shaftCenterX: cx + 8.1,
+          shaftCenterZ: cz,
+          entryAxis: 'x',
+          entrySign: -1,
+          stops: [
+            { floorId: 'ground', label: 'COMPOUND (0.0M)', elevationY: cy, surfaceId: 0 },
+            { floorId: 'cmd_deck', label: 'COMMS ROOF (+8.5M)', elevationY: cy + ch, surfaceId: surfId },
+          ],
+        });
+        placeSupplyCrateAt('supply_m4_cmd_roof', cx, cy + ch, cz);
+      }
+    }
+
+    // Instanced dense canopy trees (60 trees in 1 InstancedMesh pair = 2 draw calls!)
     buildInstancedJungleTrees(scene, heightFn, resourceManager, collisionWorld, scope);
 
     // 2 Weapons Caches for Mission 4
@@ -575,16 +805,120 @@ export function buildWorldMap(
       });
     });
   } else {
-    // Industrial Complex: Warehouses, moving overhead crane, explosive chemical containers
+    // M5 OP. BLACKOUT — Industrial Complex: Exterior Stair Warehouses (7m), Mezzanine Skybridge (7m),
+    // and Dual 3-Stop Multi-Floor Foundry Cargo Lifts (0m Ground <-> 7m Skybridge <-> 14m Rooftops)
     const warehouses: Array<[number, number, number, number, number]> = [
-      [-28, 22, 18, 12, 22],
-      [28, 20, 18, 12, 22],
-      [-30, -24, 20, 14, 24],
-      [30, -26, 20, 14, 24],
+      [-28, 22, 18, 7.0, 22],
+      [28, 20, 18, 7.0, 22],
+      [-30, -24, 20, 14.0, 24],
+      [30, -26, 20, 14.0, 24],
     ];
+    const whBaseYs: number[] = [];
     warehouses.forEach(([wx, wz, ww, wh, wd], i) => {
-      placeEnterableBuilding(`warehouse_${i}`, wx, wz, ww, wh, wd, 'warehouse');
+      whBaseYs.push(placeEnterableBuilding(`warehouse_${i}`, wx, wz, ww, wh, wd, 'warehouse', false, true));
     });
+
+    // South Foundry Exterior Stair Rooftops (+7.0m)
+    buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'warehouse_0',
+      x: -28,
+      baseY: whBaseYs[0],
+      z: 22,
+      width: 18,
+      depth: 22,
+      roofY: whBaseYs[0] + 7.0,
+      accessSide: '+x',
+      accessType: 'switchback_stair',
+    });
+    buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'warehouse_1',
+      x: 28,
+      baseY: whBaseYs[1],
+      z: 20,
+      width: 18,
+      depth: 22,
+      roofY: whBaseYs[1] + 7.0,
+      accessSide: '-x',
+      accessType: 'switchback_stair',
+    });
+
+    // North Foundry High-Bay Rooftops (+14.0m) connected via 3-stop lifts
+    const w2RoofSurf = buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'warehouse_2',
+      x: -30,
+      baseY: whBaseYs[2],
+      z: -24,
+      width: 20,
+      depth: 24,
+      roofY: whBaseYs[2] + 14.0,
+      accessSide: '+x',
+      accessType: 'lift_only',
+      liftBridgeZ: -24,
+    });
+    const w3RoofSurf = buildBuildingRooftopAccess(verticalCtx, {
+      buildingId: 'warehouse_3',
+      x: 30,
+      baseY: whBaseYs[3],
+      z: -26,
+      width: 20,
+      depth: 24,
+      roofY: whBaseYs[3] + 14.0,
+      accessSide: '-x',
+      accessType: 'lift_only',
+      liftBridgeZ: -24,
+    });
+
+    // Elevated Structural Steel Mezzanine Skybridge (+7.0m) spanning across central foundry lane (x = -15.6 .. +15.6)
+    const skybridgeSurf = buildElevatedSkybridge(
+      verticalCtx,
+      'foundry_skybridge',
+      w2RoofSurf,
+      w3RoofSurf,
+      -14.6,
+      14.6,
+      -24,
+      7.0,
+      4.2
+    );
+    // Remove direct roof portal connections added by buildElevatedSkybridge; skybridge connects via the two 3-stop lifts at y = 7.0m!
+    navPortals.splice(navPortals.length - 2, 2);
+
+    // 3-Stop Multi-Floor Cargo Lift West (0m Ground <-> 7m Skybridge <-> 14m West Foundry Roof)
+    buildMultiStopCargoLift(verticalCtx, {
+      liftId: 'lift_m5_west',
+      liftName: 'WEST FOUNDRY LIFT',
+      shaftCenterX: -17.6,
+      shaftCenterZ: -24,
+      entryAxis: 'x',
+      entrySign: -1,
+      stops: [
+        { floorId: 'ground', label: 'L1 FOUNDRY (0.0M)', elevationY: 0, surfaceId: 0, gateSign: 1 },
+        { floorId: 'mezzanine', label: 'L2 SKYBRIDGE (+7.0M)', elevationY: 7.0, surfaceId: skybridgeSurf, gateSign: 1 },
+        { floorId: 'gantry_roof', label: 'L3 ROOF DECK (+14.0M)', elevationY: whBaseYs[2] + 14.0, surfaceId: w2RoofSurf, gateSign: -1 },
+      ],
+    });
+
+    // 3-Stop Multi-Floor Cargo Lift East (0m Ground <-> 7m Skybridge <-> 14m East Foundry Roof)
+    buildMultiStopCargoLift(verticalCtx, {
+      liftId: 'lift_m5_east',
+      liftName: 'EAST FOUNDRY LIFT',
+      shaftCenterX: 17.6,
+      shaftCenterZ: -24,
+      entryAxis: 'x',
+      entrySign: 1,
+      stops: [
+        { floorId: 'ground', label: 'L1 FOUNDRY (0.0M)', elevationY: 0, surfaceId: 0, gateSign: -1 },
+        { floorId: 'mezzanine', label: 'L2 SKYBRIDGE (+7.0M)', elevationY: 7.0, surfaceId: skybridgeSurf, gateSign: -1 },
+        { floorId: 'gantry_roof', label: 'L3 ROOF DECK (+14.0M)', elevationY: whBaseYs[3] + 14.0, surfaceId: w3RoofSurf, gateSign: 1 },
+      ],
+    });
+
+    placeSupplyCrateAt('supply_m5_roof_west', -30, whBaseYs[2] + 14.0, -24);
+    placeSupplyCrateAt('supply_m5_roof_east', 30, whBaseYs[3] + 14.0, -26);
+
+    // Connect skybridge portal links straight onto the skybridge deck at x = ±14.6
+    // (Note: lift portals already target exitPos at ±14.0m on skybridgeSurf; ensure open cells in WorkerBridge!)
+    void AGENT_PROFILE_ALL_INFANTRY_MASK;
 
     // Moving overhead industrial gantry crane with physical support pillars
     const gantry = buildMovingGantry(assetManager, resourceManager, scope);
@@ -758,26 +1092,7 @@ export function buildWorldMap(
   ];
   crateCoords.forEach(([kx, kz], i) => {
     const ky = Math.max(0, heightFn(kx, kz));
-    const crate = buildSupplyCrate(assetManager, resourceManager, scope);
-    crate.position.set(kx, ky, kz);
-    chunkManager.registerObject(crate, kx, kz, scene);
-    collisionWorld.addStaticBox({
-      id: `supply_${i}`,
-      minX: kx - 0.78,
-      minY: ky,
-      minZ: kz - 0.54,
-      maxX: kx + 0.78,
-      maxY: ky + 0.92,
-      maxZ: kz + 0.54,
-      layer: COLLISION_LAYER.COVER,
-      tag: 'supply_crate',
-    });
-    supplyCrates.push({
-      id: `supply_${i}`,
-      position: new THREE.Vector3(kx, ky, kz),
-      used: false,
-      mesh: crate,
-    });
+    placeSupplyCrateAt(`supply_${i}`, kx, ky, kz);
   });
 
   // Natural mountain/perimeter ridge ring around 116m radius so outdoor maps feel expansive
@@ -794,7 +1109,16 @@ export function buildWorldMap(
     });
   }
 
-  return { coverNodes, roadWaypoints, supplyCrates, animatedProps, extractionBeacon };
+  return {
+    coverNodes,
+    roadWaypoints,
+    supplyCrates,
+    animatedProps,
+    extractionBeacon,
+    elevatedSurfaces,
+    navPortals,
+    cargoLifts,
+  };
 }
 
 function buildEnterableBuildingMesh(
@@ -810,6 +1134,7 @@ function buildEnterableBuildingMesh(
   winTopY: number,
   style: 'city' | 'bunker' | 'warehouse',
   damagedTop: boolean,
+  accessibleRoof: boolean,
   assets: AssetManager,
   res: ResourceManager,
   scope: ResourceScope
@@ -1009,15 +1334,20 @@ function buildEnterableBuildingMesh(
     addBox(-w * 0.07 + partW * 0.5, (groundH - 0.1) * 0.5, 0, 0.22, groundH - 0.1, 0.54, structuralMat, 'structural_column');
   }
 
-  // Upper stories (above groundH) + roof parapet + projected exterior roof cornice
+  // Upper stories (above groundH) + optional decorative roof cap (skipped when rooftop is walkable!)
   const upperH = Math.max(0.6, h - groundH);
   addBox(0, groundH + upperH * 0.5, 0, w, upperH, d, wallMat);
 
-  const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat, 'roof_parapet');
-  const cornice = addBox(0, h + 0.72, 0, w + 0.76, 0.18, d + 0.76, structuralMat, 'roof_cornice');
-  if (damagedTop) {
-    roof.rotation.z = 0.05;
-    cornice.rotation.z = 0.05;
+  if (!accessibleRoof) {
+    const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat, 'roof_parapet');
+    const cornice = addBox(0, h + 0.72, 0, w + 0.76, 0.18, d + 0.76, structuralMat, 'roof_cornice');
+    if (damagedTop) {
+      roof.rotation.z = 0.05;
+      cornice.rotation.z = 0.05;
+    }
+  } else {
+    // Walkable rooftop non-slip deck finish flush at y = h
+    addBox(0, h - 0.04, 0, w - 0.04, 0.08, d - 0.04, trimMat, 'walkable_roof_deck');
   }
 
   // Upper-story window bands + vertical mullions for tall buildings
@@ -1031,42 +1361,6 @@ function buildEnterableBuildingMesh(
     }
   }
 
-  return g;
-}
-
-function buildWatchtower(assets: AssetManager, res: ResourceManager, scope: ResourceScope): THREE.Group {
-  const g = new THREE.Group();
-  const steel = assets.getSharedMaterial('tower_steel', {
-    pattern: 'metal_plate',
-    roughness: 0.48,
-    metalness: 0.7,
-    color: 0x4b5563,
-  });
-  const legGeo = new THREE.CylinderGeometry(0.18, 0.24, 9.2, 8);
-  res.registerGeometry(legGeo, scope);
-  for (const [lx, lz] of [
-    [-1.4, -1.4],
-    [1.4, -1.4],
-    [-1.4, 1.4],
-    [1.4, 1.4],
-  ]) {
-    const leg = new THREE.Mesh(legGeo, steel);
-    leg.position.set(lx, 4.6, lz);
-    leg.castShadow = true;
-    g.add(leg);
-  }
-  const deckGeo = new THREE.BoxGeometry(4.2, 0.4, 4.2);
-  res.registerGeometry(deckGeo, scope);
-  const deck = new THREE.Mesh(deckGeo, steel);
-  deck.position.y = 9.0;
-  g.add(deck);
-
-  const roofGeo = new THREE.ConeGeometry(3.2, 1.6, 4);
-  res.registerGeometry(roofGeo, scope);
-  const roof = new THREE.Mesh(roofGeo, steel);
-  roof.position.y = 11.4;
-  roof.rotation.y = Math.PI / 4;
-  g.add(roof);
   return g;
 }
 
