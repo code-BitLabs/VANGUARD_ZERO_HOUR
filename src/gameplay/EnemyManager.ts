@@ -2314,34 +2314,86 @@ export class EnemyManager {
     return out;
   }
 
-  fillMiniMapBlips(out: MiniMapBlip[]): void {
+  fillMiniMapBlips(out: MiniMapBlip[], playerPos?: THREE.Vector3): void {
     let slotIdx = 0;
     for (let i = 0; i < this.enemies.length; i++) {
       const e = this.enemies[i];
       if (!e.alive) continue;
+
+      const dist = playerPos
+        ? Math.hypot(e.position.x - playerPos.x, e.position.z - playerPos.z)
+        : 0;
+
+      let detectionSource: NonNullable<MiniMapBlip['detectionSource']> = 'recon';
+      let confidence = 0.9;
+      let ageSec = 0;
+
+      if (e.hasLos || e.state === 'ENGAGING') {
+        detectionSource = 'los';
+        confidence = 1.0;
+        ageSec = 0;
+      } else if (e.animFireRecoilTimer > 0 || e.state === 'SUPPRESSING') {
+        detectionSource = 'acoustic';
+        confidence = 0.85;
+        ageSec = 0.2;
+      } else if (
+        e.detectedPlayer ||
+        e.state === 'ALERTED' ||
+        e.state === 'REPOSITIONING' ||
+        (playerPos ? dist <= 26 : e.losBlockerId === null)
+      ) {
+        detectionSource = 'recon';
+        confidence = 0.9;
+        ageSec = 0;
+      } else if (e.lastKnownPosition !== null && e.losLostDurationSec < 5.5) {
+        detectionSource = 'stale';
+        confidence = Number(Math.max(0.25, 0.75 * (1 - e.losLostDurationSec / 5.5)).toFixed(2));
+        ageSec = Number(e.losLostDurationSec.toFixed(1));
+      } else {
+        // Stationary UNAWARE enemy occluded behind cover beyond close recon range -> no wallhack blip!
+        continue;
+      }
+
+      const elevDelta = playerPos ? Number((e.position.y - playerPos.y).toFixed(1)) : 0;
+      const elevCode: NonNullable<MiniMapBlip['elevationCode']> =
+        elevDelta > 2.2 ? 'above' : elevDelta < -2.2 ? 'below' : 'same';
+
       let slot = this._blipPool[slotIdx];
       if (!slot) {
-        slot = { id: e.id, x: e.position.x, z: e.position.z, kind: 'enemy' };
+        slot = {
+          id: e.id,
+          x: e.position.x,
+          y: e.position.y,
+          z: e.position.z,
+          kind: 'enemy',
+          elevationDeltaM: elevDelta,
+          elevationCode: elevCode,
+          detectionSource,
+          confidence,
+          ageSec,
+        };
         this._blipPool.push(slot);
       } else {
         slot.id = e.id;
         slot.x = e.position.x;
+        slot.y = e.position.y;
         slot.z = e.position.z;
         slot.kind = 'enemy';
+        slot.elevationDeltaM = elevDelta;
+        slot.elevationCode = elevCode;
+        slot.detectionSource = detectionSource;
+        slot.confidence = confidence;
+        slot.ageSec = ageSec;
       }
       out.push(slot);
       slotIdx++;
     }
   }
 
-  getMiniMapBlips(): MiniMapBlip[] {
+  getMiniMapBlips(playerPos?: THREE.Vector3): MiniMapBlip[] {
     const blips: MiniMapBlip[] = [];
-    for (let i = 0; i < this.enemies.length; i++) {
-      const e = this.enemies[i];
-      if (!e.alive) continue;
-      blips.push({ id: e.id, x: e.position.x, z: e.position.z, kind: 'enemy' });
-    }
-    return blips;
+    this.fillMiniMapBlips(blips, playerPos);
+    return blips.map((b) => ({ ...b }));
   }
 
   clear(): void {

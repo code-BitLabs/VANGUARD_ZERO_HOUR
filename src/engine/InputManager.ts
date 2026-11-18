@@ -90,6 +90,7 @@ export class InputManager {
   private mouseDeltaY = 0;
   private wheelDelta = 0;
   private pointerLocked = false;
+  private ignoreNextLargeLockedWarp = false;
   private attached = false;
   private prevGamepadButtons = new Set<number>();
   private lastInputDevice: 'keyboard' | 'touch' = 'keyboard';
@@ -185,7 +186,13 @@ export class InputManager {
       () => {
         const wasLocked = this.pointerLocked;
         this.pointerLocked = document.pointerLockElement === canvas;
+        if (!wasLocked && this.pointerLocked) {
+          this.mouseDeltaX = 0;
+          this.mouseDeltaY = 0;
+          this.ignoreNextLargeLockedWarp = true;
+        }
         if (wasLocked && !this.pointerLocked) {
+          this.ignoreNextLargeLockedWarp = false;
           this.clearAllInputs();
         }
         this.onPointerLockChange?.(this.pointerLocked);
@@ -649,9 +656,25 @@ export class InputManager {
 
   private handleMouseMove = (e: MouseEvent): void => {
     if (!this.pointerLocked) return;
+    const mx = e.movementX || 0;
+    const my = e.movementY || 0;
+    if (!Number.isFinite(mx) || !Number.isFinite(my)) return;
+    if (mx === 0 && my === 0) return;
+
+    // Discard OS/compositor pointer-lock warp jumps (e.g. cursor resetting from button coords to origin)
+    if (this.ignoreNextLargeLockedWarp) {
+      this.ignoreNextLargeLockedWarp = false;
+      if (Math.hypot(mx, my) > 36) {
+        return;
+      }
+    }
+    if (Math.abs(mx) > 450 || Math.abs(my) > 450) {
+      return;
+    }
+
     this.lastInputDevice = 'keyboard';
-    this.mouseDeltaX += e.movementX || 0;
-    this.mouseDeltaY += e.movementY || 0;
+    this.mouseDeltaX += mx;
+    this.mouseDeltaY += my;
   };
 
   private handleMouseDown = (e: MouseEvent): void => {

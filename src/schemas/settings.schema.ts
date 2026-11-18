@@ -18,6 +18,7 @@ export const ControlBindingsSchema = z.object({
   strategicNuke: z.string().min(1).default('KeyN'),
   vehicleCamera: z.string().min(1).default('KeyF'),
   handbrake: z.string().min(1).default('Space'),
+  tacticalOverview: z.string().min(1).default('Tab'),
 });
 export type ControlBindings = z.infer<typeof ControlBindingsSchema>;
 
@@ -32,6 +33,12 @@ export type DrawDistanceSetting = z.infer<typeof DrawDistanceSettingSchema>;
 
 export const FpsCapSchema = z.union([z.literal(0), z.literal(30), z.literal(60), z.literal(120)]);
 export type FpsCapSetting = z.infer<typeof FpsCapSchema>;
+
+export const RendererBackendPreferenceSchema = z.enum(['auto', 'webgpu', 'webgl2']);
+export type RendererBackendPreference = z.infer<typeof RendererBackendPreferenceSchema>;
+
+export const TargetRefreshRateSchema = z.union([z.literal(60), z.literal(90), z.literal(120)]);
+export type TargetRefreshRateSetting = z.infer<typeof TargetRefreshRateSchema>;
 
 export const GraphicsSettingsSchema = z.object({
   qualityMode: QualityModeSchema.default('auto'),
@@ -48,6 +55,8 @@ export const GraphicsSettingsSchema = z.object({
   drawDistance: DrawDistanceSettingSchema.default('auto'),
   fpsCap: FpsCapSchema.default(0),
   headBobIntensity: z.number().min(0).max(1.5).default(0.8),
+  rendererBackend: RendererBackendPreferenceSchema.default('auto'),
+  targetRefreshRate: TargetRefreshRateSchema.default(60),
 });
 export type GraphicsSettings = z.infer<typeof GraphicsSettingsSchema>;
 
@@ -241,12 +250,19 @@ export const InputSettingsSchema = z.object({
 });
 export type InputSettings = z.infer<typeof InputSettingsSchema>;
 
+export const HudModeSchema = z.enum(['adaptive', 'minimal', 'expanded']);
+export type HudModeSetting = z.infer<typeof HudModeSchema>;
+
 export const AccessibilitySettingsSchema = z.object({
   colorblindMode: ColorblindModeSchema.default('standard'),
   subtitles: z.boolean().default(true),
   tacticalHints: z.boolean().default(true),
   reducedMotion: z.boolean().default(false),
   uiScale: z.number().min(0.85).max(1.25).default(1.0),
+  hudMode: HudModeSchema.default('adaptive'),
+  hudOpacity: z.number().min(0.5).max(1.0).default(0.92),
+  showRadar: z.boolean().default(true),
+  showCompass: z.boolean().default(true),
 });
 export type AccessibilitySettings = z.infer<typeof AccessibilitySettingsSchema>;
 

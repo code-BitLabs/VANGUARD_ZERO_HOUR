@@ -211,7 +211,7 @@ export class HudSnapshotPublisher {
     }
 
     this._blipsScratch.length = 0;
-    ctx.enemies.fillMiniMapBlips(this._blipsScratch);
+    ctx.enemies.fillMiniMapBlips(this._blipsScratch, ctx.player.position);
     ctx.airCombat.fillMiniMapBlips(this._blipsScratch);
     ctx.vehicles.fillMiniMapBlips(this._blipsScratch);
     missionDirector.fillObjectiveBlips(this._blipsScratch);

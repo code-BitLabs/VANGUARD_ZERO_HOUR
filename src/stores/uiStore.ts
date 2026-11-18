@@ -33,6 +33,7 @@ export interface UIStoreState {
   contextLost: boolean;
   isPortraitBlocked: boolean;
   touchHudOverride: boolean | null;
+  tacticalOverviewOpen: boolean;
   toast: ToastNotice | null;
   setScreen: (screen: ScreenState) => void;
   openSettingsFrom: (from: 'title' | 'campaign' | 'paused') => void;
@@ -41,6 +42,8 @@ export interface UIStoreState {
   setPortraitBlocked: (blocked: boolean) => void;
   setTouchHudOverride: (override: boolean | null) => void;
   toggleTouchHudOverride: (currentlyVisible: boolean) => void;
+  setTacticalOverviewOpen: (open: boolean) => void;
+  toggleTacticalOverview: () => void;
   toggleDiagnostics: () => void;
   setCombatDebugOpen: (open: boolean) => void;
   toggleCombatDebug: () => void;
@@ -74,14 +77,23 @@ export const uiStore = createStore<UIStoreState>()(
     contextLost: false,
     isPortraitBlocked: false,
     touchHudOverride: null,
+    tacticalOverviewOpen: false,
     toast: null,
-    setScreen: (screen) => set({ screen }),
-    openSettingsFrom: (from) => set({ previousMenuScreen: from, screen: 'settings' }),
-    openHowToPlayFrom: (from) => set({ previousMenuScreen: from, screen: 'howToPlay' }),
+    setScreen: (screen) =>
+      set((s) => ({
+        screen,
+        tacticalOverviewOpen: screen === 'playing' ? s.tacticalOverviewOpen : false,
+      })),
+    openSettingsFrom: (from) =>
+      set({ previousMenuScreen: from, screen: 'settings', tacticalOverviewOpen: false }),
+    openHowToPlayFrom: (from) =>
+      set({ previousMenuScreen: from, screen: 'howToPlay', tacticalOverviewOpen: false }),
     setPointerLocked: (pointerLocked) => set({ pointerLocked }),
     setPortraitBlocked: (isPortraitBlocked) => set({ isPortraitBlocked }),
     setTouchHudOverride: (touchHudOverride) => set({ touchHudOverride }),
     toggleTouchHudOverride: (currentlyVisible) => set({ touchHudOverride: !currentlyVisible }),
+    setTacticalOverviewOpen: (tacticalOverviewOpen) => set({ tacticalOverviewOpen }),
+    toggleTacticalOverview: () => set((s) => ({ tacticalOverviewOpen: !s.tacticalOverviewOpen })),
     toggleDiagnostics: () => {
       if (!isDeveloperModeActive()) {
         set({ diagnosticsOpen: false });

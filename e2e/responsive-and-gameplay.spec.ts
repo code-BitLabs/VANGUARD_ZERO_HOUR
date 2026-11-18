@@ -118,6 +118,25 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await expect(page.getByTestId('hud-compact-weapon-readout')).toBeVisible();
   await expect(page.getByTestId('hud-boss-bar')).toHaveCount(0);
 
+  // Verify zero horizontal overlap along the compact mobile top telemetry bar (844x390)
+  const mobileTopOverlapCheck = await page.evaluate(() => {
+    const left = document.querySelector('[data-testid="hud-top-left-cluster"]')?.getBoundingClientRect();
+    const center = document.querySelector('[data-testid="hud-top-center-strip"]')?.getBoundingClientRect();
+    const right = document.querySelector('[data-testid="hud-top-right-bar"]')?.getBoundingClientRect();
+    const intersects = (a: DOMRect, b: DOMRect) =>
+      !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+    return {
+      leftCenterOverlap: Boolean(left && center && intersects(left, center)),
+      centerRightOverlap: Boolean(center && right && intersects(center, right)),
+      leftRightOverlap: Boolean(left && right && intersects(left, right)),
+    };
+  });
+  expect(mobileTopOverlapCheck).toEqual({
+    leftCenterOverlap: false,
+    centerRightOverlap: false,
+    leftRightOverlap: false,
+  });
+
   // Verify 1-tap RPG quick-equip button (FND-19) switches to RPG-7V without auto-firing
   await page.getByTestId('touch-btn-rpg').dispatchEvent('pointerdown', {
     pointerId: 31,
@@ -323,6 +342,96 @@ test('deploys Mission 1 on 844x390 touch landscape, verifies simultaneous 360° 
   await page.getByRole('button', { name: /Resume Combat/i }).click();
   await expect(page.getByTestId('mobile-touch-controls')).toBeVisible();
 
+  // Verify Stage 5B Top-Right Tactical Overview Drawer toggles cleanly on Mobile Landscape without pausing
+  await page.getByTestId('hud-tactical-overview-btn').click();
+  await expect(page.getByTestId('hud-tactical-overview-drawer')).toBeVisible();
+  await page.getByTestId('close-tactical-overview').click();
+  await expect(page.getByTestId('hud-tactical-overview-drawer')).toHaveCount(0);
+
   expect(errors).toEqual([]);
   await context.close();
 });
+
+test('deploys Mission 1 on Desktop 1920x1080 with Stage 5B context-adaptive HUD, gold weapon silhouette, zero overlap, and non-pausing [TAB] tactical overview', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1920, height: 1080 },
+    hasTouch: false,
+  });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (err) => errors.push(err.message));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text());
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /Play Campaign/i }).click();
+  await expect(page.getByTestId('mission-briefing-panel')).toBeVisible();
+  await page.getByRole('button', { name: /Deploy Operation/i }).click();
+
+  await expect(page.getByTestId('hud-radar-minimap')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('hud-objectives-desktop')).toBeVisible();
+  await expect(page.getByTestId('hud-compass-strip')).toBeVisible();
+  await expect(page.getByTestId('hud-center-reticle')).toBeVisible();
+  await expect(page.getByTestId('weapon-silhouette-assault_rifle')).toBeVisible();
+  await expect(page.getByTestId('desktop-btn-rpg')).toBeVisible();
+  await expect(page.getByTestId('hud-tactical-overview-btn')).toBeVisible();
+
+  // Verify WebGL canvas occupies viewport with non-zero dimensions and zero HUD corner collisions
+  const desktopLayoutCheck = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas');
+    const cRect = canvas?.getBoundingClientRect();
+    const topLeft = document.querySelector('[data-testid="hud-top-left-cluster"]')?.getBoundingClientRect();
+    const topCenter = document.querySelector('[data-testid="hud-top-center-strip"]')?.getBoundingClientRect();
+    const overviewBtn = document.querySelector('[data-testid="hud-tactical-overview-btn"]')?.getBoundingClientRect();
+    const weaponSil = document.querySelector('[data-testid="weapon-silhouette-assault_rifle"]')?.getBoundingClientRect();
+
+    const intersects = (a: DOMRect, b: DOMRect) =>
+      !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+
+    return {
+      hasCanvas: Boolean(cRect && cRect.width >= 1900 && cRect.height >= 1000),
+      topLeftCenterOverlap: Boolean(topLeft && topCenter && intersects(topLeft, topCenter)),
+      topCenterRightOverlap: Boolean(topCenter && overviewBtn && intersects(topCenter, overviewBtn)),
+      weaponSilhouetteVisible: Boolean(weaponSil && weaponSil.width > 40 && weaponSil.height > 15),
+    };
+  });
+  expect(desktopLayoutCheck).toEqual({
+    hasCanvas: true,
+    topLeftCenterOverlap: false,
+    topCenterRightOverlap: false,
+    weaponSilhouetteVisible: true,
+  });
+
+  // Toggle non-pausing [TAB] Tactical Overview Drawer via keyboard & verify simulation stays unpaused
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('hud-tactical-overview-drawer')).toBeVisible();
+  await expect(page.getByTestId('hud-tactical-overview-drawer')).toContainText(/OP\. IRON DAWN/i);
+  await expect(page.getByRole('heading', { name: /Mission Paused/i })).toHaveCount(0);
+
+  // Confirm simulation timer keeps advancing while drawer is open (non-pausing guarantee; 0.1s shield tick updates every 2 frames)
+  const initialTimerState = await page.evaluate(() => ({
+    compass: document.querySelector('[data-testid="hud-compass-strip"]')?.textContent ?? '',
+    shield: document.querySelector('[data-testid="hud-spawn-protection"]')?.textContent ?? '',
+  }));
+  await expect
+    .poll(
+      async () =>
+        await page.evaluate(() => ({
+          compass: document.querySelector('[data-testid="hud-compass-strip"]')?.textContent ?? '',
+          shield: document.querySelector('[data-testid="hud-spawn-protection"]')?.textContent ?? '',
+        })),
+      { timeout: 20_000 }
+    )
+    .not.toEqual(initialTimerState);
+  await expect(page.getByRole('heading', { name: /Mission Paused/i })).toHaveCount(0);
+
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('hud-tactical-overview-drawer')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+  await context.close();
+});
+

@@ -23,6 +23,7 @@ import {
   ViewModelMaterialBank,
   ViewModelRig,
 } from './WeaponViewModels';
+import { FirstPersonAnimationGraph } from './FirstPersonAnimationGraph';
 
 export interface WeaponRuntimeState {
   config: WeaponConfig;
@@ -65,6 +66,7 @@ export class WeaponSystem {
   private viewModelContainer = new THREE.Group();
   private viewModelMaterialBank: ViewModelMaterialBank;
   private viewModelSceneRef: THREE.Scene;
+  private readonly animGraph = new FirstPersonAnimationGraph();
 
   private fireCooldown = 0;
   private burstRemaining = 0;
@@ -324,6 +326,7 @@ export class WeaponSystem {
 
     if (this.isReloading || this.lastReloadStage !== 'READY') {
       this.audio.cancelReloadFoley();
+      this.animGraph.handleInterruption('weapon_switch_cancels_reload', this.lastReloadStage);
     }
     this.isReloading = false;
     this.reloadTimer = 0;
@@ -390,6 +393,14 @@ export class WeaponSystem {
 
   getEquipTimerSec(): number {
     return this.equipTimer;
+  }
+
+  getAnimationGraph(): FirstPersonAnimationGraph {
+    return this.animGraph;
+  }
+
+  getViewModelRig(id: WeaponId): ViewModelRig | undefined {
+    return this.rigs.get(id);
   }
 
   update(
@@ -667,6 +678,7 @@ export class WeaponSystem {
       this.drumTargetAngle += Math.PI / 3;
       this.audio.play2D('drum_index', 5, 0.38);
     }
+    this.animGraph.notifyShotFired(adsRecoilMul);
     this.shotsFired++;
 
     // Armory Upgrade multipliers
@@ -1215,6 +1227,43 @@ export class WeaponSystem {
       0.22 * this.vaultBlend;
 
     rig.root.rotation.set(rotX, rotY, rotZ);
+
+    // Evaluate Stage 5B TRN-19 First-Person Animation Graph & 2-Bone Operator Arm IK
+    const equipProg =
+      cfg.equipTimeSec > 0 ? Math.min(1, Math.max(0, 1 - this.equipTimer / cfg.equipTimeSec)) : 1;
+    const graphPose = this.animGraph.evaluate({
+      dt,
+      weaponId: this.activeWeaponId,
+      alive: player.alive,
+      inVehicle: false,
+      grounded: player.grounded,
+      currentSpeed: player.currentSpeed,
+      isSprinting: player.isSprinting,
+      isCrouching: player.isCrouching,
+      isSliding: player.isSliding,
+      isVaulting: player.isVaulting,
+      isAds: this.isAds,
+      isReloading: this.isReloading,
+      reloadStage,
+      reloadProgress: reloadProg,
+      equipProgress01: equipProg,
+      landingSpringOffset: 0,
+      rightGripLocal: rig.rightGripLocal,
+      leftForegripLocal: rig.leftForegripLocal,
+      magazineSocketLocal: rig.magazineSocketLocal,
+      chargingHandleSocketLocal: rig.chargingHandleSocketLocal,
+    });
+    const rightPose =
+      this.activeWeaponId === 'rocket_launcher' || this.activeWeaponId === 'guided_missile'
+        ? 'launcher_shoulder_cradle'
+        : 'rifle_grip_trigger';
+    rig.operatorArms.solveWeaponHold(
+      graphPose.leftHandTargetLocal,
+      rig.rightGripLocal,
+      graphPose.leftHandPose,
+      rightPose,
+      graphPose.triggerPull01
+    );
 
     if (flashActive) {
       this.viewModelMuzzleLight.position.set(

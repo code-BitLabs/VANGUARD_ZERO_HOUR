@@ -11,8 +11,10 @@ import { COLLISION_LAYER, SpatialAABB } from '@/src/physics/SpatialHash';
 import { ElevatedNavSurfaceDescriptor } from '@/src/workers/WorkerBridge';
 import { NavPortalInput } from '@/src/workers/navigationCore';
 import { WorldChunkManager } from './WorldChunkManager';
+import { globalStructureReconciliation } from './StructureReconciliationRegistry';
 
 export interface VerticalWorldContext {
+  missionId?: number;
   scene: THREE.Scene;
   assetManager: AssetManager;
   resourceManager: ResourceManager;
@@ -678,6 +680,25 @@ export function buildBuildingRooftopAccess(
     p.toZ = rampEndZ;
   }
 
+  globalStructureReconciliation.registerStructure({
+    missionId: ctx.missionId ?? 1,
+    structureId: `${opts.buildingId}_rooftop`,
+    kind: 'rooftop_access',
+    visualKitId: 'kit_urban_concrete_midrise',
+    centerX: opts.x,
+    centerZ: opts.z,
+    baseY: opts.baseY,
+    authoritativeWalkableSopY: opts.roofY,
+    width: opts.width,
+    depth: opts.depth,
+    parapetHeight: parapetH,
+    surfaceIds: [surfaceId],
+    portalKeys: ctx.navPortals
+      .filter((np) => np.toSurfaceId === surfaceId || np.fromSurfaceId === surfaceId)
+      .map((np) => np.portalKey),
+    colliderIds: [`${opts.buildingId}_parapet_z_-1_-1`, `${opts.buildingId}_parapet_z_1_1`],
+  });
+
   return surfaceId;
 }
 
@@ -855,6 +876,54 @@ export function buildWalkableWatchtower(
     entityId: id,
   });
 
+  // Decorative steel cross-bracing, corner canopy posts & dual roof searchlight housings (skipBvh = true)
+  const postGeo = new THREE.CylinderGeometry(0.08, 0.08, 2.55, 6);
+  const braceGeo = new THREE.BoxGeometry(3.9, 0.14, 0.14);
+  const lampMat = assetManager.getSharedMaterial('watchtower_lamp_emissive', {
+    color: 0xfef08a,
+    emissive: 0xfacc15,
+    emissiveIntensity: 0.85,
+  });
+  resourceManager.registerGeometry(postGeo, scope);
+  resourceManager.registerGeometry(braceGeo, scope);
+  for (const [cx, cz] of [
+    [-2.2, -2.2],
+    [2.2, -2.2],
+    [-2.2, 2.2],
+    [2.2, 2.2],
+  ] as const) {
+    const post = new THREE.Mesh(postGeo, steel);
+    post.userData.skipBvh = true;
+    post.position.set(x + cx, deckY + 1.25, z + cz);
+    grp.add(post);
+  }
+  for (const braceY of [baseY + 3.0, baseY + 6.4]) {
+    for (const zSign of [-1, 1]) {
+      const brace = new THREE.Mesh(braceGeo, steel);
+      brace.userData.skipBvh = true;
+      brace.position.set(x, braceY, z + zSign * 2.0);
+      brace.rotation.z = zSign * 0.34;
+      grp.add(brace);
+    }
+  }
+  // Dual roof floodlight pods on canopy edge
+  for (const zSign of [-1, 1]) {
+    const flood = addVisualBox(
+      grp,
+      0.48,
+      0.24,
+      0.32,
+      x - sideSign * 2.65,
+      deckY + 2.42,
+      z + zSign * 1.4,
+      lampMat,
+      resourceManager,
+      scope,
+      `${id}_floodlight_${zSign}`
+    );
+    flood.userData.skipBvh = true;
+  }
+
   chunkManager.registerObject(grp, x, z, scene);
 
   // Elevated cover nodes on deck
@@ -894,6 +963,24 @@ export function buildWalkableWatchtower(
     8.4,
     2.4
   );
+
+  globalStructureReconciliation.registerStructure({
+    missionId: ctx.missionId ?? 1,
+    structureId: id,
+    kind: 'walkable_watchtower_9m',
+    visualKitId: 'kit_walkable_watchtower_9m',
+    centerX: x,
+    centerZ: z,
+    baseY,
+    authoritativeWalkableSopY: deckY,
+    midLandingY: baseY + 4.5,
+    width: 5.2,
+    depth: 5.2,
+    parapetHeight: pH,
+    surfaceIds: [surfaceId],
+    portalKeys: [`portal_${id}_stair`],
+    colliderIds: [`${id}_deck`, `${id}_canopy_roof`, `${id}_stair_mid_landing`, `${id}_stair_top_bridge`],
+  });
 
   return surfaceId;
 }
@@ -1246,6 +1333,27 @@ export function buildMultiStopCargoLift(
     shaftCeilingY,
   };
   ctx.cargoLifts.push(def);
+
+  globalStructureReconciliation.registerStructure({
+    missionId: ctx.missionId ?? 1,
+    structureId: opts.liftId,
+    kind: 'multi_stop_cargo_lift',
+    visualKitId: 'kit_cargo_lift_gantry',
+    centerX: opts.shaftCenterX,
+    centerZ: opts.shaftCenterZ,
+    baseY: minStopY,
+    authoritativeWalkableSopY: topY,
+    width: halfW * 2,
+    depth: halfD * 2,
+    parapetHeight: 1.15,
+    surfaceIds: opts.stops.map((s) => s.surfaceId).filter((sid) => sid > 0),
+    portalKeys: portalIds,
+    colliderIds: [
+      `${opts.liftId}_platform`,
+      ...opts.stops.map((_, idx) => `${opts.liftId}_gate_${idx}`),
+    ],
+  });
+
   return def;
 }
 
@@ -1412,6 +1520,23 @@ export function buildElevatedSkybridge(
     activeOccupants: 0,
     enabled: true,
     bidirectional: true,
+  });
+
+  globalStructureReconciliation.registerStructure({
+    missionId: ctx.missionId ?? 1,
+    structureId: id,
+    kind: 'elevated_skybridge',
+    visualKitId: 'kit_foundry_warehouse_hall',
+    centerX: cx,
+    centerZ,
+    baseY: 0,
+    authoritativeWalkableSopY: elevationY,
+    width: spanW,
+    depth: width,
+    parapetHeight: 1.15,
+    surfaceIds: [surfaceId],
+    portalKeys: [`portal_${id}_west`, `portal_${id}_east`],
+    colliderIds: [`${id}_deck`, `${id}_rail_-1`, `${id}_rail_1`],
   });
 
   return surfaceId;

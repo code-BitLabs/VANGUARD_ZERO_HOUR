@@ -83,8 +83,16 @@ export type IncomingThreatWarning = z.infer<typeof IncomingThreatWarningSchema>;
 export const MiniMapBlipSchema = z.object({
   id: z.string(),
   x: z.number(),
+  y: z.number().optional(),
   z: z.number(),
   kind: z.enum(['enemy', 'air', 'vehicle', 'objective', 'friendly_vehicle']),
+  elevationDeltaM: z.number().optional(),
+  elevationCode: z.enum(['same', 'above', 'below']).optional(),
+  detectionSource: z
+    .enum(['los', 'acoustic', 'recon', 'stale', 'objective', 'friendly'])
+    .optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  ageSec: z.number().nonnegative().optional(),
 });
 export type MiniMapBlip = z.infer<typeof MiniMapBlipSchema>;
 

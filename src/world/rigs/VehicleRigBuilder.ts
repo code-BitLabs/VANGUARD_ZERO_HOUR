@@ -195,19 +195,64 @@ export function buildVehicleRig(
   chassisGroup.add(seat);
   fpvHiddenMeshes.push(seat);
 
-  // Front Headlights
+  // Front Headlights & Armored Bullbar + Rear Brake Lights
   const lightGeo = new THREE.BoxGeometry(0.28, 0.16, 0.08);
+  const bumperGeo = new THREE.BoxGeometry(w * 0.96, 0.28, 0.22);
+  const skirtGeo = new THREE.BoxGeometry(0.12, 0.34, l * 0.72);
+  const shadowPlaneGeo = new THREE.PlaneGeometry(w * 1.15, l * 1.08);
+  shadowPlaneGeo.rotateX(-Math.PI / 2);
   res.registerGeometry(lightGeo, scope);
+  res.registerGeometry(bumperGeo, scope);
+  res.registerGeometry(skirtGeo, scope);
+  res.registerGeometry(shadowPlaneGeo, scope);
+
   const lightMat = new THREE.MeshStandardMaterial({
     color: 0xfef08a,
     emissive: 0xfacc15,
     emissiveIntensity: 0.9,
   });
+  const brakeLightMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 0.85,
+  });
+  const shadowMat = new THREE.MeshBasicMaterial({
+    color: 0x05070a,
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false,
+  });
   res.registerMaterial(lightMat, scope);
+  res.registerMaterial(brakeLightMat, scope);
+  res.registerMaterial(shadowMat, scope);
+
+  // Grounding contact shadow plate under root
+  const shadowMesh = new THREE.Mesh(shadowPlaneGeo, shadowMat);
+  shadowMesh.position.y = 0.03;
+  root.add(shadowMesh);
+
+  // Front armored bullbar bumper
+  const frontBumper = new THREE.Mesh(bumperGeo, trimMat);
+  frontBumper.position.set(0, 0.76, -l * 0.5 - 0.08);
+  frontBumper.castShadow = true;
+  chassisGroup.add(frontBumper);
+
+  // Side armored reactive-armor skirt plates
+  for (const sx of [-w * 0.51, w * 0.51]) {
+    const skirt = new THREE.Mesh(skirtGeo, trimMat);
+    skirt.position.set(sx, 0.88, 0);
+    skirt.castShadow = true;
+    chassisGroup.add(skirt);
+  }
+
   for (const lx of [-w * 0.34, w * 0.34]) {
     const hl = new THREE.Mesh(lightGeo, lightMat);
     hl.position.set(lx, 1.05, -l * 0.5 - 0.02);
     chassisGroup.add(hl);
+
+    const tl = new THREE.Mesh(lightGeo, brakeLightMat);
+    tl.position.set(lx, 1.02, l * 0.5 + 0.02);
+    chassisGroup.add(tl);
   }
 
   // 3. Unsprung Wheels + Visible Coilover Struts
@@ -274,12 +319,16 @@ export function buildVehicleRig(
   const ring = new THREE.Mesh(ringGeo, gunMat);
   turret.add(ring);
 
-  // Armored turret shield plates
+  // Armored turret shield plates + thermal sight pod
   const shieldGeo = new THREE.BoxGeometry(0.88, 0.38, 0.08);
+  const opticPodGeo = new THREE.BoxGeometry(0.22, 0.2, 0.28);
   res.registerGeometry(shieldGeo, scope);
+  res.registerGeometry(opticPodGeo, scope);
   const shield = new THREE.Mesh(shieldGeo, hullMat);
   shield.position.set(0, 0.26, -0.42);
-  turret.add(shield);
+  const opticPod = new THREE.Mesh(opticPodGeo, trimMat);
+  opticPod.position.set(0.28, 0.32, -0.28);
+  turret.add(shield, opticPod);
 
   const turretGun = new THREE.Group();
   const barrelGeo = new THREE.BoxGeometry(0.16, 0.16, 1.55);

@@ -4,6 +4,12 @@ import { BloomEffect, EffectComposer, EffectPass, RenderPass, VignetteEffect } f
 import { ResourceManager } from '@/src/core/ResourceManager';
 import { SceneLights } from '@/src/world/LightingRig';
 import { GovernorProfile } from './PerformanceGovernor';
+import {
+  evaluateRenderingVerticalSlice,
+  RendererBackendOption,
+  RenderingVerticalSliceReport,
+  TacticalLightBudgetManager,
+} from './RenderingBenchmarkSlice';
 
 export class EngineRenderer {
   public readonly renderer: THREE.WebGLRenderer;
@@ -11,6 +17,7 @@ export class EngineRenderer {
   public readonly camera: THREE.PerspectiveCamera;
   public readonly viewModelScene: THREE.Scene;
   public readonly viewModelCamera: THREE.PerspectiveCamera;
+  public readonly lightBudgetManager: TacticalLightBudgetManager;
 
   private composer: EffectComposer | null = null;
   private bloomEffect: BloomEffect | null = null;
@@ -24,6 +31,8 @@ export class EngineRenderer {
   private height = 720;
   private lastDrawCalls = 0;
   private lastTriangles = 0;
+  private backendPreference: RendererBackendOption = 'auto';
+  private verticalSliceReport: RenderingVerticalSliceReport;
 
   constructor(
     private readonly container: HTMLElement,
@@ -41,7 +50,7 @@ export class EngineRenderer {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.12;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
@@ -57,21 +66,27 @@ export class EngineRenderer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0b0e11);
     this.scene.fog = new THREE.FogExp2(0x1b222c, 0.0055);
+    this.lightBudgetManager = new TacticalLightBudgetManager(this.scene, 'high');
+    this.verticalSliceReport = evaluateRenderingVerticalSlice('auto');
 
-    this.camera = new THREE.PerspectiveCamera(78, this.width / this.height, 0.15, 420);
+    this.camera = new THREE.PerspectiveCamera(78, this.width / this.height, 0.15, 560);
 
     // Separate viewmodel layer so first-person weapons never clip into world walls
     this.viewModelScene = new THREE.Scene();
     this.viewModelCamera = new THREE.PerspectiveCamera(58, this.width / this.height, 0.03, 12);
-    this.viewModelScene.add(new THREE.HemisphereLight(0xdbeafe, 0x374151, 1.35));
-    const vmKey = new THREE.DirectionalLight(0xfff1d6, 2.0);
+    this.viewModelScene.add(new THREE.HemisphereLight(0xdbeafe, 0x374151, 1.45));
+    const vmKey = new THREE.DirectionalLight(0xfff1d6, 2.2);
     vmKey.position.set(1.5, 2.5, 2.0);
     this.viewModelScene.add(vmKey);
+    const vmRim = new THREE.DirectionalLight(0x93c5fd, 0.85);
+    vmRim.position.set(-1.8, 1.2, -1.5);
+    this.viewModelScene.add(vmRim);
 
     this.buildEnvironment();
     this.buildPostProcessing();
     this.bindContextEvents();
   }
+
 
   private buildEnvironment(): void {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -153,6 +168,7 @@ export class EngineRenderer {
   ): void {
     this.renderScale = profile.renderScale;
     this.bloomEnabled = profile.bloomEnabled && bloomSetting;
+    this.lightBudgetManager?.setQualityTier(profile.tier);
     const shadowsActive = shadowsSetting && profile.shadowMapSize >= 512;
     this.renderer.shadowMap.enabled = shadowsActive;
     if (lights?.sun) {
@@ -169,7 +185,7 @@ export class EngineRenderer {
       lights.sun.shadow.camera.updateProjectionMatrix();
     }
 
-    this.camera.far = Math.max(150, profile.drawDistance + 40);
+    this.camera.far = Math.max(520, profile.drawDistance + 40);
     this.camera.updateProjectionMatrix();
 
     if (this.bloomPass) {
@@ -182,6 +198,16 @@ export class EngineRenderer {
       this.vignettePass.enabled = true;
     }
     this.resize();
+  }
+
+  setRendererBackendPreference(pref: RendererBackendOption, measuredFrameMs = 8.4): RenderingVerticalSliceReport {
+    this.backendPreference = pref;
+    this.verticalSliceReport = evaluateRenderingVerticalSlice(pref, measuredFrameMs);
+    return this.verticalSliceReport;
+  }
+
+  getRenderingSliceReport(): RenderingVerticalSliceReport {
+    return this.verticalSliceReport;
   }
 
   setFov(fovDeg: number): void {
@@ -266,6 +292,7 @@ export class EngineRenderer {
   }
 
   dispose(): void {
+    this.lightBudgetManager?.dispose();
     this.scene.environment = null;
     this.viewModelScene.environment = null;
     this.bloomPass?.dispose();
@@ -286,3 +313,4 @@ export class EngineRenderer {
     }
   }
 }
+

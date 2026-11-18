@@ -99,6 +99,9 @@ export class PerformanceGovernor {
   private degradeAccumSec = 0;
   private recoverAccumSec = 0;
 
+  private targetFps: 60 | 90 | 120 = 60;
+  private transitionCooldownSec = 0;
+
   constructor(
     initialTier: QualityTier = 'high',
     private adaptiveEnabled = true
@@ -106,11 +109,28 @@ export class PerformanceGovernor {
     this.setBaseTier(initialTier);
   }
 
-  configureFromSettings(graphics: GovernorSettingsConstraints): void {
+  configureFromSettings(
+    graphics: GovernorSettingsConstraints & { fpsCap?: 0 | 30 | 60 | 120; targetRefreshRate?: 60 | 90 | 120 }
+  ): void {
     this.settingsConstraints = { ...graphics };
     this.adaptiveEnabled = graphics.adaptiveGovernor;
     this.maxAllowedTier = graphics.qualityMode === 'manual' ? graphics.quality : 'ultra';
+    if (graphics.targetRefreshRate === 90 || graphics.targetRefreshRate === 120) {
+      this.targetFps = graphics.targetRefreshRate;
+    } else if (graphics.fpsCap === 120) {
+      this.targetFps = 120;
+    } else {
+      this.targetFps = 60;
+    }
     this.setBaseTier(graphics.quality);
+  }
+
+  setTargetRefreshRate(fps: 60 | 90 | 120): void {
+    this.targetFps = fps;
+  }
+
+  getTargetRefreshRate(): 60 | 90 | 120 {
+    return this.targetFps;
   }
 
   setBaseTier(tier: QualityTier): void {
@@ -118,6 +138,7 @@ export class PerformanceGovernor {
     this.activeProfile = this.applyConstraints({ ...PROFILES[tier] });
     this.degradeAccumSec = 0;
     this.recoverAccumSec = 0;
+    this.transitionCooldownSec = 0;
   }
 
   setAdaptiveEnabled(enabled: boolean): void {
@@ -155,7 +176,11 @@ export class PerformanceGovernor {
     this.writeIdx = (this.writeIdx + 1) % this.frameWindow.length;
     if (this.filled < this.frameWindow.length) this.filled++;
 
-    if (!this.adaptiveEnabled || this.filled < 60) return false;
+    if (this.transitionCooldownSec > 0) {
+      this.transitionCooldownSec = Math.max(0, this.transitionCooldownSec - dtSec);
+    }
+
+    if (!this.adaptiveEnabled || this.filled < 60 || this.transitionCooldownSec > 0) return false;
 
     let frameSum = 0;
     let cpuSum = 0;
@@ -166,8 +191,13 @@ export class PerformanceGovernor {
     const avgFrameMs = frameSum / this.filled;
     const avgCpuMs = cpuSum / this.filled;
 
-    // Step down only after sustained > 19ms frame time over 2.5s
-    if (avgFrameMs > 19.0) {
+    // Target budget scales with 60 / 90 / 120 FPS profile (with wide hysteresis deadband)
+    const budgetMs = 1000 / this.targetFps;
+    const degradeThresholdMs = budgetMs * 1.14; // e.g., 19.0ms @ 60Hz, 12.66ms @ 90Hz, 9.5ms @ 120Hz
+    const recoverThresholdMs = budgetMs * 0.81; // e.g., 13.5ms @ 60Hz, 9.0ms @ 90Hz, 6.75ms @ 120Hz
+
+    // Step down only after sustained > degradeThresholdMs over 2.5s
+    if (avgFrameMs > degradeThresholdMs) {
       this.degradeAccumSec += dtSec;
       this.recoverAccumSec = 0;
       if (this.degradeAccumSec >= 2.5) {
@@ -178,16 +208,17 @@ export class PerformanceGovernor {
           this.currentTier = nextTier;
           const nextProfile = { ...PROFILES[nextTier] };
           // If CPU bound specifically, keep render scale slightly sharper while throttling AI/particles
-          if (avgCpuMs > 11.0 && nextTier === 'medium') {
+          if (avgCpuMs > budgetMs * 0.66 && nextTier === 'medium') {
             nextProfile.renderScale = 0.95;
             nextProfile.aiMidIntervalSec = 0.22;
           }
           this.activeProfile = this.applyConstraints(nextProfile);
+          this.transitionCooldownSec = 3.5;
           return true;
         }
       }
-    } else if (avgFrameMs < 13.5) {
-      // Step up only after sustained headroom < 13.5ms over 6.0s, never exceeding maxAllowedTier
+    } else if (avgFrameMs < recoverThresholdMs) {
+      // Step up only after sustained headroom < recoverThresholdMs over 6.0s, never exceeding maxAllowedTier
       this.recoverAccumSec += dtSec;
       this.degradeAccumSec = 0;
       if (this.recoverAccumSec >= 6.0) {
@@ -198,6 +229,7 @@ export class PerformanceGovernor {
           const nextTier = TIER_ORDER[idx + 1];
           this.currentTier = nextTier;
           this.activeProfile = this.applyConstraints({ ...PROFILES[nextTier] });
+          this.transitionCooldownSec = 4.0;
           return true;
         }
       }
@@ -217,3 +249,4 @@ export class PerformanceGovernor {
     return this.currentTier;
   }
 }
+

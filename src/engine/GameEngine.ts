@@ -312,6 +312,8 @@ export class GameEngine {
       settingsStore.subscribe((state) => {
         this.input.updateSettings(state.input);
         this.governor.configureFromSettings(state.graphics);
+        this.governor.setTargetRefreshRate(state.graphics.targetRefreshRate ?? 60);
+        this.renderer.setRendererBackendPreference(state.graphics.rendererBackend ?? 'auto');
         this.assetManager.setTextureQuality(state.graphics.textureQuality);
         this.loop.setFpsCap(state.graphics.fpsCap);
         const effProf = this.governor.getProfile();
@@ -393,11 +395,16 @@ export class GameEngine {
           } else {
             ui.setCombatDebugOpen(false);
           }
-        } else if (e.code === 'Tab' && uiStore.getState().screen === 'playing') {
+        } else if (
+          (e.code === (settingsStore.getState().input.bindings.tacticalOverview ?? 'Tab') ||
+            e.code === 'Tab') &&
+          uiStore.getState().screen === 'playing'
+        ) {
           e.preventDefault();
+          uiStore.getState().toggleTacticalOverview();
           if (this.input.isPointerLocked()) {
             this.releasePointerLockForDebug();
-          } else {
+          } else if (!uiStore.getState().tacticalOverviewOpen) {
             this.requestPointerLock();
           }
         }
@@ -628,7 +635,8 @@ export class GameEngine {
       mission.lighting,
       profile.shadowMapSize,
       profile.shadowDistance,
-      this.resourceManager
+      this.resourceManager,
+      mission.id
     );
     this.renderer.applyGovernorProfile(
       profile,
@@ -798,6 +806,15 @@ export class GameEngine {
       );
       this.weapons.resetLoadout(startWeapon);
     }
+
+    // Immediately align camera with spawned player eye position before Frame 0 render/projection
+    this.player.syncCamera(
+      this.renderer.camera,
+      gSettings.fov,
+      this.weapons.getActiveState().config.adsFov,
+      false,
+      0
+    );
 
     this.missionDirector = new MissionDirector(
       mission,

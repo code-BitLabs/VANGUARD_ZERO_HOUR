@@ -9,10 +9,12 @@ import {
   Crosshair,
   Gamepad2,
   Heart,
+  Layers,
   Pause,
   Radio,
   Rocket,
   Shield,
+  X,
 } from 'lucide-react';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { InputManager } from '@/src/engine/InputManager';
@@ -23,6 +25,7 @@ import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { getMissionVisualProfile } from '@/src/world/VisualBible';
 import { computeMobileHudLayout } from './mobileHudLayoutEngine';
 import { MobileTouchControls } from './MobileTouchControls';
 
@@ -53,10 +56,18 @@ export function GameHUD({
   const combatDebugOpen = useUIStore((s) => s.combatDebugOpen);
   const combatDebugCollapsed = useUIStore((s) => s.combatDebugCollapsed);
   const pointerLocked = useUIStore((s) => s.pointerLocked);
+  const tacticalOverviewOpen = useUIStore((s) => s.tacticalOverviewOpen);
+  const setTacticalOverviewOpen = useUIStore((s) => s.setTacticalOverviewOpen);
+  const toggleTacticalOverview = useUIStore((s) => s.toggleTacticalOverview);
   const setCombatDebugOpen = useUIStore((s) => s.setCombatDebugOpen);
   const setCombatDebugCollapsed = useUIStore((s) => s.setCombatDebugCollapsed);
-  const colorblind = useSettingsStore((s) => s.accessibility.colorblindMode);
-  const uiScale = useSettingsStore((s) => s.accessibility.uiScale);
+  const accessibility = useSettingsStore((s) => s.accessibility);
+  const colorblind = accessibility.colorblindMode;
+  const uiScale = accessibility.uiScale;
+  const hudMode = accessibility.hudMode ?? 'adaptive';
+  const hudOpacity = accessibility.hudOpacity ?? 0.92;
+  const showRadar = accessibility.showRadar ?? true;
+  const showCompass = accessibility.showCompass ?? true;
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
   const inputSettings = useSettingsStore((s) => s.input);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
@@ -64,12 +75,17 @@ export function GameHUD({
   const liveFps = combatDebug?.performance.fps ?? diagnostics.fps;
   const viewport = useViewportMode();
   const compactHud = touchControlsVisible || viewport.isCompactLandscape;
+  const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
+  const missionVisualProfile = getMissionVisualProfile(selectedMissionId);
   const hasSeenVehicleHint = useMissionSelectionStore((s) => s.hasSeenVehicleControlHint);
   const markVehicleHintSeen = useMissionSelectionStore((s) => s.markVehicleControlHintSeen);
   const dismissTacticalHint = useMissionSelectionStore((s) => s.dismissTacticalHint);
 
   const [objectivesExpanded, setObjectivesExpanded] = useState(false);
   const [showHit, setShowHit] = useState(false);
+  const isIntenseCombat = hud.isAds || hud.crosshairSpread > 0.036 || Boolean(hud.incomingThreatWarning);
+  const secondaryChromeOpacity =
+    hudMode === 'minimal' ? 0.78 : hudMode === 'adaptive' && isIntenseCombat ? 0.84 : 1.0;
 
   useEffect(() => {
     if (!hitFeedback) return;
@@ -142,9 +158,12 @@ export function GameHUD({
   return (
     <div
       className="fixed inset-0 z-10 pointer-events-none select-none overflow-hidden"
-      style={{ transform: uiScale !== 1 ? `scale(${uiScale})` : undefined }}
+      style={{
+        transform: uiScale !== 1 ? `scale(${uiScale})` : undefined,
+        opacity: hudOpacity,
+      }}
       onClick={() => {
-        if (!touchControlsVisible && !viewport.isCoarsePointer && !downedState?.active) {
+        if (!touchControlsVisible && !viewport.isCoarsePointer && !downedState?.active && !tacticalOverviewOpen) {
           onRequestPointerLock();
         }
       }}
@@ -312,32 +331,43 @@ export function GameHUD({
       {/* Top Center Compact Strip: Compass + Score + Elapsed Time + Encounter-Gated Aircraft Health */}
       <div
         data-testid="hud-top-center-strip"
-        className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1"
-        style={{ top: 'max(6px, env(safe-area-inset-top, 0px))' }}
+        className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 transition-opacity duration-150"
+        style={{
+          top: 'max(6px, env(safe-area-inset-top, 0px))',
+          opacity: secondaryChromeOpacity,
+        }}
       >
-        <div
-          data-testid="hud-compass-strip"
-          className="bg-[#0B0E11]/72 border border-white/12 px-2.5 sm:px-3.5 py-0.5 rounded-sm flex items-center gap-2 sm:gap-2.5 font-mono text-[10px] sm:text-xs tabular-nums whitespace-nowrap shadow-sm"
-        >
-          <Compass className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 shrink-0" />
-          <span className="text-zinc-300">{Math.round(headingDeg)}°</span>
-          <span className="text-amber-400 font-bold w-4 text-center">{cardinal}</span>
-          {activeObjective && !activeObjective.completed && activeObjective.markerPos && (
-            <>
-              <span className="text-zinc-600">·</span>
-              <span className="text-amber-300 font-bold">
-                OBJ {formatObjectiveDistance(activeObjective) ?? 0}M
-              </span>
-            </>
-          )}
-          <span className="text-zinc-600">·</span>
-          <span className="text-zinc-200">SCORE {hud.score}</span>
-          <span className="text-zinc-600">·</span>
-          <span className="text-cyan-400">
-            {String(Math.floor(hud.elapsedSec / 60)).padStart(2, '0')}:
-            {String(hud.elapsedSec % 60).padStart(2, '0')}
-          </span>
-        </div>
+        {showCompass && (
+          <div
+            data-testid="hud-compass-strip"
+            className={`bg-[#0B0E11]/82 border border-white/14 py-0.5 rounded-sm flex items-center font-mono tabular-nums whitespace-nowrap shadow-sm ${
+              compactHud ? 'px-2 gap-1.5 text-[9.5px]' : 'px-3.5 gap-2.5 text-xs'
+            }`}
+          >
+            <Compass className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400 shrink-0" />
+            <span className="text-zinc-300">{Math.round(headingDeg)}°</span>
+            <span className="text-amber-400 font-bold w-4 text-center">{cardinal}</span>
+            {activeObjective && !activeObjective.completed && activeObjective.markerPos && (
+              <>
+                <span className="text-zinc-600">·</span>
+                <span className="text-amber-300 font-bold">
+                  OBJ {formatObjectiveDistance(activeObjective) ?? 0}M
+                </span>
+              </>
+            )}
+            {!compactHud && (
+              <>
+                <span className="text-zinc-600">·</span>
+                <span className="text-zinc-200">SCORE {hud.score}</span>
+              </>
+            )}
+            <span className="text-zinc-600">·</span>
+            <span className="text-cyan-400">
+              {String(Math.floor(hud.elapsedSec / 60)).padStart(2, '0')}:
+              {String(hud.elapsedSec % 60).padStart(2, '0')}
+            </span>
+          </div>
+        )}
 
         {!pointerLocked && !combatDebugOpen && !touchControlsVisible && !viewport.isCoarsePointer && (
           <button
@@ -382,42 +412,87 @@ export function GameHUD({
           left: `max(${topLeftOffsetPx}px, calc(env(safe-area-inset-left, 0px) + ${topLeftOffsetPx - 4}px))`,
         }}
       >
-        {/* Radar Mini-Map */}
-        <div
-          style={{ width: `${radarSizePx}px`, height: `${radarSizePx}px` }}
-          className="relative rounded-full bg-[#0B0E11]/78 border border-zinc-700/90 overflow-hidden shrink-0"
-        >
-          <div className="absolute inset-0 border border-zinc-800/70 rounded-full scale-50" />
+        {/* Intelligence-Graded Radar Mini-Map with Vertical Elevation Chevrons */}
+        {showRadar && (
           <div
-            className="absolute left-1/2 top-1/2 w-1.5 h-1.5 -ml-0.75 -mt-0.75 bg-cyan-400 rounded-full"
-            title="Player"
-          />
-          {hud.blips.slice(0, 28).map((b) => {
-            const dx = b.x - hud.playerX;
-            const dz = b.z - hud.playerZ;
-            const cos = Math.cos(hud.playerYaw);
-            const sin = Math.sin(hud.playerYaw);
-            const rx = dx * cos - dz * sin;
-            const rz = dx * sin + dz * cos;
-            const px = Math.max(3, Math.min(radarSizePx - 3, radarCenter + (rx / 95) * radarRadius));
-            const py = Math.max(3, Math.min(radarSizePx - 3, radarCenter + (rz / 95) * radarRadius));
-            const color =
-              b.kind === 'objective'
-                ? '#f59e0b'
-                : b.kind === 'friendly_vehicle'
-                  ? '#10b981'
-                  : b.kind === 'air'
-                    ? '#38bdf8'
-                    : threatColor;
-            return (
-              <div
-                key={b.id}
-                className="absolute w-1.5 h-1.5 -ml-0.75 -mt-0.75 rounded-full"
-                style={{ left: `${px}px`, top: `${py}px`, backgroundColor: color }}
-              />
-            );
-          })}
-        </div>
+            data-testid="hud-radar-minimap"
+            style={{ width: `${radarSizePx}px`, height: `${radarSizePx}px` }}
+            className="relative rounded-full bg-[#0B0E11]/85 border border-cyan-500/35 overflow-hidden shrink-0 shadow-[inset_0_0_14px_rgba(6,182,212,0.12)]"
+          >
+            <div className="absolute inset-0 border border-cyan-500/15 rounded-full scale-50" />
+            <div className="absolute inset-x-0 top-1/2 h-px bg-cyan-500/12" />
+            <div className="absolute inset-y-0 left-1/2 w-px bg-cyan-500/12" />
+            <div
+              className="absolute left-1/2 top-1/2 w-1.5 h-1.5 -ml-0.75 -mt-0.75 bg-cyan-400 rounded-full ring-2 ring-cyan-400/30"
+              title="Player"
+            />
+            {hud.blips.slice(0, 28).map((b) => {
+              const dx = b.x - hud.playerX;
+              const dz = b.z - hud.playerZ;
+              const cos = Math.cos(hud.playerYaw);
+              const sin = Math.sin(hud.playerYaw);
+              const rx = dx * cos - dz * sin;
+              const rz = dx * sin + dz * cos;
+              const px = Math.max(4, Math.min(radarSizePx - 4, radarCenter + (rx / 95) * radarRadius));
+              const py = Math.max(4, Math.min(radarSizePx - 4, radarCenter + (rz / 95) * radarRadius));
+              const color =
+                b.kind === 'objective'
+                  ? '#f59e0b'
+                  : b.kind === 'friendly_vehicle'
+                    ? '#10b981'
+                    : b.kind === 'air'
+                      ? '#38bdf8'
+                      : threatColor;
+              const isStale = b.detectionSource === 'stale';
+              const isAcoustic = b.detectionSource === 'acoustic';
+              const elevCode = b.elevationCode ?? 'same';
+              return (
+                <div
+                  key={b.id}
+                  data-testid={`hud-radar-blip-${b.kind}`}
+                  data-detection-source={b.detectionSource ?? 'los'}
+                  data-elevation-code={elevCode}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center pointer-events-none"
+                  style={{
+                    left: `${px}px`,
+                    top: `${py}px`,
+                    opacity: isStale ? 0.48 : b.confidence ?? 1,
+                  }}
+                >
+                  {elevCode === 'above' && !compactHud && (
+                    <span
+                      className="text-[6px] leading-none font-mono font-bold -mb-0.5"
+                      style={{ color }}
+                    >
+                      ▲
+                    </span>
+                  )}
+                  <div
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isStale
+                        ? 'border border-dashed bg-transparent'
+                        : isAcoustic
+                          ? 'ring-1 ring-amber-400/70'
+                          : ''
+                    }`}
+                    style={{
+                      backgroundColor: isStale ? 'transparent' : color,
+                      borderColor: color,
+                    }}
+                  />
+                  {elevCode === 'below' && !compactHud && (
+                    <span
+                      className="text-[6px] leading-none font-mono font-bold -mt-0.5"
+                      style={{ color }}
+                    >
+                      ▼
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Compact Mission Indicator + Integrated Mobile Vitals */}
         <div className="flex flex-col gap-1 pointer-events-none">
@@ -671,7 +746,10 @@ export function GameHUD({
           right: 'max(8px, env(safe-area-inset-right, 0px))',
         }}
       >
-        <div className="flex items-center gap-1.5 pointer-events-none">
+        <div
+          data-testid="hud-top-right-bar"
+          className="flex items-center gap-1.5 pointer-events-none"
+        >
           {/* Compact Inline Weapon/Vehicle Readout on Mobile (prevents vertical stacking into the right look zone) */}
           {compactHud && (
             <div
@@ -740,6 +818,30 @@ export function GameHUD({
 
           <button
             type="button"
+            data-testid="hud-tactical-overview-btn"
+            aria-label="Toggle Tactical Overview Drawer"
+            aria-expanded={tacticalOverviewOpen}
+            title="Toggle Tactical Overview ([TAB])"
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleTacticalOverview();
+            }}
+            className={`pointer-events-auto min-w-[40px] min-h-[40px] ${
+              compactHud ? 'px-2' : 'px-2.5'
+            } rounded-sm border flex items-center justify-center gap-1.5 font-mono text-[10px] transition-colors ${
+              tacticalOverviewOpen
+                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
+                : 'bg-[#0B0E11]/85 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            {!compactHud && <span className="hidden sm:inline">[TAB] INTEL</span>}
+          </button>
+
+          <button
+            type="button"
             aria-label="Toggle Touch Controls"
             title={touchControlsVisible ? 'Hide Touch Controls' : 'Show Touch Controls'}
             onMouseDown={(e) => e.stopPropagation()}
@@ -755,7 +857,7 @@ export function GameHUD({
             }`}
           >
             <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden sm:inline">TOUCH</span>
+            {!compactHud && <span className="hidden sm:inline">TOUCH</span>}
           </button>
 
           {onPause && (
@@ -958,8 +1060,8 @@ export function GameHUD({
       {hud.subtitleText && (
         <div
           data-testid="hud-tier2-radio-subtitle"
-          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/86 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 max-w-md sm:max-w-xl text-center ${
-            compactHud ? 'bottom-12' : 'bottom-24'
+          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/88 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 text-center ${
+            compactHud ? 'bottom-[68px] max-w-[320px]' : 'bottom-24 max-w-md sm:max-w-xl'
           }`}
         >
           <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -1016,141 +1118,230 @@ export function GameHUD({
         </div>
       )}
 
-      {/* Desktop Bottom-Right Weapon / Vehicle Status Panel */}
+      {/* Desktop Bottom-Right Ordnance Strip + Weapon / Vehicle Status Panel (single flex group to prevent overlap) */}
       {!compactHud && (
-        <div className="absolute bottom-4 right-4 bg-[#0B0E11]/85 border border-zinc-800 px-4 py-3 rounded-sm min-w-[250px] flex flex-col items-end">
-          {hud.inVehicle ? (
-            <>
-              <div className="font-mono text-[10px] uppercase tracking-widest text-emerald-400">
-                CAM: {VEHICLE_CAMERA_MODE_LABELS[hud.vehicleCameraMode]} [F]
+        <div className="absolute bottom-4 right-4 flex items-end gap-3">
+          {hud.ordnance && (
+            <div className="hidden md:flex items-center gap-2 bg-[#0B0E11]/85 border border-zinc-800 px-3 py-2 rounded-sm font-mono text-[10px] shrink-0">
+              <div className="flex flex-col pr-2 border-r border-zinc-800">
+                <span className="text-zinc-400">[C] C4 PACK</span>
+                <span className={hud.ordnance.c4Deployed > 0 ? 'text-amber-400 font-bold' : 'text-zinc-200'}>
+                  INV {hud.ordnance.c4Inventory} · SET {hud.ordnance.c4Deployed}/{hud.ordnance.c4MaxDeployed}
+                </span>
               </div>
-              <div className="font-display text-lg font-bold uppercase text-zinc-100 mt-0.5">
-                {hud.vehicleName}
+
+              <div className="flex flex-col px-2 border-r border-zinc-800">
+                <span className="text-zinc-400 flex items-center gap-1">
+                  <Bomb className="w-3 h-3 text-amber-400" />
+                  [V]/[SH+V] {hud.ordnance.selectedBombShort}
+                </span>
+                <span className={hud.ordnance.bombCooldownSec > 0 ? 'text-red-400' : 'text-cyan-300'}>
+                  {hud.ordnance.bombCooldownSec > 0
+                    ? `CD ${hud.ordnance.bombCooldownSec.toFixed(1)}s`
+                    : hud.ordnance.sandboxAuthorized
+                      ? 'SANDBOX READY'
+                      : `${hud.ordnance.selectedBombCost} REQ`}
+                </span>
               </div>
-              <div className="flex items-baseline gap-3 mt-1 font-mono tabular-nums">
+
+              <div className="flex flex-col pl-1">
+                <span className="text-zinc-400">[N] TRIDENT-X</span>
                 <span
-                  className={`px-1.5 py-0.5 text-xs font-bold rounded-xs ${
-                    hud.vehicleGear === 'REVERSE'
-                      ? 'bg-red-600/80 text-white'
-                      : hud.vehicleGear === 'BRAKING' || hud.vehicleGear === 'NEUTRAL_HOLD'
-                        ? 'bg-amber-500/80 text-zinc-950'
-                        : 'bg-emerald-500/25 border border-emerald-400/60 text-emerald-300'
-                  }`}
+                  className={
+                    hud.ordnance.nukeUsed
+                      ? 'text-zinc-500'
+                      : hud.ordnance.sandboxAuthorized || hud.ordnance.requisitionPoints >= hud.ordnance.nukeCost
+                        ? 'text-amber-400 font-bold'
+                        : 'text-zinc-400'
+                  }
                 >
-                  {hud.vehicleGear === 'REVERSE'
-                    ? 'REV'
-                    : hud.vehicleGear === 'NEUTRAL_HOLD'
-                      ? 'N'
-                      : hud.vehicleGear === 'BRAKING'
-                        ? 'BRK'
-                        : 'FWD'}
-                </span>
-                <span className="text-2xl font-bold text-amber-400">{hud.vehicleSpeedKmh} KM/H</span>
-                <span className="text-xs text-zinc-400">HULL {hud.vehicleHealth}%</span>
-              </div>
-              <div className="mt-1 font-mono text-[10px] text-zinc-400">
-                [W/S] GAS/REV · [A/D] STEER · [SPACE] DRIFT · [E] EXIT
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-3 w-full justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 bg-zinc-800 text-amber-400">
-                  {hud.fireMode.toUpperCase()} [B]
-                </span>
-                <span className="font-display text-sm font-bold uppercase tracking-wider text-zinc-200">
-                  {hud.weaponName}
+                  {hud.ordnance.nukeUsed
+                    ? 'EXPENDED'
+                    : hud.ordnance.sandboxAuthorized
+                      ? 'SANDBOX READY'
+                      : `${hud.ordnance.nukeCost} REQ`}
                 </span>
               </div>
-
-              <div className="flex items-center justify-between w-full mt-1.5 gap-4">
-                <WeaponSilhouette weaponId={hud.weaponId} className="w-24 h-7 text-zinc-300" />
-                <div className="text-right font-mono tabular-nums">
-                  <span className={`text-3xl font-bold ${hud.ammoInMag === 0 ? 'text-red-400' : 'text-white'}`}>
-                    {hud.ammoInMag}
-                  </span>
-                  <span className="text-sm text-zinc-400 ml-1">/ {hud.reserveAmmo}</span>
-                </div>
-              </div>
-
-              {hud.isReloading && (
-                <div className="w-full mt-2">
-                  <div className="h-1 bg-zinc-800 overflow-hidden">
-                    <div
-                      className="h-full bg-amber-400"
-                      style={{ width: `${Math.round(hud.reloadProgress * 100)}%` }}
-                    />
-                  </div>
-                  <div className="font-mono text-[10px] text-amber-400 text-right mt-0.5">RELOADING...</div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between w-full gap-2 mt-1.5 font-mono text-[10px] text-zinc-400">
-                <span>[1-9] WEAPONS · [G] FRAG x{hud.grenades}</span>
-                <button
-                  type="button"
-                  data-testid="desktop-btn-rpg"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    inputManager?.queueWeaponSlot(hud.rpgEquipped ? 1 : 7);
-                  }}
-                  className={`pointer-events-auto px-2 py-0.5 rounded-xs border flex items-center gap-1 font-bold transition-colors ${
-                    hud.rpgEquipped
-                      ? 'bg-amber-500/30 border-amber-400 text-amber-200'
-                      : 'bg-[#141920] border-amber-500/50 text-amber-300 hover:border-amber-400'
-                  }`}
-                >
-                  <Rocket className="w-3 h-3" />
-                  <span>[7] RPG {hud.rpgAmmoInMag}/{hud.rpgReserveAmmo}</span>
-                </button>
-              </div>
-            </>
+            </div>
           )}
+
+          <div className="bg-[#0B0E11]/85 border border-zinc-800 px-4 py-3 rounded-sm min-w-[260px] flex flex-col items-end shrink-0">
+            {hud.inVehicle ? (
+              <>
+                <div className="font-mono text-[10px] uppercase tracking-widest text-emerald-400">
+                  CAM: {VEHICLE_CAMERA_MODE_LABELS[hud.vehicleCameraMode]} [F]
+                </div>
+                <div className="font-display text-lg font-bold uppercase text-zinc-100 mt-0.5">
+                  {hud.vehicleName}
+                </div>
+                <div className="flex items-baseline gap-3 mt-1 font-mono tabular-nums">
+                  <span
+                    className={`px-1.5 py-0.5 text-xs font-bold rounded-xs ${
+                      hud.vehicleGear === 'REVERSE'
+                        ? 'bg-red-600/80 text-white'
+                        : hud.vehicleGear === 'BRAKING' || hud.vehicleGear === 'NEUTRAL_HOLD'
+                          ? 'bg-amber-500/80 text-zinc-950'
+                          : 'bg-emerald-500/25 border border-emerald-400/60 text-emerald-300'
+                    }`}
+                  >
+                    {hud.vehicleGear === 'REVERSE'
+                      ? 'REV'
+                      : hud.vehicleGear === 'NEUTRAL_HOLD'
+                        ? 'N'
+                        : hud.vehicleGear === 'BRAKING'
+                          ? 'BRK'
+                          : 'FWD'}
+                  </span>
+                  <span className="text-2xl font-bold text-amber-400">{hud.vehicleSpeedKmh} KM/H</span>
+                  <span className="text-xs text-zinc-400">HULL {hud.vehicleHealth}%</span>
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-zinc-400">
+                  [W/S] GAS/REV · [A/D] STEER · [SPACE] DRIFT · [E] EXIT
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 w-full justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-widest px-1.5 py-0.5 bg-zinc-800 text-amber-400">
+                    {hud.fireMode.toUpperCase()} [B]
+                  </span>
+                  <span className="font-display text-sm font-bold uppercase tracking-wider text-zinc-200">
+                    {hud.weaponName}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between w-full mt-1.5 gap-4">
+                  <WeaponSilhouette
+                    weaponId={hud.weaponId}
+                    className="w-28 h-8 text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.4)]"
+                  />
+                  <div className="text-right font-mono tabular-nums">
+                    <span className={`text-3xl font-bold ${hud.ammoInMag === 0 ? 'text-red-400' : 'text-white'}`}>
+                      {hud.ammoInMag}
+                    </span>
+                    <span className="text-sm text-zinc-400 ml-1">/ {hud.reserveAmmo}</span>
+                  </div>
+                </div>
+
+                {hud.isReloading && (
+                  <div className="w-full mt-2">
+                    <div className="h-1 bg-zinc-800 overflow-hidden">
+                      <div
+                        className="h-full bg-amber-400"
+                        style={{ width: `${Math.round(hud.reloadProgress * 100)}%` }}
+                      />
+                    </div>
+                    <div className="font-mono text-[10px] text-amber-400 text-right mt-0.5">RELOADING...</div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between w-full gap-3 mt-1.5 font-mono text-[10px] text-zinc-400">
+                  <span>[1-9] WEAPONS · [G] FRAG x{hud.grenades}</span>
+                  <button
+                    type="button"
+                    data-testid="desktop-btn-rpg"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      inputManager?.queueWeaponSlot(hud.rpgEquipped ? 1 : 7);
+                    }}
+                    className={`pointer-events-auto px-2 py-0.5 rounded-xs border flex items-center gap-1 font-bold transition-colors ${
+                      hud.rpgEquipped
+                        ? 'bg-amber-500/30 border-amber-400 text-amber-200'
+                        : 'bg-[#141920] border-amber-500/50 text-amber-300 hover:border-amber-400'
+                    }`}
+                  >
+                    <Rocket className="w-3 h-3" />
+                    <span>[7] RPG {hud.rpgAmmoInMag}/{hud.rpgReserveAmmo}</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Desktop Tactical Ordnance Strip */}
-      {!compactHud && hud.ordnance && (
-        <div className="absolute bottom-4 right-[276px] hidden md:flex items-center gap-2 bg-[#0B0E11]/85 border border-zinc-800 px-3 py-2 rounded-sm font-mono text-[10px]">
-          <div className="flex flex-col pr-2 border-r border-zinc-800">
-            <span className="text-zinc-400">[C] C4 PACK</span>
-            <span className={hud.ordnance.c4Deployed > 0 ? 'text-amber-400 font-bold' : 'text-zinc-200'}>
-              INV {hud.ordnance.c4Inventory} · SET {hud.ordnance.c4Deployed}/{hud.ordnance.c4MaxDeployed}
-            </span>
+      {/* Non-Pausing [TAB] Tactical Overview Drawer (Full Stage Breakdown, Retroactive Status & Theater Intel) */}
+      {(tacticalOverviewOpen || hudMode === 'expanded') && !downedState?.active && (
+        <div
+          data-testid="hud-tactical-overview-drawer"
+          className="fixed top-14 right-4 z-35 w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-140px)] overflow-y-auto bg-[#0B0E11]/95 border border-cyan-500/60 rounded-sm shadow-2xl p-3.5 space-y-3 pointer-events-auto"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-2 border-b border-zinc-800 pb-2">
+            <div>
+              <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-cyan-400">
+                Tactical Command Overview // {missionVisualProfile.operationCode}
+              </div>
+              <div className="font-display text-sm sm:text-base font-bold uppercase text-white mt-0.5">
+                {hud.activeStageTitle} (Stage {hud.activeStageIndex}/{hud.totalStages})
+              </div>
+              <div className="font-mono text-[10px] text-zinc-400">
+                {missionVisualProfile.operationTitle} · {missionVisualProfile.timeOfDayLabel}
+              </div>
+            </div>
+            {tacticalOverviewOpen && (
+              <button
+                type="button"
+                data-testid="close-tactical-overview"
+                onClick={() => setTacticalOverviewOpen(false)}
+                className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xs font-mono text-[10px] text-zinc-300 flex items-center gap-1 cursor-pointer"
+              >
+                <X className="w-3 h-3" /> [TAB]
+              </button>
+            )}
           </div>
 
-          <div className="flex flex-col px-2 border-r border-zinc-800">
-            <span className="text-zinc-400 flex items-center gap-1">
-              <Bomb className="w-3 h-3 text-amber-400" />
-              [V]/[SH+V] {hud.ordnance.selectedBombShort}
-            </span>
-            <span className={hud.ordnance.bombCooldownSec > 0 ? 'text-red-400' : 'text-cyan-300'}>
-              {hud.ordnance.bombCooldownSec > 0
-                ? `CD ${hud.ordnance.bombCooldownSec.toFixed(1)}s`
-                : hud.ordnance.sandboxAuthorized
-                  ? 'SANDBOX READY'
-                  : `${hud.ordnance.selectedBombCost} REQ`}
-            </span>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-amber-400">
+              <span>Operation Objectives &amp; Stage Chain</span>
+              <span>
+                {completedObjectivesCount}/{hud.objectives.length} COMPLETE
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {hud.objectives.map((o) => {
+                const distMeters = formatObjectiveDistance(o);
+                const isLocked = o.status === 'locked';
+                const isActive = o.status === 'active' && !o.completed;
+                return (
+                  <div
+                    key={o.id}
+                    className={`p-2 rounded-xs border text-xs space-y-0.5 ${
+                      o.completed
+                        ? 'bg-emerald-950/20 border-emerald-500/35 text-emerald-200'
+                        : isActive
+                          ? 'bg-amber-500/12 border-amber-400/70 text-zinc-100'
+                          : 'bg-[#141920]/90 border-zinc-800 text-zinc-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold">
+                        <span className="font-mono text-[10px] text-cyan-400 mr-1.5">[S{o.stageIndex}]</span>
+                        {o.title}
+                      </span>
+                      <span className="font-mono text-[10px] tabular-nums shrink-0 text-amber-300">
+                        {o.completed
+                          ? o.bypassed
+                            ? 'RETROACTIVE / BYPASSED'
+                            : 'COMPLETED'
+                          : `${distMeters !== null ? `${distMeters}m · ` : ''}${o.current}/${o.target}`}
+                      </span>
+                    </div>
+                    {o.description && <div className="text-[11px] text-zinc-300">{o.description}</div>}
+                    {isLocked && o.blockedReason && (
+                      <div className="font-mono text-[10px] text-amber-300/90">{o.blockedReason}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="flex flex-col pl-1">
-            <span className="text-zinc-400">[N] TRIDENT-X</span>
-            <span
-              className={
-                hud.ordnance.nukeUsed
-                  ? 'text-zinc-500'
-                  : hud.ordnance.sandboxAuthorized || hud.ordnance.requisitionPoints >= hud.ordnance.nukeCost
-                    ? 'text-amber-400 font-bold'
-                    : 'text-zinc-400'
-              }
-            >
-              {hud.ordnance.nukeUsed
-                ? 'EXPENDED'
-                : hud.ordnance.sandboxAuthorized
-                  ? 'SANDBOX READY'
-                  : `${hud.ordnance.nukeCost} REQ`}
-            </span>
+          <div className="pt-2 border-t border-zinc-800 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+            <span>RADAR: LOS / ACOUSTIC / RECON / STALE</span>
+            <span className="text-cyan-300">[TAB] Toggle Overview &amp; Cursor</span>
           </div>
         </div>
       )}

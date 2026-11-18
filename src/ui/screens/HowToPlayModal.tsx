@@ -22,7 +22,7 @@ const SECTIONS = [
       ['Shift', 'Tactical Sprint'],
       ['Ctrl / Alt', 'Crouch / Sprint-Slide (while sprinting)'],
       ['Space', 'Jump / Vault Low Cover'],
-      ['Mouse / Tab', 'Free Look (Pointer Lock) / Toggle Cursor Lock'],
+      ['Tab', 'Toggle Non-Pausing Tactical Overview Drawer & Cursor Lock'],
     ],
   },
   {
@@ -34,13 +34,13 @@ const SECTIONS = [
       ['R / B / G', 'Reload Magazine / Cycle Fire Mode / Throw Frag'],
       ['C / Shift+C', 'Place C4 Satchel Charge / Remotely Detonate C4'],
       ['V / Shift+V', 'Call Tactical Bomb Strike / Cycle Bomb Type'],
-      ['N + Enter', 'Request & Authorize TRIDENT-X Strategic Strike'],
+      ['N + Enter', 'Request & Authorize [N] TRIDENT-X Strategic Strike'],
     ],
   },
   {
     title: 'Vehicles, Guided Missiles & Systems',
     items: [
-      ['E', 'Enter/Exit Vehicle, Collect Supply Crate, Plant Demolition Charge'],
+      ['E', 'Enter/Exit Vehicle, Operate Cargo Lift, Plant Charge'],
       ['F', 'Cycle Vehicle Camera (Chase / Driver FPV / Turret / Orbit)'],
       ['Slot 8 (FIM-92X)', 'Hold aim on Helicopters, Drones, Jets or APCs to Lock On'],
       ['Esc', 'Pause Operation / Unlock Cursor'],

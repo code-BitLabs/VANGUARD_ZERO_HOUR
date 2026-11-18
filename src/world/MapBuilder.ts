@@ -17,6 +17,8 @@ import {
   VerticalWorldContext,
 } from './VerticalStructuresBuilder';
 import { WorldChunkManager } from './WorldChunkManager';
+import { getMissionVisualProfile } from './VisualBible';
+import { globalStructureReconciliation } from './StructureReconciliationRegistry';
 
 export interface BuiltWorldData {
   coverNodes: THREE.Vector3[];
@@ -55,7 +57,11 @@ export function buildWorldMap(
   let surfaceCounter = 1;
   let portalCounter = 0;
 
+  globalStructureReconciliation.clearMission(missionId);
+  const visualProfile = getMissionVisualProfile(missionId);
+
   const verticalCtx: VerticalWorldContext = {
+    missionId,
     scene,
     assetManager,
     resourceManager,
@@ -88,8 +94,8 @@ export function buildWorldMap(
   };
   collisionWorld.setTerrainHeightFn(heightFn);
 
-  // Extended terrain mesh (280m x 280m so there is never an abrupt void drop-off)
-  const groundGeo = new THREE.PlaneGeometry(320, 320, 48, 48);
+  // Extended terrain mesh (320m x 320m at 72x72 subdivision with multi-layer splat/slope/curvature/moisture vertex colors)
+  const groundGeo = new THREE.PlaneGeometry(320, 320, 72, 72);
   groundGeo.rotateX(-Math.PI / 2);
   const posAttr = groundGeo.attributes.position;
   for (let i = 0; i < posAttr.count; i++) {
@@ -98,6 +104,40 @@ export function buildWorldMap(
     posAttr.setY(i, heightFn(vx, vz));
   }
   groundGeo.computeVertexNormals();
+
+  // Compute multi-layer splat / slope / moisture / debris vertex color modulation
+  const normAttr = groundGeo.attributes.normal;
+  const colorArr = new Float32Array(posAttr.count * 3);
+  const cBase = new THREE.Color(visualProfile.terrainSplatLayers.baseLayerColor);
+  const cSlope = new THREE.Color(visualProfile.terrainSplatLayers.slopeRockColor);
+  const cMoist = new THREE.Color(visualProfile.terrainSplatLayers.moisturePathColor);
+  const cDebris = new THREE.Color(visualProfile.terrainSplatLayers.debrisHighlightColor);
+  const cWork = new THREE.Color();
+
+  for (let i = 0; i < posAttr.count; i++) {
+    const vx = posAttr.getX(i);
+    const vy = posAttr.getY(i);
+    const vz = posAttr.getZ(i);
+    const ny = normAttr.getY(i);
+    const slopeFactor = Math.min(1, Math.max(0, (1 - ny) * 3.8));
+    const moistureFactor =
+      mapId === 'jungle_zone'
+        ? Math.max(0, 1 - Math.abs(vz - 16) / 14)
+        : Math.max(0, 1 - Math.abs(Math.abs(vx) - 10) / 8) * 0.65;
+    const microNoise = 0.5 + 0.5 * Math.sin(vx * 0.17 + vz * 0.23) * Math.cos(vx * 0.11 - vz * 0.19);
+    const crestFactor = Math.min(1, Math.max(0, vy / 6.0)) * microNoise;
+
+    cWork.copy(cBase);
+    cWork.lerp(cMoist, moistureFactor * 0.55);
+    cWork.lerp(cSlope, slopeFactor * 0.75);
+    cWork.lerp(cDebris, crestFactor * 0.42);
+    // Keep brightness normalized so texture details pop cleanly
+    cWork.multiplyScalar(1.18);
+    colorArr[i * 3] = Math.min(1, cWork.r);
+    colorArr[i * 3 + 1] = Math.min(1, cWork.g);
+    colorArr[i * 3 + 2] = Math.min(1, cWork.b);
+  }
+  groundGeo.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
   resourceManager.registerGeometry(groundGeo, scope, `geo_ground_${missionId}`);
 
   const groundPattern =
@@ -108,13 +148,18 @@ export function buildWorldMap(
         : mapId === 'industrial_complex'
           ? 'concrete'
           : 'asphalt';
-  const groundMat = assetManager.getSharedMaterial(`ground_${groundPattern}`, {
+  const baseGroundMat = assetManager.getSharedMaterial(`ground_${groundPattern}`, {
     pattern: groundPattern,
-    repeat: [24, 24],
-    roughness: 0.9,
-    metalness: 0.05,
-    color: mapId === 'desert_base' ? 0xd2b48c : mapId === 'jungle_zone' ? 0x5c7448 : 0x777c82,
+    repeat: [28, 28],
+    roughness: missionId === 3 ? 0.42 : 0.88,
+    metalness: missionId === 3 ? 0.22 : 0.05,
+    color: 0xffffff,
   });
+  const groundMat = baseGroundMat.clone();
+  groundMat.vertexColors = true;
+  groundMat.needsUpdate = true;
+  resourceManager.registerMaterial(groundMat, scope);
+
   const groundMesh = new THREE.Mesh(groundGeo, groundMat);
   groundMesh.receiveShadow = true;
   scene.add(groundMesh);
@@ -401,6 +446,37 @@ export function buildWorldMap(
         maxZ: z + d * 0.44,
       });
     }
+
+    globalStructureReconciliation.registerStructure({
+      missionId,
+      structureId: id,
+      kind: 'enterable_building',
+      visualKitId:
+        style === 'bunker'
+          ? 'kit_desert_fortified_bunker'
+          : style === 'warehouse'
+            ? 'kit_foundry_warehouse_hall'
+            : h >= 14
+              ? 'kit_urban_highrise_aa_tower'
+              : 'kit_urban_concrete_midrise',
+      centerX: x,
+      centerZ: z,
+      baseY: y,
+      authoritativeWalkableSopY: accessibleRoof ? y + h : y,
+      width: w,
+      depth: d,
+      parapetHeight: 1.15,
+      surfaceIds: [],
+      portalKeys: [],
+      colliderIds: [
+        `${id}_front_wall_L`,
+        `${id}_front_wall_R`,
+        `${id}_back_wall_L`,
+        `${id}_back_wall_R`,
+        `${id}_ceiling_upper`,
+      ],
+    });
+
     return y;
   };
 
@@ -1098,6 +1174,18 @@ export function buildWorldMap(
   // Natural mountain/perimeter ridge ring around 116m radius so outdoor maps feel expansive
   buildPerimeterRidges(scene, mapId, assetManager, resourceManager, scope);
 
+  // Stage 5B TRN-18: Macro / Meso / Micro Mission-Specific Environmental Composition
+  buildMissionEnvironmentalStorytelling(
+    missionId,
+    mapId,
+    scene,
+    assetManager,
+    resourceManager,
+    chunkManager,
+    animatedProps,
+    scope
+  );
+
   // Extraction Beacon for Mission 5
   let extractionBeacon: THREE.Group | null = null;
   if (missionId === 5) {
@@ -1119,6 +1207,255 @@ export function buildWorldMap(
     navPortals,
     cargoLifts,
   };
+}
+
+function buildMissionEnvironmentalStorytelling(
+  missionId: number,
+  mapId: MapId,
+  scene: THREE.Scene,
+  assets: AssetManager,
+  res: ResourceManager,
+  chunkManager: WorldChunkManager,
+  animatedProps: Array<{ update: (elapsed: number) => void }>,
+  scope: ResourceScope
+): void {
+  const grp = new THREE.Group();
+  grp.name = `mission_${missionId}_landmarks`;
+
+  const steelMat = assets.getSharedMaterial('landmark_steel', {
+    pattern: 'metal_plate',
+    roughness: 0.44,
+    metalness: 0.74,
+    color: 0x3b4450,
+  });
+  const concreteMat = assets.getSharedMaterial('landmark_concrete', {
+    pattern: 'concrete',
+    roughness: 0.88,
+    metalness: 0.08,
+    color: 0x686e75,
+  });
+  const hazardMat = assets.getSharedMaterial('landmark_hazard', {
+    pattern: 'warning_stripe',
+    roughness: 0.6,
+    metalness: 0.25,
+  });
+
+  const addLandmarkBox = (
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    mat: THREE.Material,
+    rx = 0,
+    ry = 0,
+    rz = 0
+  ): THREE.Mesh => {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    res.registerGeometry(geo, scope);
+    const m = new THREE.Mesh(geo, mat);
+    m.userData.skipBvh = true;
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    grp.add(m);
+    return m;
+  };
+
+  if (missionId === 1) {
+    // M1 OP. IRON DAWN: Collapsed Elevated Overpass Span framing Northern Horizon + Burned Transit Bus + Street Gantries
+    addLandmarkBox(3.4, 9.2, 3.4, -22, 4.6, -78, concreteMat);
+    addLandmarkBox(3.4, 9.2, 3.4, 22, 4.6, -78, concreteMat);
+    addLandmarkBox(24, 1.6, 8.5, -14, 9.4, -78, concreteMat, 0, 0, -0.14); // fractured west overpass deck
+    addLandmarkBox(24, 1.6, 8.5, 14, 9.4, -78, concreteMat, 0, 0, 0.12); // fractured east overpass deck
+    addLandmarkBox(18, 0.55, 0.55, 0, 8.8, -78, steelMat, 0, 0, 0.06); // exposed steel girder
+
+    // Overhead highway directional sign gantry at z = 12 (8.2m clearance above boulevard)
+    addLandmarkBox(0.45, 8.6, 0.45, -11.5, 4.3, 12, steelMat);
+    addLandmarkBox(0.45, 8.6, 0.45, 11.5, 4.3, 12, steelMat);
+    addLandmarkBox(24.0, 0.55, 0.55, 0, 8.4, 12, steelMat);
+    const signBoardMat = assets.getSharedMaterial('m1_sign_green', {
+      color: 0x14532d,
+      roughness: 0.55,
+      metalness: 0.25,
+    });
+    addLandmarkBox(9.5, 2.1, 0.2, -3.5, 8.4, 12.35, signBoardMat);
+    addLandmarkBox(6.5, 1.8, 0.2, 5.2, 8.4, 12.35, hazardMat);
+  } else if (missionId === 2 || mapId === 'desert_base') {
+    // M2 OP. RED DUST: Twin Pressurized LNG Horton-Spheres + Overhead Refinery Pipeline Bridge + Solar Array
+    const sphereGeo = new THREE.SphereGeometry(5.8, 18, 14);
+    res.registerGeometry(sphereGeo, scope);
+    const tankWhiteMat = assets.getSharedMaterial('m2_lng_sphere', {
+      color: 0xd6cfc2,
+      roughness: 0.42,
+      metalness: 0.58,
+    });
+    for (const sx of [-48, 48]) {
+      const sph = new THREE.Mesh(sphereGeo, tankWhiteMat);
+      sph.userData.skipBvh = true;
+      sph.position.set(sx, 7.6, -44);
+      sph.castShadow = true;
+      grp.add(sph);
+      for (const [lx, lz] of [
+        [-3.5, -3.5],
+        [3.5, -3.5],
+        [-3.5, 3.5],
+        [3.5, 3.5],
+      ]) {
+        addLandmarkBox(0.55, 7.2, 0.55, sx + lx, 3.6, -44 + lz, steelMat);
+      }
+    }
+    // Overhead twin refinery pipeline bridge at z = -18 (y = 7.8m clearance)
+    addLandmarkBox(0.6, 8.0, 0.6, -18, 4.0, -18, steelMat);
+    addLandmarkBox(0.6, 8.0, 0.6, 18, 4.0, -18, steelMat);
+    const pipeGeo = new THREE.CylinderGeometry(0.48, 0.48, 37, 12);
+    pipeGeo.rotateZ(Math.PI / 2);
+    res.registerGeometry(pipeGeo, scope);
+    for (const pzOff of [-0.65, 0.65]) {
+      const pipe = new THREE.Mesh(pipeGeo, steelMat);
+      pipe.userData.skipBvh = true;
+      pipe.position.set(0, 7.6, -18 + pzOff);
+      grp.add(pipe);
+    }
+  }
+
+  if (missionId === 3) {
+    // M3 OP. NIGHTFALL: Geodesic Radome Domes on Northern Towers + Wet Rain-Slicked Specular Boulevard Puddles + Cyan Tactical Billboards
+    const radomeGeo = new THREE.IcosahedronGeometry(3.8, 1);
+    res.registerGeometry(radomeGeo, scope);
+    const radomeMat = assets.getSharedMaterial('m3_radome', {
+      color: 0xcbd5e1,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 0.22,
+      roughness: 0.35,
+      metalness: 0.45,
+    });
+    for (const [rx, ry, rz] of [
+      [-26, 29.5, -42],
+      [26, 23.5, -44],
+    ] as const) {
+      const dome = new THREE.Mesh(radomeGeo, radomeMat);
+      dome.userData.skipBvh = true;
+      dome.position.set(rx, ry, rz);
+      grp.add(dome);
+    }
+
+    // Rain-slicked specular asphalt reflection puddles along the nocturnal boulevard
+    const puddleMat = assets.getSharedMaterial('m3_rain_puddle', {
+      color: 0x0f172a,
+      roughness: 0.05,
+      metalness: 0.92,
+    });
+    const puddleGeo = new THREE.CircleGeometry(3.6, 16);
+    puddleGeo.rotateX(-Math.PI / 2);
+    res.registerGeometry(puddleGeo, scope);
+    for (const [px, pz, sx, sz] of [
+      [-3.5, 24, 1.4, 2.1],
+      [4.2, 6, 1.2, 1.8],
+      [-2.8, -12, 1.5, 2.3],
+      [3.6, -32, 1.3, 1.9],
+    ] as const) {
+      const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+      puddle.userData.skipBvh = true;
+      puddle.position.set(px, 0.032, pz);
+      puddle.scale.set(sx, 1, sz);
+      grp.add(puddle);
+    }
+
+    // Emissive cyan/amber blackout sector beacons on high-rise facades
+    const neonCyan = assets.getSharedMaterial('m3_neon_cyan', {
+      color: 0x22d3ee,
+      emissive: 0x06b6d4,
+      emissiveIntensity: 1.15,
+    });
+    addLandmarkBox(0.18, 9.5, 0.45, -19.8, 10.5, 30, neonCyan);
+    addLandmarkBox(0.18, 9.5, 0.45, 19.8, 10.5, 28, neonCyan);
+  }
+
+  if (missionId === 4 || mapId === 'jungle_zone') {
+    // M4 OP. VIPER CANOPY: Suspension Bridge Cable Towers + Mossy River Boulders + Camo Net Canopies
+    const boulderGeo = new THREE.DodecahedronGeometry(1.35, 1);
+    res.registerGeometry(boulderGeo, scope);
+    const mossRockMat = assets.getSharedMaterial('m4_moss_boulder', {
+      color: 0x3b4d38,
+      roughness: 0.92,
+      metalness: 0.05,
+    });
+    for (const [bx, bz, s] of [
+      [-14, 15.5, 1.3],
+      [-9, 17.2, 0.9],
+      [11, 14.8, 1.4],
+      [16, 17.6, 1.0],
+      [-40, 16.0, 1.5],
+      [40, 15.2, 1.4],
+    ] as const) {
+      const rock = new THREE.Mesh(boulderGeo, mossRockMat);
+      rock.userData.skipBvh = true;
+      rock.position.set(bx, -0.25, bz);
+      rock.scale.set(s * 1.3, s * 0.75, s);
+      grp.add(rock);
+    }
+    // Bridge suspension arch portals on central bridge (x = 0, z = 8 & z = 24)
+    for (const bz of [8.5, 23.5]) {
+      addLandmarkBox(0.45, 5.8, 0.45, -4.1, 2.9, bz, steelMat);
+      addLandmarkBox(0.45, 5.8, 0.45, 4.1, 2.9, bz, steelMat);
+      addLandmarkBox(8.8, 0.42, 0.45, 0, 5.6, bz, steelMat);
+    }
+  }
+
+  if (missionId === 5 || mapId === 'industrial_complex') {
+    // M5 OP. ZERO HOUR: Twin 28m Volcanic Blast Furnace Stacks + Glowing Molten Slag Channels & Vats
+    const furnaceBodyGeo = new THREE.CylinderGeometry(3.6, 4.8, 26, 16);
+    const slagVatGeo = new THREE.CylinderGeometry(2.6, 2.2, 1.8, 14);
+    const slagSurfaceGeo = new THREE.CircleGeometry(2.45, 14);
+    slagSurfaceGeo.rotateX(-Math.PI / 2);
+    res.registerGeometry(furnaceBodyGeo, scope);
+    res.registerGeometry(slagVatGeo, scope);
+    res.registerGeometry(slagSurfaceGeo, scope);
+
+    const moltenMat = assets.getSharedMaterial('m5_molten_slag', {
+      color: 0xff5722,
+      emissive: 0xea580c,
+      emissiveIntensity: 1.45,
+      roughness: 0.25,
+    });
+
+    for (const fx of [-50, 50]) {
+      const stack = new THREE.Mesh(furnaceBodyGeo, steelMat);
+      stack.userData.skipBvh = true;
+      stack.position.set(fx, 13, -32);
+      stack.castShadow = true;
+      grp.add(stack);
+
+      const crownGlow = addLandmarkBox(8.2, 1.2, 8.2, fx, 25.2, -32, moltenMat);
+      crownGlow.userData.skipBvh = true;
+    }
+
+    // Twin Molten Slag Cooling Vats outside central lane (x = ±22, z = -2)
+    for (const vx of [-22, 22]) {
+      const vat = new THREE.Mesh(slagVatGeo, steelMat);
+      vat.userData.skipBvh = true;
+      vat.position.set(vx, 0.9, -2);
+      grp.add(vat);
+
+      const lava = new THREE.Mesh(slagSurfaceGeo, moltenMat);
+      lava.userData.skipBvh = true;
+      lava.position.set(vx, 1.82, -2);
+      grp.add(lava);
+    }
+
+    animatedProps.push({
+      update: (elapsed) => {
+        moltenMat.emissiveIntensity = 1.25 + 0.35 * Math.sin(elapsed * 3.2);
+      },
+    });
+  }
+
+  void chunkManager;
+  scene.add(grp);
+  res.register('object3d', scope, () => scene.remove(grp));
 }
 
 function buildEnterableBuildingMesh(
@@ -1217,11 +1554,13 @@ function buildEnterableBuildingMesh(
     bh: number,
     bd: number,
     mat: THREE.Material,
-    name?: string
+    name?: string,
+    skipBvh = false
   ) => {
     const geo = getBoxGeo(bw, bh, bd);
     const mesh = new THREE.Mesh(geo, mat);
     if (name) mesh.name = name;
+    if (skipBvh) mesh.userData.skipBvh = true;
     mesh.position.set(bx, by, bz);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -1251,6 +1590,9 @@ function buildEnterableBuildingMesh(
     addBox(-halfDoor - 0.07, doorH * 0.5, wz, 0.14, doorH, wallT + 0.1, structuralMat, 'door_frame_jamb');
     addBox(halfDoor + 0.07, doorH * 0.5, wz, 0.14, doorH, wallT + 0.1, structuralMat, 'door_frame_jamb');
     addBox(0, doorH + 0.11, wz, doorW + 0.36, 0.22, wallT + 0.14, structuralMat, 'door_header_beam');
+
+    // Exterior tactical doorway canopy hood above lintel
+    addBox(0, doorH + 0.32, wz + zSign * 0.38, doorW + 0.8, 0.14, 0.65, structuralMat, 'door_canopy_hood', true);
 
     // Interior baseboard along left/right wall segments (flush with inner wall face)
     const innerZ = zSign * (halfD - wallT - baseboardT * 0.5);
@@ -1286,12 +1628,12 @@ function buildEnterableBuildingMesh(
     addBox(wx, groundH * 0.5, -halfWin - sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
     addBox(wx, groundH * 0.5, halfWin + sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
     addBox(wx, sillH * 0.5, 0, wallT, sillH, winW, wallMat);
-    addBox(wx, sillH - 0.05, 0, wallT + 0.12, 0.1, winW + 0.2, trimMat, 'window_sill_ledge');
+    addBox(wx, sillH - 0.05, 0, wallT + 0.16, 0.12, winW + 0.24, trimMat, 'window_sill_ledge');
     addBox(wx, winTopY + winLintelH * 0.5, 0, wallT, winLintelH, winW, wallMat);
     // Window side casing mullions & header trim (leaves tactical window opening 100% unobstructed)
     addBox(wx, sillH + winOpenH * 0.5, -halfWin - 0.06, wallT + 0.08, winOpenH, 0.12, structuralMat, 'window_mullion');
     addBox(wx, sillH + winOpenH * 0.5, halfWin + 0.06, wallT + 0.08, winOpenH, 0.12, structuralMat, 'window_mullion');
-    addBox(wx, winTopY + 0.07, 0, wallT + 0.1, 0.14, winW + 0.28, structuralMat, 'window_header');
+    addBox(wx, winTopY + 0.07, 0, wallT + 0.12, 0.16, winW + 0.32, structuralMat, 'window_header');
 
     // Continuous interior baseboard along side wall inner face
     const innerX = xSign * (halfW - wallT - baseboardT * 0.5);
@@ -1307,8 +1649,8 @@ function buildEnterableBuildingMesh(
     );
   }
 
-  // Four exterior structural corner pilasters
-  const pilasterSize = 0.34;
+  // Four exterior structural corner pilasters + style-specific facade buttresses / H-columns
+  const pilasterSize = style === 'bunker' ? 0.52 : 0.38;
   for (const xSign of [-1, 1]) {
     for (const zSign of [-1, 1]) {
       addBox(
@@ -1325,7 +1667,51 @@ function buildEnterableBuildingMesh(
   }
 
   // Mid-elevation structural stringcourse band separating ground story from upper stories
-  addBox(0, groundH + 0.06, 0, w + 0.22, 0.16, d + 0.22, structuralMat, 'story_cornice_band');
+  addBox(0, groundH + 0.06, 0, w + 0.28, 0.22, d + 0.28, structuralMat, 'story_cornice_band');
+
+  // Style-specific upper facade articulation (HVAC units, structural ribs, ventilation louvers)
+  if (style === 'city' && h >= 6) {
+    for (const zSign of [-1, 1]) {
+      addBox(
+        -w * 0.28,
+        groundH + 1.35,
+        zSign * (halfD + 0.24),
+        1.1,
+        0.78,
+        0.48,
+        structuralMat,
+        'facade_hvac_unit',
+        true
+      );
+      addBox(
+        w * 0.28,
+        groundH + 1.35,
+        zSign * (halfD + 0.24),
+        1.1,
+        0.78,
+        0.48,
+        structuralMat,
+        'facade_hvac_unit',
+        true
+      );
+    }
+  } else if (style === 'warehouse') {
+    for (const zOff of [-d * 0.28, d * 0.28]) {
+      for (const xSign of [-1, 1]) {
+        addBox(
+          xSign * (halfW + 0.12),
+          h * 0.5,
+          zOff,
+          0.26,
+          h,
+          0.32,
+          structuralMat,
+          'warehouse_h_column',
+          true
+        );
+      }
+    }
+  }
 
   // Interior partition wall & structural column trim for larger buildings
   if (w >= 14 && d >= 12) {
@@ -1341,6 +1727,8 @@ function buildEnterableBuildingMesh(
   if (!accessibleRoof) {
     const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat, 'roof_parapet');
     const cornice = addBox(0, h + 0.72, 0, w + 0.76, 0.18, d + 0.76, structuralMat, 'roof_cornice');
+    // Rooftop mechanical penthouse & comms mast on non-walkable roofs
+    addBox(w * 0.18, h + 1.45, -d * 0.15, w * 0.32, 1.5, d * 0.32, structuralMat, 'roof_penthouse', true);
     if (damagedTop) {
       roof.rotation.z = 0.05;
       cornice.rotation.z = 0.05;
@@ -1371,6 +1759,11 @@ function buildMovingGantry(assets: AssetManager, res: ResourceManager, scope: Re
     roughness: 0.42,
     metalness: 0.62,
   });
+  const steel = assets.getSharedMaterial('gantry_steel', {
+    color: 0x334155,
+    roughness: 0.48,
+    metalness: 0.75,
+  });
   const beamGeo = new THREE.BoxGeometry(42, 1.2, 1.6);
   res.registerGeometry(beamGeo, scope);
   const beam = new THREE.Mesh(beamGeo, yellow);
@@ -1379,10 +1772,18 @@ function buildMovingGantry(assets: AssetManager, res: ResourceManager, scope: Re
   const trolley = new THREE.Group();
   trolley.name = 'gantry_trolley';
   const boxGeo = new THREE.BoxGeometry(3.2, 1.8, 2.4);
+  const cableGeo = new THREE.CylinderGeometry(0.08, 0.08, 3.2, 8);
+  const ladleGeo = new THREE.CylinderGeometry(1.1, 0.85, 1.6, 12);
   res.registerGeometry(boxGeo, scope);
+  res.registerGeometry(cableGeo, scope);
+  res.registerGeometry(ladleGeo, scope);
   const box = new THREE.Mesh(boxGeo, yellow);
   box.position.y = -1.2;
-  trolley.add(box);
+  const cable = new THREE.Mesh(cableGeo, steel);
+  cable.position.y = -3.4;
+  const ladle = new THREE.Mesh(ladleGeo, steel);
+  ladle.position.y = -5.2;
+  trolley.add(box, cable, ladle);
   g.add(trolley);
   return g;
 }
@@ -1605,20 +2006,29 @@ function buildInstancedJungleTrees(
   scope: ResourceScope
 ): void {
   const count = 60;
-  const trunkGeo = new THREE.CylinderGeometry(0.32, 0.52, 7.5, 7);
-  const crownGeo = new THREE.ConeGeometry(3.6, 6.2, 7);
+  const trunkGeo = new THREE.CylinderGeometry(0.32, 0.56, 7.8, 8);
+  const crownGeo = new THREE.DodecahedronGeometry(3.6, 1);
+  const subCrownGeo = new THREE.ConeGeometry(3.2, 4.4, 8);
+  const fernGeo = new THREE.ConeGeometry(1.4, 1.2, 6);
   res.registerGeometry(trunkGeo, scope);
   res.registerGeometry(crownGeo, scope);
+  res.registerGeometry(subCrownGeo, scope);
+  res.registerGeometry(fernGeo, scope);
 
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4b3828, roughness: 0.95 });
-  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2d4c24, roughness: 0.85 });
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2d4c24, roughness: 0.82 });
+  const palmCrownMat = new THREE.MeshStandardMaterial({ color: 0x3f6212, roughness: 0.78 });
   res.registerMaterial(trunkMat, scope);
   res.registerMaterial(crownMat, scope);
+  res.registerMaterial(palmCrownMat, scope);
 
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
   const crowns = new THREE.InstancedMesh(crownGeo, crownMat, count);
+  const subCrowns = new THREE.InstancedMesh(subCrownGeo, palmCrownMat, count);
+  const ferns = new THREE.InstancedMesh(fernGeo, palmCrownMat, count);
   trunks.castShadow = true;
   crowns.castShadow = true;
+  subCrowns.castShadow = true;
 
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
@@ -1636,15 +2046,29 @@ function buildInstancedJungleTrees(
 
     dummy.position.set(x, y + 3.75 * s, z);
     dummy.scale.setScalar(s);
-    dummy.rotation.y = angle;
+    dummy.rotation.set((i % 3 === 0 ? 0.06 : -0.04), angle, 0);
     dummy.updateMatrix();
     trunks.setMatrixAt(placed, dummy.matrix);
 
-    dummy.position.set(x, y + 8.4 * s, z);
+    // Upper emergent hardwood dome
+    dummy.position.set(x, y + 8.1 * s, z);
+    dummy.scale.set(s * 1.15, s * 0.85, s * 1.15);
     dummy.updateMatrix();
     crowns.setMatrixAt(placed, dummy.matrix);
 
-    tint.setHSL(0.28 + (i % 4) * 0.02, 0.42, 0.24 + (i % 3) * 0.04);
+    // Mid-tier tropical palm/canopy skirt
+    dummy.position.set(x + 0.35, y + 6.4 * s, z - 0.25);
+    dummy.scale.set(s * 1.05, s * 0.9, s * 1.05);
+    dummy.updateMatrix();
+    subCrowns.setMatrixAt(placed, dummy.matrix);
+
+    // Ground-level tropical fern cluster around trunk base
+    dummy.position.set(x, y + 0.55, z);
+    dummy.scale.set(1.2, 0.85, 1.2);
+    dummy.updateMatrix();
+    ferns.setMatrixAt(placed, dummy.matrix);
+
+    tint.setHSL(0.28 + (i % 4) * 0.02, 0.46, 0.24 + (i % 3) * 0.04);
     crowns.setColorAt(placed, tint);
 
     collisionWorld.addStaticBox({
@@ -1662,17 +2086,21 @@ function buildInstancedJungleTrees(
 
   trunks.count = placed;
   crowns.count = placed;
+  subCrowns.count = placed;
+  ferns.count = placed;
   trunks.instanceMatrix.needsUpdate = true;
   crowns.instanceMatrix.needsUpdate = true;
+  subCrowns.instanceMatrix.needsUpdate = true;
+  ferns.instanceMatrix.needsUpdate = true;
   if (crowns.instanceColor) crowns.instanceColor.needsUpdate = true;
   trunks.computeBoundingSphere();
   crowns.computeBoundingSphere();
+  subCrowns.computeBoundingSphere();
+  ferns.computeBoundingSphere();
 
-  scene.add(trunks);
-  scene.add(crowns);
+  scene.add(trunks, crowns, subCrowns, ferns);
   res.register('object3d', scope, () => {
-    scene.remove(trunks);
-    scene.remove(crowns);
+    scene.remove(trunks, crowns, subCrowns, ferns);
   });
 }
 
@@ -1734,3 +2162,4 @@ function buildExtractionBeacon(res: ResourceManager, scope: ResourceScope): THRE
   g.add(col);
   return g;
 }
+

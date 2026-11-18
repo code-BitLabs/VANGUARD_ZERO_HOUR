@@ -9,7 +9,10 @@ import {
   ControlBindingsSchema,
   DrawDistanceSettingSchema,
   FpsCapSchema,
+  HudModeSchema,
+  RendererBackendPreferenceSchema,
   SubQualityLevelSchema,
+  TargetRefreshRateSchema,
   TouchAdsModeSchema,
   TouchControlProfileSchema,
   TouchFireBehaviorSchema,
@@ -45,6 +48,7 @@ const BINDING_LABELS: Array<{ key: keyof ControlBindings; label: string }> = [
   { key: 'c4', label: 'Place / Detonate C4' },
   { key: 'bombStrike', label: 'Call Bomb Strike ([Shift]+Cycle)' },
   { key: 'strategicNuke', label: 'Strategic Strike Request' },
+  { key: 'tacticalOverview', label: 'Tactical Overview & Cursor Toggle' },
 ];
 
 export function SettingsPanel({
@@ -257,6 +261,42 @@ export function SettingsPanel({
                     { value: '30', label: '30 FPS (Battery Saver)' },
                     { value: '60', label: '60 FPS' },
                     { value: '120', label: '120 FPS' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow
+                label="Target Display Refresh Profile"
+                hint="Calibrates the Adaptive Performance Governor frame-time budget for 60Hz, 90Hz, or 120Hz displays."
+              >
+                <Select
+                  aria-label="Target Refresh Rate"
+                  value={String(graphics.targetRefreshRate ?? 60)}
+                  onValueChange={(v) =>
+                    updateGraphics({ targetRefreshRate: TargetRefreshRateSchema.parse(Number(v)) })
+                  }
+                  options={[
+                    { value: '60', label: '60 Hz (16.7ms Budget)' },
+                    { value: '90', label: '90 Hz (11.1ms Budget)' },
+                    { value: '120', label: '120 Hz (8.3ms Budget)' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow
+                label="Renderer Backend Preference"
+                hint="Auto selects validated WebGL2 direct path with EffectComposer support; WebGPU evaluates native adapter."
+              >
+                <Select
+                  aria-label="Renderer Backend"
+                  value={graphics.rendererBackend ?? 'auto'}
+                  onValueChange={(v) =>
+                    updateGraphics({ rendererBackend: RendererBackendPreferenceSchema.parse(v) })
+                  }
+                  options={[
+                    { value: 'auto', label: 'Auto (Recommended)' },
+                    { value: 'webgl2', label: 'WebGL 2 Direct / Post-FX' },
+                    { value: 'webgpu', label: 'WebGPU Experimental' },
                   ]}
                 />
               </SettingRow>
@@ -1007,6 +1047,54 @@ export function SettingsPanel({
                     onValueChange={(uiScale) => updateAccessibility({ uiScale })}
                   />
                 </div>
+              </SettingRow>
+
+              <SettingRow
+                label="Tactical HUD Layout Mode"
+                hint="Adaptive attenuates non-critical chrome during ADS/fire while keeping health, ammo, radar & threats 100% readable."
+              >
+                <Select
+                  aria-label="Tactical HUD Layout Mode"
+                  value={accessibility.hudMode ?? 'adaptive'}
+                  onValueChange={(v) => updateAccessibility({ hudMode: HudModeSchema.parse(v) })}
+                  options={[
+                    { value: 'adaptive', label: 'Context-Adaptive (Recommended)' },
+                    { value: 'minimal', label: 'Minimal Combat Focus' },
+                    { value: 'expanded', label: 'Expanded Command Overview' },
+                  ]}
+                />
+              </SettingRow>
+
+              <SettingRow label={`HUD Master Opacity (${Math.round((accessibility.hudOpacity ?? 0.92) * 100)}%)`}>
+                <div className="w-52">
+                  <Slider
+                    aria-label="HUD Opacity"
+                    value={accessibility.hudOpacity ?? 0.92}
+                    min={0.45}
+                    max={1.0}
+                    step={0.05}
+                    onValueChange={(hudOpacity) => updateAccessibility({ hudOpacity })}
+                  />
+                </div>
+              </SettingRow>
+
+              <SettingRow
+                label="Show Intelligence-Graded Radar Mini-Map"
+                hint="Displays LOS, acoustic, recon, and stale last-known contacts with ▲/▼ elevation chevrons."
+              >
+                <Switch
+                  aria-label="Show Radar"
+                  checked={accessibility.showRadar ?? true}
+                  onCheckedChange={(showRadar) => updateAccessibility({ showRadar })}
+                />
+              </SettingRow>
+
+              <SettingRow label="Show Top Compass & Bearing Strip">
+                <Switch
+                  aria-label="Show Compass"
+                  checked={accessibility.showCompass ?? true}
+                  onCheckedChange={(showCompass) => updateAccessibility({ showCompass })}
+                />
               </SettingRow>
             </TabsContent>
 
