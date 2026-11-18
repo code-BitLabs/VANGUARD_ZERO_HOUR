@@ -650,6 +650,17 @@ export function buildWorldMap(
     [0, 18, 0],
   ];
 
+  // TRN-12: Dedicated starter concrete cover barrier ahead of player spawn for immediate opening cover
+  if (mapId === 'warzone_city') {
+    coverPositions.push(missionId === 3 ? [0, 38.2, 0] : [0, 54.2, 0]);
+  } else if (mapId === 'desert_base') {
+    coverPositions.push([-6, 64.2, 0]);
+  } else if (mapId === 'jungle_zone') {
+    coverPositions.push([0, 58.2, 0]);
+  } else if (mapId === 'industrial_complex') {
+    coverPositions.push([0, 60.2, 0]);
+  }
+
   coverPositions.forEach(([cx, cz, rot], i) => {
     const cy = Math.max(0, heightFn(cx, cz));
     const barrier = buildConcreteBarrier(assetManager, resourceManager, scope);
@@ -804,6 +815,7 @@ function buildEnterableBuildingMesh(
   scope: ResourceScope
 ): THREE.Group {
   const g = new THREE.Group();
+  g.name = `enterable_building_${style}`;
 
   const wallMat =
     style === 'bunker'
@@ -845,11 +857,32 @@ function buildEnterableBuildingMesh(
           color: 0x333b44,
         });
 
+  const structuralMat = assets.getSharedMaterial('bldg_weathered_structural', {
+    pattern: 'weathered_structural',
+    repeat: [2, 3],
+    roughness: 0.62,
+    metalness: 0.48,
+    color: style === 'bunker' ? 0x6d6356 : 0x47515c,
+  });
+
   const glassMat = assets.getSharedMaterial('bldg_glass', {
     color: 0x1e293b,
     roughness: 0.15,
     metalness: 0.85,
   });
+
+  // Geometry cache scoped to this building to prevent redundant BoxGeometry allocations
+  const localGeoCache = new Map<string, THREE.BoxGeometry>();
+  const getBoxGeo = (bw: number, bh: number, bd: number): THREE.BoxGeometry => {
+    const key = `${bw.toFixed(3)}_${bh.toFixed(3)}_${bd.toFixed(3)}`;
+    let geo = localGeoCache.get(key);
+    if (!geo) {
+      geo = new THREE.BoxGeometry(bw, bh, bd);
+      res.registerGeometry(geo, scope);
+      localGeoCache.set(key, geo);
+    }
+    return geo;
+  };
 
   const addBox = (
     bx: number,
@@ -858,11 +891,12 @@ function buildEnterableBuildingMesh(
     bw: number,
     bh: number,
     bd: number,
-    mat: THREE.Material
+    mat: THREE.Material,
+    name?: string
   ) => {
-    const geo = new THREE.BoxGeometry(bw, bh, bd);
-    res.registerGeometry(geo, scope);
+    const geo = getBoxGeo(bw, bh, bd);
     const mesh = new THREE.Mesh(geo, mat);
+    if (name) mesh.name = name;
     mesh.position.set(bx, by, bz);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -876,56 +910,124 @@ function buildEnterableBuildingMesh(
   const halfWin = winW * 0.5;
 
   // Interior floor slab
-  addBox(0, 0.04, 0, w - 0.1, 0.08, d - 0.1, trimMat);
+  addBox(0, 0.04, 0, w - 0.1, 0.08, d - 0.1, trimMat, 'interior_floor');
 
-  // Front (+Z) & Back (-Z) ground-floor walls with doorway openings
+  // Front (+Z) & Back (-Z) ground-floor walls with doorway openings, jamb frames, headers & interior baseboards
   const frontBackSegW = Math.max(0.4, halfW - halfDoor);
   const lintelH = Math.max(0.25, groundH - doorH);
+  const baseboardH = 0.16;
+  const baseboardT = 0.05;
   for (const zSign of [-1, 1]) {
     const wz = zSign * (halfD - wallT * 0.5);
     addBox(-halfDoor - frontBackSegW * 0.5, groundH * 0.5, wz, frontBackSegW, groundH, wallT, wallMat);
     addBox(halfDoor + frontBackSegW * 0.5, groundH * 0.5, wz, frontBackSegW, groundH, wallT, wallMat);
     addBox(0, doorH + lintelH * 0.5, wz, doorW, lintelH, wallT, wallMat);
-    // Door frame trim posts
-    addBox(-halfDoor + 0.06, doorH * 0.5, wz, 0.12, doorH, wallT + 0.08, trimMat);
-    addBox(halfDoor - 0.06, doorH * 0.5, wz, 0.12, doorH, wallT + 0.08, trimMat);
+    // Door frame jamb posts & structural header beam (strictly outside clear doorway opening)
+    addBox(-halfDoor - 0.07, doorH * 0.5, wz, 0.14, doorH, wallT + 0.1, structuralMat, 'door_frame_jamb');
+    addBox(halfDoor + 0.07, doorH * 0.5, wz, 0.14, doorH, wallT + 0.1, structuralMat, 'door_frame_jamb');
+    addBox(0, doorH + 0.11, wz, doorW + 0.36, 0.22, wallT + 0.14, structuralMat, 'door_header_beam');
+
+    // Interior baseboard along left/right wall segments (flush with inner wall face)
+    const innerZ = zSign * (halfD - wallT - baseboardT * 0.5);
+    const segBaseW = Math.max(0.25, frontBackSegW - wallT);
+    addBox(
+      -halfDoor - segBaseW * 0.5 - 0.1,
+      baseboardH * 0.5 + 0.08,
+      innerZ,
+      segBaseW,
+      baseboardH,
+      baseboardT,
+      structuralMat,
+      'interior_baseboard'
+    );
+    addBox(
+      halfDoor + segBaseW * 0.5 + 0.1,
+      baseboardH * 0.5 + 0.08,
+      innerZ,
+      segBaseW,
+      baseboardH,
+      baseboardT,
+      structuralMat,
+      'interior_baseboard'
+    );
   }
 
-  // Left (-X) & Right (+X) ground-floor walls with tactical window openings
+  // Left (-X) & Right (+X) ground-floor walls with tactical window openings, window casings & interior baseboards
   const sideSegD = Math.max(0.4, halfD - wallT - halfWin);
   const winLintelH = Math.max(0.25, groundH - winTopY);
+  const winOpenH = Math.max(0.4, winTopY - sillH);
   for (const xSign of [-1, 1]) {
     const wx = xSign * (halfW - wallT * 0.5);
     addBox(wx, groundH * 0.5, -halfWin - sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
     addBox(wx, groundH * 0.5, halfWin + sideSegD * 0.5, wallT, groundH, sideSegD, wallMat);
     addBox(wx, sillH * 0.5, 0, wallT, sillH, winW, wallMat);
-    addBox(wx, sillH - 0.05, 0, wallT + 0.1, 0.1, winW + 0.1, trimMat);
+    addBox(wx, sillH - 0.05, 0, wallT + 0.12, 0.1, winW + 0.2, trimMat, 'window_sill_ledge');
     addBox(wx, winTopY + winLintelH * 0.5, 0, wallT, winLintelH, winW, wallMat);
+    // Window side casing mullions & header trim (leaves tactical window opening 100% unobstructed)
+    addBox(wx, sillH + winOpenH * 0.5, -halfWin - 0.06, wallT + 0.08, winOpenH, 0.12, structuralMat, 'window_mullion');
+    addBox(wx, sillH + winOpenH * 0.5, halfWin + 0.06, wallT + 0.08, winOpenH, 0.12, structuralMat, 'window_mullion');
+    addBox(wx, winTopY + 0.07, 0, wallT + 0.1, 0.14, winW + 0.28, structuralMat, 'window_header');
+
+    // Continuous interior baseboard along side wall inner face
+    const innerX = xSign * (halfW - wallT - baseboardT * 0.5);
+    addBox(
+      innerX,
+      baseboardH * 0.5 + 0.08,
+      0,
+      baseboardT,
+      baseboardH,
+      Math.max(1.0, d - wallT * 2 - 0.1),
+      structuralMat,
+      'interior_baseboard'
+    );
   }
 
-  // Interior partition wall for larger buildings
+  // Four exterior structural corner pilasters
+  const pilasterSize = 0.34;
+  for (const xSign of [-1, 1]) {
+    for (const zSign of [-1, 1]) {
+      addBox(
+        xSign * (halfW - pilasterSize * 0.35),
+        h * 0.5,
+        zSign * (halfD - pilasterSize * 0.35),
+        pilasterSize,
+        h,
+        pilasterSize,
+        structuralMat,
+        'corner_pilaster'
+      );
+    }
+  }
+
+  // Mid-elevation structural stringcourse band separating ground story from upper stories
+  addBox(0, groundH + 0.06, 0, w + 0.22, 0.16, d + 0.22, structuralMat, 'story_cornice_band');
+
+  // Interior partition wall & structural column trim for larger buildings
   if (w >= 14 && d >= 12) {
     const partW = w * 0.3;
     addBox(-w * 0.07, (groundH - 0.1) * 0.5, 0, partW, groundH - 0.1, 0.46, wallMat);
+    addBox(-w * 0.07 + partW * 0.5, (groundH - 0.1) * 0.5, 0, 0.22, groundH - 0.1, 0.54, structuralMat, 'structural_column');
   }
 
-  // Upper stories (above groundH) + roof parapet
+  // Upper stories (above groundH) + roof parapet + projected exterior roof cornice
   const upperH = Math.max(0.6, h - groundH);
   addBox(0, groundH + upperH * 0.5, 0, w, upperH, d, wallMat);
 
-  const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat);
+  const roof = addBox(0, h + 0.35, 0, w + 0.5, 0.7, d + 0.5, trimMat, 'roof_parapet');
+  const cornice = addBox(0, h + 0.72, 0, w + 0.76, 0.18, d + 0.76, structuralMat, 'roof_cornice');
   if (damagedTop) {
     roof.rotation.z = 0.05;
+    cornice.rotation.z = 0.05;
   }
 
-  // Upper-story window bands for tall buildings
+  // Upper-story window bands + vertical mullions for tall buildings
   if (h >= 10) {
-    const winGeo = new THREE.BoxGeometry(w * 0.76, 1.35, d + 0.12);
-    res.registerGeometry(winGeo, scope);
+    const winBandW = w * 0.76;
     for (let yRow = groundH + 2.4; yRow <= h - 2.2; yRow += 3.8) {
-      const win = new THREE.Mesh(winGeo, glassMat);
-      win.position.y = yRow;
-      g.add(win);
+      addBox(0, yRow, 0, winBandW, 1.35, d + 0.12, glassMat, 'upper_window_band');
+      for (const mx of [-winBandW * 0.28, 0, winBandW * 0.28]) {
+        addBox(mx, yRow, 0, 0.16, 1.42, d + 0.18, structuralMat, 'upper_window_mullion');
+      }
     }
   }
 

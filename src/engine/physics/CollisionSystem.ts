@@ -1,4 +1,36 @@
-import { SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
+import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
+
+export const VAULT_MIN_HEIGHT = 0.46;
+export const VAULT_MAX_HEIGHT = 1.15;
+export const VAULT_CAPSULE_HEIGHT = 1.15;
+export const VAULT_MAX_OVER_SPAN = 1.85;
+export const VAULT_MAX_DROP_HEIGHT = 2.2;
+export const VAULT_MAX_PROBE_DISTANCE = 0.72;
+export const VAULT_PROBE_LAYER_MASK =
+  COLLISION_LAYER.WORLD |
+  COLLISION_LAYER.COVER |
+  COLLISION_LAYER.DESTRUCTIBLE |
+  COLLISION_LAYER.WINDOW_SILL;
+
+export type VaultMode = 'vault_over' | 'mantle_on';
+
+export interface VaultProbeResult {
+  canVault: boolean;
+  mode: VaultMode;
+  obstacleId: string | null;
+  obstacleTopY: number;
+  entryX: number;
+  entryZ: number;
+  entryDistance: number;
+  exitX: number;
+  exitZ: number;
+  landX: number;
+  landY: number;
+  landZ: number;
+  landCrouched: boolean;
+  thickness: number;
+  obstacleHeight: number;
+}
 
 export interface RaycastHitResult {
   hit: boolean;
@@ -27,6 +59,49 @@ export interface CircleBoxContact2D {
  */
 export class CollisionSystem {
   private readonly queryScratch: SpatialAABB[] = [];
+  private readonly vaultCandidatesScratch: SpatialAABB[] = [];
+  private readonly vaultSupportScratch: SpatialAABB[] = [];
+  private readonly vaultRayHit: RaycastHitResult = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly vaultReverseHit: RaycastHitResult = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly vaultSweepHit: RaycastHitResult = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly vaultContact2D: CircleBoxContact2D = {
+    overlaps: false,
+    penetration: 0,
+    normalX: 0,
+    normalZ: 0,
+    contactX: 0,
+    contactZ: 0,
+  };
 
   public raycastsThisFrame = 0;
   public shapeCastsThisFrame = 0;
@@ -494,5 +569,414 @@ export class CollisionSystem {
       }
     }
     return { clear: true, blocker: null };
+  }
+
+  private hasVerticalCapsuleClearanceFast(
+    spatialHash: SpatialHash,
+    x: number,
+    feetY: number,
+    z: number,
+    radius: number,
+    targetHeight: number,
+    layerMask: number
+  ): boolean {
+    this.shapeCastsThisFrame++;
+    const checkRadius = Math.max(0.1, radius - 0.03);
+    const candidates = spatialHash.queryAABB(
+      x - checkRadius - 0.2,
+      z - checkRadius - 0.2,
+      x + checkRadius + 0.2,
+      z + checkRadius + 0.2,
+      layerMask,
+      this.queryScratch
+    );
+
+    const headY = feetY + targetHeight;
+    const minCheckY = feetY + 0.15;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
+      if (headY <= box.minY + 0.01 || minCheckY >= box.maxY - 0.01) continue;
+      if (this.testCircleBox2D(x, z, checkRadius, box, this.vaultContact2D)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private computeVaultSupportY(
+    spatialHash: SpatialHash,
+    x: number,
+    z: number,
+    radius: number,
+    maxSupportY: number,
+    layerMask: number,
+    getTerrainHeightAt: (x: number, z: number) => number
+  ): number {
+    let supportY = getTerrainHeightAt(x, z);
+    const supportRadius = radius * 0.85;
+    const candidates = spatialHash.queryAABB(
+      x - supportRadius - 0.2,
+      z - supportRadius - 0.2,
+      x + supportRadius + 0.2,
+      z + supportRadius + 0.2,
+      layerMask,
+      this.vaultSupportScratch
+    );
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
+      if (box.maxY <= maxSupportY && box.maxY > supportY) {
+        if (this.testCircleBox2D(x, z, supportRadius, box, this.vaultContact2D)) {
+          supportY = box.maxY;
+        }
+      }
+    }
+    return supportY;
+  }
+
+  /**
+   * Authoritative low-cover vault / mantle probe against static world, cover, destructible, and window-sill colliders.
+   * Zero per-call heap allocations. Writes result into `out`.
+   */
+  probeVaultObstacle(
+    spatialHash: SpatialHash,
+    x: number,
+    feetY: number,
+    z: number,
+    dirX: number,
+    dirZ: number,
+    radius: number,
+    standingHeight: number,
+    worldBoundLimit: number,
+    getTerrainHeightAt: (x: number, z: number) => number,
+    out: VaultProbeResult,
+    maxReach = VAULT_MAX_PROBE_DISTANCE,
+    layerMask = VAULT_PROBE_LAYER_MASK
+  ): boolean {
+    out.canVault = false;
+    out.mode = 'vault_over';
+    out.obstacleId = null;
+    out.obstacleTopY = 0;
+    out.entryX = x;
+    out.entryZ = z;
+    out.entryDistance = 0;
+    out.exitX = x;
+    out.exitZ = z;
+    out.landX = x;
+    out.landY = feetY;
+    out.landZ = z;
+    out.landCrouched = false;
+    out.thickness = 0;
+    out.obstacleHeight = 0;
+
+    const dirLen = Math.hypot(dirX, dirZ);
+    if (dirLen < 1e-4) return false;
+    const ndx = dirX / dirLen;
+    const ndz = dirZ / dirLen;
+
+    const probeRange = radius + maxReach;
+    const endX = x + ndx * (probeRange + 0.4);
+    const endZ = z + ndz * (probeRange + 0.4);
+    const minX = Math.min(x, endX) - radius - 0.4;
+    const maxX = Math.max(x, endX) + radius + 0.4;
+    const minZ = Math.min(z, endZ) - radius - 0.4;
+    const maxZ = Math.max(z, endZ) + radius + 0.4;
+
+    const candidates = spatialHash.queryAABB(
+      minX,
+      minZ,
+      maxX,
+      maxZ,
+      layerMask,
+      this.vaultCandidatesScratch
+    );
+
+    const excludedMask =
+      COLLISION_LAYER.VEHICLE |
+      COLLISION_LAYER.ENEMY |
+      COLLISION_LAYER.PLAYER |
+      COLLISION_LAYER.TRIGGER |
+      COLLISION_LAYER.PROJECTILE;
+
+    let bestEntryDist = Infinity;
+    const boundClamp = worldBoundLimit - radius - 0.05;
+    const sweepRadius = Math.max(0.1, radius - 0.05);
+
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
+      if ((box.layer & excludedMask) !== 0) continue;
+
+      if (box.minY > feetY + 0.55) continue;
+      const relHeight = box.maxY - feetY;
+      if (relHeight < VAULT_MIN_HEIGHT - 1e-4 || relHeight > VAULT_MAX_HEIGHT + 1e-4) {
+        continue;
+      }
+
+      const probeY = Math.min(
+        box.maxY - 0.04,
+        Math.max(box.minY + 0.04, feetY + Math.min(relHeight * 0.6, 0.72))
+      );
+
+      this.raycastsThisFrame++;
+      if (!this.intersectRayBox(x, probeY, z, ndx, 0, ndz, probeRange, box, 0, this.vaultRayHit)) {
+        continue;
+      }
+
+      const dEntry = this.vaultRayHit.distance;
+      if (dEntry >= bestEntryDist) continue;
+      if (Math.abs(this.vaultRayHit.normalY) > 0.5) continue;
+      if (dEntry < radius * 0.4 || dEntry - radius > maxReach) continue;
+
+      const facingDot = -(ndx * this.vaultRayHit.normalX + ndz * this.vaultRayHit.normalZ);
+      if (facingDot < 0.45) continue;
+
+      const entryX = this.vaultRayHit.pointX;
+      const entryZ = this.vaultRayHit.pointZ;
+
+      // Measure thickness along approach direction using reverse raycast from 4.0m past entry
+      const reverseSpan = 4.0;
+      const farX = entryX + ndx * reverseSpan;
+      const farZ = entryZ + ndz * reverseSpan;
+      let exitX = farX;
+      let exitZ = farZ;
+      let thickness = reverseSpan;
+
+      this.raycastsThisFrame++;
+      if (
+        this.intersectRayBox(
+          farX,
+          probeY,
+          farZ,
+          -ndx,
+          0,
+          -ndz,
+          reverseSpan,
+          box,
+          0,
+          this.vaultReverseHit
+        )
+      ) {
+        if (this.vaultReverseHit.distance > 1e-4) {
+          exitX = this.vaultReverseHit.pointX;
+          exitZ = this.vaultReverseHit.pointZ;
+          thickness = Math.hypot(exitX - entryX, exitZ - entryZ);
+        }
+      }
+
+      const apexFeetY = box.maxY + 0.08;
+      const sweepY = box.maxY + 0.55;
+
+      // Verify start/climb column doesn't strike an overhang while lifting to apex
+      if (
+        !this.hasVerticalCapsuleClearanceFast(
+          spatialHash,
+          x,
+          feetY + 0.25,
+          z,
+          radius,
+          apexFeetY + VAULT_CAPSULE_HEIGHT - (feetY + 0.25),
+          layerMask
+        )
+      ) {
+        continue;
+      }
+
+      let mode: VaultMode = thickness <= VAULT_MAX_OVER_SPAN ? 'vault_over' : 'mantle_on';
+      let landX = 0;
+      let landZ = 0;
+      let landY = box.maxY;
+      let validLanding = false;
+
+      if (mode === 'vault_over') {
+        landX = exitX + ndx * (radius + 0.24);
+        landZ = exitZ + ndz * (radius + 0.24);
+
+        if (Math.abs(landX) <= boundClamp && Math.abs(landZ) <= boundClamp) {
+          const supportY = this.computeVaultSupportY(
+            spatialHash,
+            landX,
+            landZ,
+            radius,
+            box.maxY + 0.05,
+            layerMask,
+            getTerrainHeightAt
+          );
+          if (supportY >= feetY - VAULT_MAX_DROP_HEIGHT && supportY <= box.maxY + 0.05) {
+            const midX = (entryX + exitX) * 0.5;
+            const midZ = (entryZ + exitZ) * 0.5;
+            const clearEntry = this.hasVerticalCapsuleClearanceFast(
+              spatialHash,
+              entryX - ndx * 0.05,
+              apexFeetY,
+              entryZ - ndz * 0.05,
+              radius,
+              VAULT_CAPSULE_HEIGHT,
+              layerMask
+            );
+            const clearMid =
+              clearEntry &&
+              this.hasVerticalCapsuleClearanceFast(
+                spatialHash,
+                midX,
+                apexFeetY,
+                midZ,
+                radius,
+                VAULT_CAPSULE_HEIGHT,
+                layerMask
+              );
+            const clearExit =
+              clearMid &&
+              this.hasVerticalCapsuleClearanceFast(
+                spatialHash,
+                exitX + ndx * 0.05,
+                apexFeetY,
+                exitZ + ndz * 0.05,
+                radius,
+                VAULT_CAPSULE_HEIGHT,
+                layerMask
+              );
+            const clearLandingFeet =
+              clearExit &&
+              this.hasVerticalCapsuleClearanceFast(
+                spatialHash,
+                landX,
+                supportY,
+                landZ,
+                radius,
+                VAULT_CAPSULE_HEIGHT,
+                layerMask
+              );
+
+            if (clearLandingFeet) {
+              const spanToExit = Math.hypot(exitX - x, exitZ - z);
+              const blockedApex =
+                spanToExit > 0.05 &&
+                this.sweptCast(
+                  spatialHash,
+                  x,
+                  sweepY,
+                  z,
+                  ndx,
+                  0,
+                  ndz,
+                  spanToExit,
+                  sweepRadius,
+                  layerMask,
+                  this.vaultSweepHit,
+                  box.id
+                );
+
+              const landSweepX = landX - exitX;
+              const landSweepY = supportY + 0.62 - sweepY;
+              const landSweepZ = landZ - exitZ;
+              const landSweepDist = Math.hypot(landSweepX, landSweepY, landSweepZ);
+              const blockedDescent =
+                !blockedApex &&
+                landSweepDist > 0.05 &&
+                this.sweptCast(
+                  spatialHash,
+                  exitX,
+                  sweepY,
+                  exitZ,
+                  landSweepX / landSweepDist,
+                  landSweepY / landSweepDist,
+                  landSweepZ / landSweepDist,
+                  landSweepDist,
+                  sweepRadius,
+                  layerMask,
+                  this.vaultSweepHit,
+                  box.id
+                );
+
+              if (!blockedApex && !blockedDescent) {
+                landY = supportY;
+                validLanding = true;
+              }
+            }
+          }
+        }
+      } else {
+        // Wide obstacle (> 1.85m): mantle onto top surface
+        landX = entryX + ndx * (radius + 0.30);
+        landZ = entryZ + ndz * (radius + 0.30);
+        landY = box.maxY;
+
+        if (Math.abs(landX) <= boundClamp && Math.abs(landZ) <= boundClamp) {
+          const clearTopEntry = this.hasVerticalCapsuleClearanceFast(
+            spatialHash,
+            entryX,
+            apexFeetY,
+            entryZ,
+            radius,
+            VAULT_CAPSULE_HEIGHT,
+            layerMask
+          );
+          const clearTopLand =
+            clearTopEntry &&
+            this.hasVerticalCapsuleClearanceFast(
+              spatialHash,
+              landX,
+              box.maxY,
+              landZ,
+              radius,
+              VAULT_CAPSULE_HEIGHT,
+              layerMask
+            );
+          if (clearTopLand) {
+            const pathDist = Math.hypot(landX - x, landZ - z);
+            const blockedPath =
+              pathDist > 0.05 &&
+              this.sweptCast(
+                spatialHash,
+                x,
+                sweepY,
+                z,
+                ndx,
+                0,
+                ndz,
+                pathDist,
+                sweepRadius,
+                layerMask,
+                this.vaultSweepHit,
+                box.id
+              );
+            if (!blockedPath) {
+              validLanding = true;
+            }
+          }
+        }
+      }
+
+      if (!validLanding) continue;
+
+      const canStandAtLanding = this.hasVerticalCapsuleClearanceFast(
+        spatialHash,
+        landX,
+        landY,
+        landZ,
+        radius,
+        standingHeight,
+        layerMask
+      );
+
+      bestEntryDist = dEntry;
+      out.canVault = true;
+      out.mode = mode;
+      out.obstacleId = box.id;
+      out.obstacleTopY = box.maxY;
+      out.entryX = entryX;
+      out.entryZ = entryZ;
+      out.entryDistance = dEntry;
+      out.exitX = exitX;
+      out.exitZ = exitZ;
+      out.landX = landX;
+      out.landY = landY;
+      out.landZ = landZ;
+      out.landCrouched = !canStandAtLanding;
+      out.thickness = thickness;
+      out.obstacleHeight = relHeight;
+    }
+
+    return out.canVault;
   }
 }

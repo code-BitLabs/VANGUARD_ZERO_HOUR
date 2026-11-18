@@ -625,6 +625,33 @@ export function SettingsPanel({
                   </div>
                 </SettingRow>
 
+                <SettingRow
+                  label="Mobile Aim Assist (Rotational Friction)"
+                  hint="Dampens touch look sensitivity when reticle crosses a visible hostile target (touch only)."
+                >
+                  <Switch
+                    aria-label="Mobile Aim Assist"
+                    checked={input.mobileAimAssist}
+                    onCheckedChange={(mobileAimAssist) => updateInput({ mobileAimAssist })}
+                  />
+                </SettingRow>
+
+                <SettingRow
+                  label={`Mobile Aim Assist Strength (${Math.round(input.mobileAimAssistStrength * 100)}%)`}
+                  hint="Rotational friction slowdown intensity over targets (10% subtle - 75% strong)."
+                >
+                  <div className="w-48 sm:w-52">
+                    <Slider
+                      aria-label="Mobile Aim Assist Strength"
+                      value={input.mobileAimAssistStrength}
+                      min={0.1}
+                      max={0.75}
+                      step={0.05}
+                      onValueChange={(mobileAimAssistStrength) => updateInput({ mobileAimAssistStrength })}
+                    />
+                  </div>
+                </SettingRow>
+
                 <SettingRow label={`Fire Button Size (${Math.round(input.touchFireButtonScale * 100)}%)`}>
                   <div className="w-48 sm:w-52">
                     <Slider
@@ -940,10 +967,25 @@ export function SettingsPanel({
                 />
               </SettingRow>
 
-              <SettingRow label="Tactical Radio Subtitles">
+              <SettingRow
+                label="Tactical Radio Subtitles (Tier 2)"
+                hint="Displays concise radio dispatches for stage transitions, incoming reinforcements, and extraction status."
+              >
                 <Switch
+                  aria-label="Tactical Radio Subtitles"
                   checked={accessibility.subtitles}
                   onCheckedChange={(subtitles) => updateAccessibility({ subtitles })}
+                />
+              </SettingRow>
+
+              <SettingRow
+                label="Contextual Tactical HUD Hints (Tier 1)"
+                hint="Shows non-blocking action prompts (Reload, Demolition Zone, Extraction Locked) with cooldown deduplication."
+              >
+                <Switch
+                  aria-label="Contextual Tactical HUD Hints"
+                  checked={accessibility.tacticalHints ?? true}
+                  onCheckedChange={(tacticalHints) => updateAccessibility({ tacticalHints })}
                 />
               </SettingRow>
 

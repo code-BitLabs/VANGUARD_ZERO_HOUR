@@ -5,7 +5,7 @@ import { ENEMY_BY_ARCHETYPE } from '@/src/data/enemies';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import type { CharacterMoveResult, PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
-import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
   AUTHORITATIVE_COMBAT_CONFIG,
@@ -16,10 +16,10 @@ import {
 } from '@/src/schemas/combat.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { EnemyArchetype, SquadRole } from '@/src/schemas/enemy.schema';
-import { MiniMapBlip } from '@/src/schemas/events.schema';
+import { IncomingThreatWarning, MiniMapBlip } from '@/src/schemas/events.schema';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
 import { buildSoldierRig } from '@/src/world/rigs/EnemyRigBuilder';
-import { BallisticSolver } from './BallisticSolver';
+import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from './BallisticSolver';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import { CombatTelemetryRecorder, EnemyDebugInspectorRow } from './CombatTelemetryRecorder';
 import { PlayerController } from './PlayerController';
@@ -52,6 +52,7 @@ export interface EnemyUnit {
   patrolYaw: number;
   patrolTimer: number;
   waypoint: THREE.Vector3;
+  hasValidWaypoint: boolean;
   coverTarget: THREE.Vector3 | null;
   hasLos: boolean;
   losBlockerId: string | null;
@@ -85,14 +86,41 @@ export interface EnemyUnit {
   lastColliderHit: string | null;
   activeContacts: number;
   maxPenetrationDepth: number;
+  avoidanceDirX: number;
+  avoidanceDirZ: number;
+  avoidanceLatchTimerSec: number;
   meshRoot: THREE.Group;
+  pelvisGroup: THREE.Group;
+  torsoGroup: THREE.Group;
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
+  leftKnee: THREE.Group;
+  rightKnee: THREE.Group;
   weaponArm: THREE.Object3D;
+  rightForearm: THREE.Group;
+  leftArm: THREE.Group;
+  leftForearm: THREE.Group;
   headMesh: THREE.Object3D;
+  muzzleFlash: THREE.Mesh;
+  hipRestY: number;
+  animCrouchBlend: number;
+  animAimBlend: number;
+  animFireRecoilTimer: number;
+  animMuzzleFlashTimer: number;
+  animHitDirYaw: number;
+  animHitHeadshot: boolean;
+  animPrevYaw: number;
+  animTurnLean: number;
+  animTime: number;
   hasSpawnedDrone: boolean;
   healthDropEvaluated: boolean;
+  telegraphTimerSec: number;
+  telegraphDurationSec: number;
+  telegraphKind: 'sniper' | 'rocket' | null;
 }
+
+const WHISKER_COS_35 = Math.cos((35 * Math.PI) / 180);
+const WHISKER_SIN_35 = Math.sin((35 * Math.PI) / 180);
 
 function mapArchetypeToWeapon(archetype: EnemyArchetype, index: number): EnemyWeaponClass {
   switch (archetype) {
@@ -124,6 +152,29 @@ export class EnemyManager {
   private readonly _muzzlePos = new THREE.Vector3();
   private readonly _aimTarget = new THREE.Vector3();
   private readonly _rocketDir = new THREE.Vector3();
+  private readonly _coverCandScratch = new THREE.Vector3();
+  private readonly _coverRayHit: RayHit = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 0,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly _whiskerRayHit: RayHit = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 0,
+    normalZ: 0,
+    collider: null,
+  };
   private readonly _moveResultScratch: CharacterMoveResult = {
     grounded: false,
     hitCeiling: false,
@@ -146,6 +197,8 @@ export class EnemyManager {
   }> = [];
   private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
   private readonly _blipPool: MiniMapBlip[] = [];
+  private sniperLaserLine: THREE.Line | null = null;
+  private sniperLaserPositions: Float32Array | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -156,36 +209,99 @@ export class EnemyManager {
     private readonly coordinator?: CombatEngagementCoordinator,
     private readonly ballistics?: BallisticSolver,
     private readonly telemetry?: CombatTelemetryRecorder
-  ) {}
+  ) {
+    const laserPositions = new Float32Array(6);
+    const laserGeo = new THREE.BufferGeometry();
+    laserGeo.setAttribute('position', new THREE.BufferAttribute(laserPositions, 3));
+    const laserMat = new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.82,
+    });
+    this.resourceManager.registerGeometry(laserGeo, 'shared', 'sniper_laser_geo');
+    this.resourceManager.registerMaterial(laserMat, 'shared', 'sniper_laser_mat');
+    const laserLine = new THREE.Line(laserGeo, laserMat);
+    laserLine.frustumCulled = false;
+    laserLine.visible = false;
+    this.scene.add(laserLine);
+    this.resourceManager.register('object3d', 'shared', () => this.scene.remove(laserLine));
+    this.sniperLaserLine = laserLine;
+    this.sniperLaserPositions = laserPositions;
+  }
 
   setDifficulty(difficulty: Difficulty): void {
     this.difficulty = difficulty;
     const prof = DIFFICULTY_COMBAT_PROFILES[difficulty];
     this.difficultyMult = prof.damageMultiplier;
     this.coordinator?.setDifficulty(difficulty);
+    for (let i = 0; i < this.enemies.length; i++) {
+      this.syncUnitHitboxes(this.enemies[i]);
+    }
   }
 
   getUnits(): readonly EnemyUnit[] {
     return this.enemies;
   }
 
+  getActiveThreatWarning(player: PlayerController): IncomingThreatWarning | null {
+    let bestUnit: EnemyUnit | null = null;
+    let bestProgress = -1;
+
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive || !u.telegraphKind || u.telegraphDurationSec <= 0 || u.telegraphTimerSec <= 0) {
+        continue;
+      }
+      const progress = Math.min(
+        1,
+        Math.max(0, 1 - u.telegraphTimerSec / Math.max(0.05, u.telegraphDurationSec))
+      );
+      if (progress > bestProgress) {
+        bestProgress = progress;
+        bestUnit = u;
+      }
+    }
+
+    if (!bestUnit || !bestUnit.telegraphKind) return null;
+
+    return {
+      kind: bestUnit.telegraphKind,
+      label:
+        bestUnit.telegraphKind === 'sniper'
+          ? 'SNIPER LASER LOCK — TAKE COVER'
+          : 'INCOMING RPG LOCK — EVADE',
+      progress: Number(bestProgress.toFixed(2)),
+      angleRad: player.computeRelativeThreatAngle(bestUnit.position.x, bestUnit.position.z),
+    };
+  }
+
   private syncUnitHitboxes(u: EnemyUnit): void {
-    const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
+    const baseScale = u.archetype === 'heavy_armor' ? 1.22 : 1.1;
+    const hitboxScale = DIFFICULTY_COMBAT_PROFILES[this.difficulty].enemyHitboxScale;
+    const widthScale = baseScale * hitboxScale;
+    const stanceScale = 1 - 0.22 * u.animCrouchBlend;
     const px = u.position.x;
     const py = u.position.y;
     const pz = u.position.z;
 
-    u.headPosition.set(px, py + 1.65 * scale, pz);
-    u.bodyCenter.set(px, py + 1.08 * scale, pz);
-    u.lowerBodyCenter.set(px, py + 0.4 * scale, pz);
+    // Contiguous 3-zone vertical hit volumes with zero gaps:
+    // Lower body (legs): 0.00 -> 0.75 * baseScale * stanceScale
+    // Upper torso: 0.75 -> 1.45 * baseScale * stanceScale
+    // Head sphere: centered at 1.65 * baseScale * stanceScale (radius 0.32 * widthScale spans 1.33..1.97)
+    const legTopY = py + 0.75 * baseScale * stanceScale;
+    const torsoTopY = py + 1.45 * baseScale * stanceScale;
 
-    const torsoHalfW = 0.38 * scale;
-    u.torsoBoxMin.set(px - torsoHalfW, py + 0.75 * scale, pz - torsoHalfW);
-    u.torsoBoxMax.set(px + torsoHalfW, py + 1.44 * scale, pz + torsoHalfW);
+    u.headPosition.set(px, py + 1.65 * baseScale * stanceScale, pz);
+    u.bodyCenter.set(px, (legTopY + torsoTopY) * 0.5, pz);
+    u.lowerBodyCenter.set(px, (py + legTopY) * 0.5, pz);
 
-    const lowerHalfW = 0.34 * scale;
+    const torsoHalfW = 0.39 * widthScale;
+    u.torsoBoxMin.set(px - torsoHalfW, legTopY, pz - torsoHalfW);
+    u.torsoBoxMax.set(px + torsoHalfW, torsoTopY, pz + torsoHalfW);
+
+    const lowerHalfW = 0.35 * widthScale;
     u.lowerBodyBoxMin.set(px - lowerHalfW, py, pz - lowerHalfW);
-    u.lowerBodyBoxMax.set(px + lowerHalfW, py + 0.75 * scale, pz + lowerHalfW);
+    u.lowerBodyBoxMax.set(px + lowerHalfW, legTopY, pz + lowerHalfW);
   }
 
   spawnWave(
@@ -258,6 +374,7 @@ export class EnemyManager {
         patrolYaw,
         patrolTimer: 1.5 + (i % 4) * 0.9,
         waypoint: spawnPos.clone(),
+        hasValidWaypoint: false,
         coverTarget: null,
         hasLos: false,
         losBlockerId: null,
@@ -291,13 +408,37 @@ export class EnemyManager {
         lastColliderHit: null,
         activeContacts: 0,
         maxPenetrationDepth: 0,
+        avoidanceDirX: 0,
+        avoidanceDirZ: 0,
+        avoidanceLatchTimerSec: 0,
         meshRoot: rig.root,
+        pelvisGroup: rig.pelvisGroup,
+        torsoGroup: rig.torsoGroup,
         leftLeg: rig.leftLeg,
         rightLeg: rig.rightLeg,
+        leftKnee: rig.leftKnee,
+        rightKnee: rig.rightKnee,
         weaponArm: rig.weaponArm,
+        rightForearm: rig.rightForearm,
+        leftArm: rig.leftArm,
+        leftForearm: rig.leftForearm,
         headMesh: rig.headMesh,
+        muzzleFlash: rig.muzzleFlash,
+        hipRestY: rig.hipRestY,
+        animCrouchBlend: 0,
+        animAimBlend: 0,
+        animFireRecoilTimer: 0,
+        animMuzzleFlashTimer: 0,
+        animHitDirYaw: 0,
+        animHitHeadshot: false,
+        animPrevYaw: patrolYaw,
+        animTurnLean: 0,
+        animTime: (i * 0.43) % 6.28,
         hasSpawnedDrone: false,
         healthDropEvaluated: false,
+        telegraphTimerSec: 0,
+        telegraphDurationSec: 0,
+        telegraphKind: null,
       };
       this.syncUnitHitboxes(unit);
       this.enemies.push(unit);
@@ -309,10 +450,11 @@ export class EnemyManager {
     onEnemyHit: (unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void
   ): void {
     let slotIdx = 0;
+    const hitboxScale = DIFFICULTY_COMBAT_PROFILES[this.difficulty].enemyHitboxScale;
     for (let i = 0; i < this.enemies.length; i++) {
       const u = this.enemies[i];
       if (!u.alive) continue;
-      const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
+      const scale = (u.archetype === 'heavy_armor' ? 1.22 : 1.1) * hitboxScale;
       let slot = this._hitscanPool[slotIdx];
       if (!slot) {
         const newSlot: {
@@ -330,7 +472,7 @@ export class EnemyManager {
             position: u.bodyCenter,
             hitRadius: 0.56 * scale,
             headPosition: u.headPosition,
-            headRadius: 0.3 * scale,
+            headRadius: 0.32 * scale,
             lowerBodyPosition: u.lowerBodyCenter,
             lowerBodyRadius: 0.42 * scale,
             torsoBoxMin: u.torsoBoxMin,
@@ -357,7 +499,7 @@ export class EnemyManager {
       t.position = u.bodyCenter;
       t.hitRadius = 0.56 * scale;
       t.headPosition = u.headPosition;
-      t.headRadius = 0.3 * scale;
+      t.headRadius = 0.32 * scale;
       t.lowerBodyPosition = u.lowerBodyCenter;
       t.lowerBodyRadius = 0.42 * scale;
       t.torsoBoxMin = u.torsoBoxMin;
@@ -373,10 +515,11 @@ export class EnemyManager {
     onEnemyHit: (unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void
   ): HitscanTarget[] {
     const out: HitscanTarget[] = [];
+    const hitboxScale = DIFFICULTY_COMBAT_PROFILES[this.difficulty].enemyHitboxScale;
     for (let i = 0; i < this.enemies.length; i++) {
       const u = this.enemies[i];
       if (!u.alive) continue;
-      const scale = u.archetype === 'heavy_armor' ? 1.16 : 1.0;
+      const scale = (u.archetype === 'heavy_armor' ? 1.22 : 1.1) * hitboxScale;
       out.push({
         id: u.id,
         kind: 'enemy',
@@ -385,7 +528,7 @@ export class EnemyManager {
         position: u.bodyCenter,
         hitRadius: 0.56 * scale,
         headPosition: u.headPosition,
-        headRadius: 0.3 * scale,
+        headRadius: 0.32 * scale,
         lowerBodyPosition: u.lowerBodyCenter,
         lowerBodyRadius: 0.42 * scale,
         torsoBoxMin: u.torsoBoxMin,
@@ -418,6 +561,13 @@ export class EnemyManager {
     unit.health -= remaining;
 
     unit.hitReactTimer = 0.22;
+    unit.animHitHeadshot = isHeadshot;
+    if (stimulusOrigin) {
+      const hitWorldYaw = Math.atan2(stimulusOrigin.x - unit.position.x, stimulusOrigin.z - unit.position.z);
+      unit.animHitDirYaw = this.normalizeAngle(hitWorldYaw - unit.yaw);
+    } else {
+      unit.animHitDirYaw = 0;
+    }
 
     // Release active shooting token while staggered by incoming hit
     this.coordinator?.releaseLease(unit.id, 'staggered_by_hit');
@@ -515,6 +665,7 @@ export class EnemyManager {
             const u = activeToRoute[i];
             if (u.alive) {
               u.waypoint.set(waypoints[i].wx, u.position.y, waypoints[i].wz);
+              u.hasValidWaypoint = true;
             }
           }
         });
@@ -525,9 +676,7 @@ export class EnemyManager {
       const u = this.enemies[i];
       if (!u.alive) {
         u.deathTimer += dt;
-        const fall = Math.min(1, u.deathTimer * 3.8);
-        u.meshRoot.rotation.x = -fall * (Math.PI * 0.48);
-        u.meshRoot.position.y = u.position.y + 0.15 * fall;
+        this.stepUnitDeathAnimation(u);
         if (u.deathTimer > 6) {
           u.meshRoot.visible = false;
         }
@@ -555,30 +704,261 @@ export class EnemyManager {
         this.stepEnemyAI(u, cfg, aiDt, dist, collision, coverNodes, player, onSpawnDrone);
       }
 
-      // Smooth procedural animation every frame
-      u.hitReactTimer = Math.max(0, u.hitReactTimer - dt);
-      u.meshRoot.position.copy(u.position);
-      u.meshRoot.rotation.y = u.yaw;
-
-      if (u.isMoving) {
-        u.walkPhase += dt * 9;
-        u.leftLeg.rotation.x = Math.sin(u.walkPhase) * 0.55;
-        u.rightLeg.rotation.x = -Math.sin(u.walkPhase) * 0.55;
-      } else {
-        u.leftLeg.rotation.x *= 0.85;
-        u.rightLeg.rotation.x *= 0.85;
-      }
-      u.weaponArm.rotation.x =
-        u.hitReactTimer > 0
-          ? -0.45
-          : u.isReloading
-            ? -0.32
-            : u.state === 'ENGAGING' || u.state === 'SUPPRESSING' || u.state === 'ALERTED'
-              ? -0.05
-              : 0.25;
-      u.headMesh.rotation.x = u.hitReactTimer > 0 ? -0.35 : 0;
-
+      this.stepUnitAnimation(u, dt, player, dist);
       this.syncUnitHitboxes(u);
+    }
+
+    // Update 3D sniper laser sight line for active sniper telegraph
+    if (this.sniperLaserLine && this.sniperLaserPositions) {
+      let laserUnit: EnemyUnit | null = null;
+      for (let i = 0; i < this.enemies.length; i++) {
+        const u = this.enemies[i];
+        if (u.alive && u.telegraphKind === 'sniper' && u.telegraphTimerSec > 0 && u.hasLos) {
+          laserUnit = u;
+          break;
+        }
+      }
+      if (laserUnit && player.alive) {
+        const crouchYOffset = laserUnit.animCrouchBlend * 0.24;
+        this.sniperLaserPositions[0] = laserUnit.position.x + Math.sin(laserUnit.yaw) * 0.5;
+        this.sniperLaserPositions[1] = laserUnit.position.y + 1.48 - crouchYOffset;
+        this.sniperLaserPositions[2] = laserUnit.position.z + Math.cos(laserUnit.yaw) * 0.5;
+        this.sniperLaserPositions[3] = player.position.x;
+        this.sniperLaserPositions[4] = player.position.y + (player.isCrouching ? 0.9 : 1.35);
+        this.sniperLaserPositions[5] = player.position.z;
+        const posAttr = this.sniperLaserLine.geometry.getAttribute('position');
+        posAttr.needsUpdate = true;
+        this.sniperLaserLine.visible = true;
+      } else {
+        this.sniperLaserLine.visible = false;
+      }
+    }
+  }
+
+  private stepUnitDeathAnimation(u: EnemyUnit): void {
+    u.muzzleFlash.visible = false;
+    u.animMuzzleFlashTimer = 0;
+
+    const rawT = Math.min(1, u.deathTimer / 0.52);
+    const t = rawT * rawT * (3 - 2 * rawT);
+    const idNum = parseInt(u.id.split('_')[1] ?? '1', 10) || 1;
+    const fallForwardSign = idNum % 2 === 0 ? 1 : -1;
+
+    const hipY = THREE.MathUtils.lerp(u.hipRestY, 0.16, t);
+    u.meshRoot.position.copy(u.position);
+    u.meshRoot.rotation.set(0, u.yaw, 0);
+
+    u.pelvisGroup.position.y = hipY;
+    u.torsoGroup.position.y = hipY;
+    u.leftLeg.position.y = hipY;
+    u.rightLeg.position.y = hipY;
+
+    // Knees buckle while torso slumps cleanly to ground level
+    u.leftLeg.rotation.set(-0.92 * t, 0, -0.1 * t);
+    u.rightLeg.rotation.set(-0.48 * t, 0, 0.1 * t);
+    u.leftKnee.rotation.x = 1.48 * t;
+    u.rightKnee.rotation.x = 1.12 * t;
+
+    u.torsoGroup.rotation.set(fallForwardSign * 1.32 * t, 0, 0.24 * fallForwardSign * t);
+    u.headMesh.rotation.set(0.38 * fallForwardSign * t, 0.18 * t, 0);
+    u.weaponArm.rotation.set(0.45 * t, -0.2 * t, 0.42 * t);
+    u.rightForearm.rotation.set(0.25 * t, 0, 0);
+    u.leftArm.rotation.set(0.38 * t, 0.2 * t, -0.35 * t);
+    u.leftForearm.rotation.set(0.2 * t, 0, 0);
+  }
+
+  private stepUnitAnimation(
+    u: EnemyUnit,
+    dt: number,
+    player: PlayerController,
+    dist: number
+  ): void {
+    u.animTime += dt;
+    u.hitReactTimer = Math.max(0, u.hitReactTimer - dt);
+    u.animFireRecoilTimer = Math.max(0, u.animFireRecoilTimer - dt);
+    u.animMuzzleFlashTimer = Math.max(0, u.animMuzzleFlashTimer - dt);
+
+    const flashActive = u.animMuzzleFlashTimer > 0;
+    u.muzzleFlash.visible = flashActive;
+    if (flashActive) {
+      u.muzzleFlash.rotation.z += dt * 48;
+      const flicker = 0.8 + 0.45 * Math.abs(Math.sin(u.animTime * 90));
+      u.muzzleFlash.scale.setScalar(flicker);
+    }
+
+    u.meshRoot.position.copy(u.position);
+    u.meshRoot.rotation.y = u.yaw;
+
+    // Turn angular velocity lean
+    const safeDt = Math.max(dt, 1e-4);
+    const yawDelta = this.normalizeAngle(u.yaw - u.animPrevYaw);
+    u.animPrevYaw = u.yaw;
+    const targetTurnLean = THREE.MathUtils.clamp(-(yawDelta / safeDt) * 0.025, -0.14, 0.14);
+    u.animTurnLean = THREE.MathUtils.lerp(u.animTurnLean, targetTurnLean, 1 - Math.exp(-12 * dt));
+
+    // Tactical crouch / cover posture when reloading or stationary at cover / suppressing / retreating
+    const wantsCrouch =
+      u.isReloading ||
+      (!u.isMoving &&
+        (u.coverTarget !== null || u.state === 'SUPPRESSING' || u.state === 'RETREATING'));
+    u.animCrouchBlend = THREE.MathUtils.lerp(
+      u.animCrouchBlend,
+      wantsCrouch ? 1 : 0,
+      1 - Math.exp(-9.5 * dt)
+    );
+
+    const targetAim =
+      u.state === 'ENGAGING' || u.state === 'ALERTED' || u.state === 'SUPPRESSING'
+        ? 1
+        : u.state === 'SUSPICIOUS' ||
+            u.state === 'INVESTIGATING' ||
+            u.state === 'SEARCHING' ||
+            u.state === 'REPOSITIONING'
+          ? 0.55
+          : 0;
+    u.animAimBlend = THREE.MathUtils.lerp(
+      u.animAimBlend,
+      targetAim,
+      1 - Math.exp(-11 * dt)
+    );
+
+    // Speed-synced gait cycle (eliminates foot sliding)
+    const groundSpeed = u.isMoving ? Math.hypot(u.velocity.x, u.velocity.z) : 0;
+    const moveFactor = Math.min(1, groundSpeed / 1.2);
+    if (groundSpeed > 0.15) {
+      u.walkPhase += dt * groundSpeed * 2.55;
+    }
+
+    const strideAmp =
+      Math.min(0.68, groundSpeed * 0.155) * (1 - 0.25 * u.animCrouchBlend) * moveFactor;
+    const sinP = Math.sin(u.walkPhase);
+
+    const idleLeftHip = -0.58 * u.animCrouchBlend - 0.08 * u.animAimBlend;
+    const idleRightHip = -0.32 * u.animCrouchBlend + 0.1 * u.animAimBlend;
+    const moveLeftHip = sinP * strideAmp - 0.52 * u.animCrouchBlend;
+    const moveRightHip = -sinP * strideAmp - 0.34 * u.animCrouchBlend;
+
+    const legDamp = 1 - Math.exp(-14 * dt);
+    u.leftLeg.rotation.x = THREE.MathUtils.lerp(
+      u.leftLeg.rotation.x,
+      THREE.MathUtils.lerp(idleLeftHip, moveLeftHip, moveFactor),
+      legDamp
+    );
+    u.rightLeg.rotation.x = THREE.MathUtils.lerp(
+      u.rightLeg.rotation.x,
+      THREE.MathUtils.lerp(idleRightHip, moveRightHip, moveFactor),
+      legDamp
+    );
+
+    // Anatomical knee flexion (never hyperextends negative)
+    const idleLeftKnee = 0.08 + 1.12 * u.animCrouchBlend;
+    const idleRightKnee = 0.08 + 0.72 * u.animCrouchBlend;
+    const moveLeftKnee = Math.max(0.06, -sinP * 0.62 * moveFactor) + 0.1 + 1.05 * u.animCrouchBlend;
+    const moveRightKnee = Math.max(0.06, sinP * 0.62 * moveFactor) + 0.1 + 0.68 * u.animCrouchBlend;
+
+    u.leftKnee.rotation.x = THREE.MathUtils.lerp(
+      u.leftKnee.rotation.x,
+      THREE.MathUtils.lerp(idleLeftKnee, moveLeftKnee, moveFactor),
+      legDamp
+    );
+    u.rightKnee.rotation.x = THREE.MathUtils.lerp(
+      u.rightKnee.rotation.x,
+      THREE.MathUtils.lerp(idleRightKnee, moveRightKnee, moveFactor),
+      legDamp
+    );
+
+    // Pelvis height coupling (crouch drop + subtle grounded walk bounce)
+    const walkBobY =
+      groundSpeed > 0.15 ? Math.abs(sinP) * 0.032 * Math.min(1, groundSpeed / 4.2) : 0;
+    const hipY = u.hipRestY - 0.24 * u.animCrouchBlend + walkBobY;
+    u.pelvisGroup.position.y = hipY;
+    u.torsoGroup.position.y = hipY;
+    u.leftLeg.position.y = hipY;
+    u.rightLeg.position.y = hipY;
+
+    // Hit stagger envelope (0 -> 1 -> 0 bell across 0.22s)
+    const hitEnv = u.hitReactTimer > 0 ? Math.sin((u.hitReactTimer / 0.22) * Math.PI) : 0;
+    const hitPitch = -hitEnv * (u.animHitHeadshot ? 0.36 : 0.24);
+    const hitTwist = hitEnv * Math.sin(u.animHitDirYaw) * 0.32;
+
+    // Forward sprint lean + torso counter-twist + turn lean
+    const forwardLean = 0.14 * moveFactor + 0.16 * u.animCrouchBlend;
+    const walkTwist = -sinP * 0.08 * moveFactor;
+    u.torsoGroup.rotation.set(
+      forwardLean + hitPitch,
+      walkTwist + hitTwist + (u.isReloading ? 0.18 : 0),
+      u.animTurnLean + hitEnv * Math.cos(u.animHitDirYaw) * 0.08
+    );
+
+    // Aim pitch toward target elevation
+    let targetPitch = 0;
+    if (u.state === 'ENGAGING' || u.state === 'ALERTED' || u.state === 'SUPPRESSING') {
+      const targetY =
+        u.hasLos
+          ? player.position.y + (player.isCrouching ? 0.95 : 1.35)
+          : (u.lastKnownPosition?.y ?? u.position.y + 1.3);
+      targetPitch = THREE.MathUtils.clamp(
+        Math.atan2(targetY - (u.position.y + 1.38), Math.max(2.5, dist)),
+        -0.55,
+        0.55
+      );
+    }
+
+    const headScanYaw = u.state === 'UNAWARE' ? Math.sin(u.animTime * 1.15) * 0.24 : 0;
+    u.headMesh.rotation.x = THREE.MathUtils.lerp(
+      u.headMesh.rotation.x,
+      -targetPitch * 0.72 - hitEnv * (u.animHitHeadshot ? 0.52 : 0.22) + (u.isReloading ? 0.22 : 0),
+      1 - Math.exp(-12 * dt)
+    );
+    u.headMesh.rotation.y = THREE.MathUtils.lerp(
+      u.headMesh.rotation.y,
+      headScanYaw - walkTwist * 0.6,
+      1 - Math.exp(-8 * dt)
+    );
+
+    // Fire recoil impulse & two-handed weapon arm / reload choreography
+    const recoilAlpha = u.animFireRecoilTimer > 0 ? u.animFireRecoilTimer / 0.095 : 0;
+    const armDamp = 1 - Math.exp(-16 * dt);
+
+    if (u.isReloading) {
+      const reloadPulse = Math.sin(u.animTime * 9.5);
+      u.weaponArm.rotation.x = THREE.MathUtils.lerp(u.weaponArm.rotation.x, -0.36 + reloadPulse * 0.08, armDamp);
+      u.weaponArm.rotation.y = THREE.MathUtils.lerp(u.weaponArm.rotation.y, -0.26, armDamp);
+      u.rightForearm.rotation.x = THREE.MathUtils.lerp(u.rightForearm.rotation.x, -0.15, armDamp);
+
+      u.leftArm.rotation.x = THREE.MathUtils.lerp(u.leftArm.rotation.x, -0.24 + reloadPulse * 0.22, armDamp);
+      u.leftArm.rotation.y = THREE.MathUtils.lerp(u.leftArm.rotation.y, 0.34, armDamp);
+      u.leftForearm.rotation.x = THREE.MathUtils.lerp(u.leftForearm.rotation.x, -0.35 - reloadPulse * 0.15, armDamp);
+    } else {
+      const carryPitch = 0.34; // UNAWARE relaxed low-ready
+      const alertPitch = -0.12; // INVESTIGATING / SEARCHING
+      const aimPitch = -0.28 - targetPitch; // ALERTED / ENGAGING / SUPPRESSING
+
+      const baseArmPitch =
+        u.animAimBlend <= 0.55
+          ? THREE.MathUtils.lerp(carryPitch, alertPitch, u.animAimBlend / 0.55)
+          : THREE.MathUtils.lerp(alertPitch, aimPitch, (u.animAimBlend - 0.55) / 0.45);
+
+      const armSwing = -sinP * 0.16 * moveFactor * (1 - 0.75 * u.animAimBlend);
+      const targetRightArmX = baseArmPitch - hitEnv * 0.32 - recoilAlpha * 0.18 + armSwing;
+      const targetRightArmY = THREE.MathUtils.lerp(-0.18, 0.04, u.animAimBlend);
+
+      u.weaponArm.rotation.x = THREE.MathUtils.lerp(u.weaponArm.rotation.x, targetRightArmX, armDamp);
+      u.weaponArm.rotation.y = THREE.MathUtils.lerp(u.weaponArm.rotation.y, targetRightArmY, armDamp);
+      u.rightForearm.rotation.x = THREE.MathUtils.lerp(
+        u.rightForearm.rotation.x,
+        -recoilAlpha * 0.24,
+        1 - Math.exp(-24 * dt)
+      );
+
+      // Left support arm reaches smoothly across to foregrip as aimBlend rises
+      const targetLeftArmX = THREE.MathUtils.lerp(0.22 + sinP * 0.25 * moveFactor, -0.34 - targetPitch * 0.85, u.animAimBlend);
+      const targetLeftArmY = THREE.MathUtils.lerp(0.08, 0.44, u.animAimBlend);
+      const targetLeftForeX = THREE.MathUtils.lerp(0.05, -0.22 - recoilAlpha * 0.12, u.animAimBlend);
+
+      u.leftArm.rotation.x = THREE.MathUtils.lerp(u.leftArm.rotation.x, targetLeftArmX, armDamp);
+      u.leftArm.rotation.y = THREE.MathUtils.lerp(u.leftArm.rotation.y, targetLeftArmY, armDamp);
+      u.leftForearm.rotation.x = THREE.MathUtils.lerp(u.leftForearm.rotation.x, targetLeftForeX, armDamp);
     }
   }
 
@@ -736,7 +1116,13 @@ export class EnemyManager {
 
     if (u.health < u.maxHealth * 0.28 && u.state !== 'RETREATING') {
       u.state = 'RETREATING';
-      u.coverTarget = this.findTacticalCover(u.position, coverNodes, u.lastKnownPosition ?? player.position, true);
+      u.coverTarget = this.findTacticalCover(
+        u,
+        coverNodes,
+        u.lastKnownPosition ?? player.position,
+        true,
+        collision
+      );
       this.coordinator?.releaseLease(u.id, 'retreating');
     } else {
       switch (u.state) {
@@ -804,10 +1190,11 @@ export class EnemyManager {
                 u.state = 'REPOSITIONING';
                 u.stateTimerSec = 1.6;
                 u.coverTarget = this.findTacticalCover(
-                  u.position,
+                  u,
                   coverNodes,
                   u.lastKnownPosition ?? u.position,
-                  false
+                  false,
+                  collision
                 );
               }
             } else if (!rawLos && u.lastKnownPosition && lkpAgeSec <= AUTHORITATIVE_COMBAT_CONFIG.suppressionMaxAgeSec) {
@@ -839,6 +1226,15 @@ export class EnemyManager {
             this.coordinator?.releaseLease(u.id, u.isReloading ? 'reloading' : 'staggered');
             u.state = 'REPOSITIONING';
             u.stateTimerSec = 1.4;
+            if (!u.coverTarget) {
+              u.coverTarget = this.findTacticalCover(
+                u,
+                coverNodes,
+                u.lastKnownPosition ?? player.position,
+                false,
+                collision
+              );
+            }
             break;
           }
 
@@ -887,10 +1283,11 @@ export class EnemyManager {
               u.state = 'REPOSITIONING';
               u.stateTimerSec = 1.5;
               u.coverTarget = this.findTacticalCover(
-                u.position,
+                u,
                 coverNodes,
                 u.lastKnownPosition ?? u.position,
-                false
+                false,
+                collision
               );
             }
           }
@@ -1016,7 +1413,11 @@ export class EnemyManager {
     let moveZ = 0;
     const preferredRange =
       u.archetype === 'sniper' ? 52 : u.archetype === 'rocket_trooper' ? 40 : 22;
-    const hasWaypoint = Math.hypot(u.waypoint.x - u.position.x, u.waypoint.z - u.position.z) > 0.6;
+    const wpDist = Math.hypot(u.waypoint.x - u.position.x, u.waypoint.z - u.position.z);
+    if (u.hasValidWaypoint && wpDist <= 0.6) {
+      u.hasValidWaypoint = false;
+    }
+    const hasWaypoint = u.hasValidWaypoint && wpDist > 0.6;
 
     if (u.state === 'UNAWARE') {
       u.patrolTimer -= dt;
@@ -1061,8 +1462,116 @@ export class EnemyManager {
       const spd =
         cfg.moveSpeed *
         (u.state === 'RETREATING' ? 1.15 : u.state === 'INVESTIGATING' ? 0.65 : 0.9);
-      let vx = (moveX / moveLen) * spd;
-      let vz = (moveZ / moveLen) * spd;
+      const hx = moveX / moveLen;
+      const hz = moveZ / moveLen;
+
+      // TRN-01E: 3-ray forward whisker fan (0 deg @ 2.2m, +/-35 deg @ 1.6m) at waist/chest height (y + 0.9m)
+      const rayY = u.position.y + 0.9;
+      let steerX = hx;
+      let steerZ = hz;
+
+      const hitCenter = collision.sweptSegmentTest(
+        u.position.x,
+        rayY,
+        u.position.z,
+        hx,
+        0,
+        hz,
+        2.2,
+        PHYSICS_MASKS.CHARACTER_SOLID,
+        this._whiskerRayHit,
+        u.id
+      );
+      const centerDist = hitCenter ? this._whiskerRayHit.distance : 2.2;
+      const centerNx = hitCenter ? this._whiskerRayHit.normalX : 0;
+      const centerNz = hitCenter ? this._whiskerRayHit.normalZ : 0;
+
+      const lx = hx * WHISKER_COS_35 - hz * WHISKER_SIN_35;
+      const lz = hx * WHISKER_SIN_35 + hz * WHISKER_COS_35;
+      const hitLeft = collision.sweptSegmentTest(
+        u.position.x,
+        rayY,
+        u.position.z,
+        lx,
+        0,
+        lz,
+        1.6,
+        PHYSICS_MASKS.CHARACTER_SOLID,
+        this._whiskerRayHit,
+        u.id
+      );
+      const leftDist = hitLeft ? this._whiskerRayHit.distance : 1.6;
+
+      const rx = hx * WHISKER_COS_35 + hz * WHISKER_SIN_35;
+      const rz = -hx * WHISKER_SIN_35 + hz * WHISKER_COS_35;
+      const hitRight = collision.sweptSegmentTest(
+        u.position.x,
+        rayY,
+        u.position.z,
+        rx,
+        0,
+        rz,
+        1.6,
+        PHYSICS_MASKS.CHARACTER_SOLID,
+        this._whiskerRayHit,
+        u.id
+      );
+      const rightDist = hitRight ? this._whiskerRayHit.distance : 1.6;
+
+      if (hitCenter) {
+        const urgency = Math.min(1.6, Math.max(0.45, (2.2 - centerDist) / 1.35));
+        const unitParity = (parseInt(u.id.split('_')[1] ?? '1', 10) || 1) % 2 === 0 ? 1 : -1;
+        let turnSign = unitParity;
+        if (leftDist > rightDist + 0.12) {
+          turnSign = 1;
+        } else if (rightDist > leftDist + 0.12) {
+          turnSign = -1;
+        } else if (u.avoidanceLatchTimerSec > 0) {
+          const cross = hx * u.avoidanceDirZ - hz * u.avoidanceDirX;
+          if (Math.abs(cross) > 0.1) turnSign = cross > 0 ? 1 : -1;
+        }
+
+        // Tangent vector along wall if hit normal is horizontal, else orthogonal to heading
+        let tanX = -hz * turnSign;
+        let tanZ = hx * turnSign;
+        if (Math.hypot(centerNx, centerNz) > 0.2) {
+          const wnX = -centerNz;
+          const wnZ = centerNx;
+          const alignDesired = wnX * tanX + wnZ * tanZ;
+          const s = alignDesired >= 0 ? 1 : -1;
+          tanX = wnX * s;
+          tanZ = wnZ * s;
+        }
+        steerX = hx * 0.25 + tanX * urgency;
+        steerZ = hz * 0.25 + tanZ * urgency;
+        const sLen = Math.hypot(steerX, steerZ) || 1;
+        u.avoidanceDirX = steerX / sLen;
+        u.avoidanceDirZ = steerZ / sLen;
+        u.avoidanceLatchTimerSec = 0.36;
+      } else {
+        if (hitLeft) {
+          const pushR = ((1.6 - leftDist) / 1.6) * 0.95;
+          steerX += hz * pushR;
+          steerZ += -hx * pushR;
+        }
+        if (hitRight) {
+          const pushL = ((1.6 - rightDist) / 1.6) * 0.95;
+          steerX += -hz * pushL;
+          steerZ += hx * pushL;
+        }
+        if (u.avoidanceLatchTimerSec > 0) {
+          u.avoidanceLatchTimerSec = Math.max(0, u.avoidanceLatchTimerSec - dt);
+          const latchDot = u.avoidanceDirX * hx + u.avoidanceDirZ * hz;
+          if (latchDot > -0.6) {
+            steerX = steerX * 0.45 + u.avoidanceDirX * 0.55;
+            steerZ = steerZ * 0.45 + u.avoidanceDirZ * 0.55;
+          }
+        }
+      }
+
+      const steerLen = Math.hypot(steerX, steerZ) || 1;
+      let vx = (steerX / steerLen) * spd;
+      let vz = (steerZ / steerLen) * spd;
 
       // Local enemy-vs-enemy separation force to prevent crowd stacking
       const minSep = 0.92;
@@ -1092,6 +1601,16 @@ export class EnemyManager {
         undefined,
         this._moveResultScratch
       );
+      if (moveRes.hitHorizontal && Math.hypot(moveRes.wallNormalX, moveRes.wallNormalZ) > 0.2) {
+        const tx = -moveRes.wallNormalZ;
+        const tz = moveRes.wallNormalX;
+        const tangentProj = vx * tx + vz * tz;
+        const parity = (parseInt(u.id.split('_')[1] ?? '1', 10) || 1) % 2 === 0 ? 1 : -1;
+        const slideSign = Math.abs(tangentProj) > 0.2 * spd ? (tangentProj >= 0 ? 1 : -1) : parity;
+        u.avoidanceDirX = tx * slideSign;
+        u.avoidanceDirZ = tz * slideSign;
+        u.avoidanceLatchTimerSec = Math.max(u.avoidanceLatchTimerSec, 0.35);
+      }
       u.lastColliderHit = moveRes.lastBlockerId;
       u.activeContacts = moveRes.activeContacts ?? 0;
       u.maxPenetrationDepth = moveRes.maxPenetrationDepth ?? 0;
@@ -1100,6 +1619,7 @@ export class EnemyManager {
       u.velocity.set(0, 0, 0);
       u.activeContacts = 0;
       u.maxPenetrationDepth = 0;
+      u.avoidanceLatchTimerSec = Math.max(0, u.avoidanceLatchTimerSec - dt);
     }
 
     // 7. Controlled Burst Firing & Suppression Execution
@@ -1146,7 +1666,44 @@ export class EnemyManager {
       );
     }
 
+    // Cancel any active sniper/rocket telegraph if LOS is lost or unit is interrupted
+    if (u.telegraphKind !== null && (!canFireDirect || !rawLos || u.isReloading || u.hitReactTimer > 0)) {
+      u.telegraphKind = null;
+      u.telegraphTimerSec = 0;
+      u.telegraphDurationSec = 0;
+    }
+
     if ((canFireDirect || canFireSuppress) && u.fireTimer <= 0) {
+      const requiresTelegraph =
+        canFireDirect &&
+        (u.archetype === 'sniper' || u.archetype === 'rocket_trooper' || u.weaponClass === 'enemy_sniper' || u.weaponClass === 'enemy_rocket');
+
+      if (requiresTelegraph && u.burstShotsRemaining <= 0) {
+        if (u.telegraphKind === null) {
+          u.telegraphKind =
+            u.archetype === 'sniper' || u.weaponClass === 'enemy_sniper' ? 'sniper' : 'rocket';
+          u.telegraphDurationSec = diffProfile.sniperRocketWarningSec;
+          u.telegraphTimerSec = diffProfile.sniperRocketWarningSec;
+          this.audio.playSpatial(
+            'lock_beep',
+            u.position.x,
+            u.position.y + 1.5,
+            u.position.z,
+            6,
+            0.55
+          );
+          return;
+        }
+        if (u.telegraphTimerSec > 0) {
+          u.telegraphTimerSec = Math.max(0, u.telegraphTimerSec - dt);
+          if (u.telegraphTimerSec > 0) {
+            return;
+          }
+        }
+        u.telegraphKind = null;
+        u.telegraphDurationSec = 0;
+      }
+
       // Start a new burst if burstShotsRemaining === 0
       if (u.burstShotsRemaining <= 0) {
         const rng = this.ballistics?.rng;
@@ -1206,11 +1763,16 @@ export class EnemyManager {
     player: PlayerController,
     collision: CollisionWorld
   ): void {
+    const crouchYOffset = u.animCrouchBlend * 0.24;
     this._muzzlePos.set(
       u.position.x + Math.sin(u.yaw) * 0.45,
-      u.position.y + 1.44,
+      u.position.y + 1.44 - crouchYOffset,
       u.position.z + Math.cos(u.yaw) * 0.45
     );
+    u.animFireRecoilTimer = 0.095;
+    u.animMuzzleFlashTimer = 0.055;
+    u.muzzleFlash.visible = true;
+    this.vfx.spawnMuzzleLight(this._muzzlePos.x, this._muzzlePos.y, this._muzzlePos.z);
 
     if (isSuppression && u.lastKnownPosition) {
       // Aim at cover edge near LKP, NEVER at live player position behind cover!
@@ -1279,6 +1841,8 @@ export class EnemyManager {
           isSuppressedOrStaggered: u.hitReactTimer > 0,
           isSuppressionFire: isSuppression,
           difficultyProfile: diffProfile,
+          attackerArchetype: u.archetype,
+          attackerName: u.displayName,
         },
         player,
         collision
@@ -1306,24 +1870,102 @@ export class EnemyManager {
     return Math.max(0.16, diffProfile.reactionDelayBaseSec + jitter + distFactor + roleFactor + stateBonus);
   }
 
-  private findTacticalCover(
-    pos: THREE.Vector3,
+  /**
+   * TRN-01D: Selects leeward cover 1.1m behind the cover node away from threatPos,
+   * verifying capsule standing clearance, >= 2.2m squad separation, and physical LOS occlusion.
+   */
+  findTacticalCover(
+    unit: EnemyUnit,
     nodes: THREE.Vector3[],
     threatPos: THREE.Vector3,
-    preferAway: boolean
+    preferAway: boolean,
+    collision: CollisionWorld
   ): THREE.Vector3 | null {
-    let best: THREE.Vector3 | null = null;
+    let bestX = 0;
+    let bestY = 0;
+    let bestZ = 0;
+    let found = false;
     let bestScore = -1e9;
-    for (const n of nodes) {
-      const dSelf = pos.distanceTo(n);
-      const dThreat = Math.hypot(n.x - threatPos.x, n.z - threatPos.z);
-      const score = (preferAway ? dThreat : -Math.abs(dThreat - 22)) - dSelf * 0.8;
+    const threatGroundY = collision.getGroundHeightAt(threatPos.x, threatPos.z);
+
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const dx = n.x - threatPos.x;
+      const dz = n.z - threatPos.z;
+      const dThreatNode = Math.hypot(dx, dz);
+      if (dThreatNode < 0.5) continue;
+
+      const inv = 1 / dThreatNode;
+      const candX = n.x + dx * inv * 1.1;
+      const candZ = n.z + dz * inv * 1.1;
+      const candY = collision.getGroundHeightAt(candX, candZ);
+      this._coverCandScratch.set(candX, candY, candZ);
+
+      if (!collision.canStandUp(this._coverCandScratch, 0.4, 1.75, unit.id)) {
+        continue;
+      }
+
+      // Enforce >= 2.2m separation from any living squadmate's coverTarget or position
+      let claimedBySquad = false;
+      for (let j = 0; j < this.enemies.length; j++) {
+        const other = this.enemies[j];
+        if (!other.alive || other.id === unit.id || other.squadId !== unit.squadId) continue;
+        if (other.coverTarget) {
+          const cdx = other.coverTarget.x - candX;
+          const cdz = other.coverTarget.z - candZ;
+          if (cdx * cdx + cdz * cdz < 2.2 * 2.2) {
+            claimedBySquad = true;
+            break;
+          }
+        }
+        const pdx = other.position.x - candX;
+        const pdz = other.position.z - candZ;
+        if (pdx * pdx + pdz * pdz < 2.2 * 2.2) {
+          claimedBySquad = true;
+          break;
+        }
+      }
+      if (claimedBySquad) continue;
+
+      // Verify physical LOS occlusion from threat crouch/chest height to candidate chest height
+      const rayStartY = threatGroundY + 1.05;
+      const rayEndY = candY + 1.05;
+      const rdx = candX - threatPos.x;
+      const rdy = rayEndY - rayStartY;
+      const rdz = candZ - threatPos.z;
+      const rDist = Math.hypot(rdx, rdy, rdz);
+      if (rDist < 0.8) continue;
+
+      const invR = 1 / rDist;
+      const occluded = collision.sweptSegmentTest(
+        threatPos.x,
+        rayStartY,
+        threatPos.z,
+        rdx * invR,
+        rdy * invR,
+        rdz * invR,
+        rDist - 0.5,
+        SOLID_OBSTRUCTION_MASK,
+        this._coverRayHit,
+        unit.id
+      );
+      if (!occluded || !this._coverRayHit.hit || !this._coverRayHit.collider) {
+        continue;
+      }
+
+      const dSelf = Math.hypot(unit.position.x - candX, unit.position.z - candZ);
+      const dThreatCand = Math.hypot(candX - threatPos.x, candZ - threatPos.z);
+      const score = (preferAway ? dThreatCand : -Math.abs(dThreatCand - 22)) - dSelf * 0.8;
       if (score > bestScore) {
         bestScore = score;
-        best = n;
+        bestX = candX;
+        bestY = candY;
+        bestZ = candZ;
+        found = true;
       }
     }
-    return best;
+
+    return found ? new THREE.Vector3(bestX, bestY, bestZ) : null;
   }
 
   private normalizeAngle(a: number): number {
@@ -1505,6 +2147,9 @@ export class EnemyManager {
     }
     this._proxPool.length = 0;
     this._blipPool.length = 0;
+    if (this.sniperLaserLine) {
+      this.sniperLaserLine.visible = false;
+    }
   }
 
   getPhysicsInspectorRows(): PhysicsBodyInspectorRow[] {

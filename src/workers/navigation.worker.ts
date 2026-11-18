@@ -1,131 +1,10 @@
-// Pure Web Worker for tactical A* pathfinding and cover evaluation.
+// Pure Web Worker for tactical A* pathfinding and incremental navgrid updates.
 // Zero Three.js imports — communicates exclusively via typed headers and Transferable TypedArrays.
 
-interface GridState {
-  width: number;
-  height: number;
-  cellSize: number;
-  originX: number;
-  originZ: number;
-  blocked: Uint8Array;
-}
+import { NAV_GRID_DEFAULTS, NavigationSolver } from './navigationCore';
 
-let grid: GridState | null = null;
+const solver = new NavigationSolver();
 let minValidVersion = 0;
-
-function worldToCell(wx: number, wz: number, g: GridState): [number, number] {
-  const cx = Math.max(0, Math.min(g.width - 1, Math.floor((wx - g.originX) / g.cellSize)));
-  const cz = Math.max(0, Math.min(g.height - 1, Math.floor((wz - g.originZ) / g.cellSize)));
-  return [cx, cz];
-}
-
-function cellToWorld(cx: number, cz: number, g: GridState): [number, number] {
-  return [g.originX + (cx + 0.5) * g.cellSize, g.originZ + (cz + 0.5) * g.cellSize];
-}
-
-function computeNextWaypoint(
-  sx: number,
-  sz: number,
-  tx: number,
-  tz: number,
-  g: GridState
-): [number, number] {
-  const [scx, scz] = worldToCell(sx, sz, g);
-  const [tcx, tcz] = worldToCell(tx, tz, g);
-  if (scx === tcx && scz === tcz) return [tx, tz];
-
-  const total = g.width * g.height;
-  const gScore = new Float32Array(total);
-  gScore.fill(1e9);
-  const parent = new Int32Array(total);
-  parent.fill(-1);
-  const closed = new Uint8Array(total);
-
-  const startIdx = scz * g.width + scx;
-  const goalIdx = tcz * g.width + tcx;
-  gScore[startIdx] = 0;
-
-  const open: number[] = [startIdx];
-  const fScore = new Float32Array(total);
-  fScore[startIdx] = Math.hypot(tcx - scx, tcz - scz);
-
-  const dirs = [
-    [1, 0, 1],
-    [-1, 0, 1],
-    [0, 1, 1],
-    [0, -1, 1],
-    [1, 1, 1.414],
-    [-1, 1, 1.414],
-    [1, -1, 1.414],
-    [-1, -1, 1.414],
-  ];
-
-  let bestNode = startIdx;
-  let bestDist = Math.hypot(tcx - scx, tcz - scz);
-  let iterations = 0;
-  const maxIter = 420;
-
-  while (open.length > 0 && iterations < maxIter) {
-    iterations++;
-    let bestPos = 0;
-    for (let i = 1; i < open.length; i++) {
-      if (fScore[open[i]] < fScore[open[bestPos]]) bestPos = i;
-    }
-    const curr = open.splice(bestPos, 1)[0];
-    if (curr === goalIdx) {
-      bestNode = curr;
-      break;
-    }
-    closed[curr] = 1;
-
-    const cx = curr % g.width;
-    const cz = Math.floor(curr / g.width);
-    const dGoal = Math.hypot(tcx - cx, tcz - cz);
-    if (dGoal < bestDist) {
-      bestDist = dGoal;
-      bestNode = curr;
-    }
-
-    for (let d = 0; d < dirs.length; d++) {
-      const dx = dirs[d][0];
-      const dz = dirs[d][1];
-      const nx = cx + dx;
-      const nz = cz + dz;
-      if (nx < 0 || nx >= g.width || nz < 0 || nz >= g.height) continue;
-      const nIdx = nz * g.width + nx;
-      if (closed[nIdx]) continue;
-      if (g.blocked[nIdx] === 1 && nIdx !== goalIdx) continue;
-
-      // Prevent diagonal corner-cutting across building wall corners
-      if (dx !== 0 && dz !== 0) {
-        const adj1 = cz * g.width + (cx + dx);
-        const adj2 = (cz + dz) * g.width + cx;
-        if (g.blocked[adj1] === 1 || g.blocked[adj2] === 1) continue;
-      }
-
-      const tentativeG = gScore[curr] + dirs[d][2];
-      if (tentativeG < gScore[nIdx]) {
-        parent[nIdx] = curr;
-        gScore[nIdx] = tentativeG;
-        fScore[nIdx] = tentativeG + Math.hypot(tcx - nx, tcz - nz);
-        if (!open.includes(nIdx)) open.push(nIdx);
-      }
-    }
-  }
-
-  // Walk back to first step after start
-  let trace = bestNode;
-  let prev = parent[trace];
-  while (prev !== -1 && prev !== startIdx) {
-    trace = prev;
-    prev = parent[trace];
-  }
-  if (trace === startIdx) return [tx, tz];
-
-  const wx = trace % g.width;
-  const wz = Math.floor(trace / g.width);
-  return cellToWorld(wx, wz, g);
-}
 
 self.onmessage = (ev: MessageEvent) => {
   const startMs = performance.now();
@@ -139,6 +18,7 @@ self.onmessage = (ev: MessageEvent) => {
     originX?: number;
     originZ?: number;
     blockedBuffer?: ArrayBuffer;
+    cellUpdatesBuffer?: ArrayBuffer;
     queriesBuffer?: ArrayBuffer;
     queryCount?: number;
   };
@@ -152,18 +32,29 @@ self.onmessage = (ev: MessageEvent) => {
 
   try {
     if (data.type === 'init_grid' && data.blockedBuffer && data.gridWidth && data.gridHeight) {
-      grid = {
-        width: data.gridWidth,
-        height: data.gridHeight,
-        cellSize: data.cellSize ?? 4,
-        originX: data.originX ?? -120,
-        originZ: data.originZ ?? -120,
-        blocked: new Uint8Array(data.blockedBuffer),
-      };
+      solver.initGrid(
+        data.gridWidth,
+        data.gridHeight,
+        data.cellSize ?? NAV_GRID_DEFAULTS.cellSize,
+        data.originX ?? NAV_GRID_DEFAULTS.originX,
+        data.originZ ?? NAV_GRID_DEFAULTS.originZ,
+        new Uint8Array(data.blockedBuffer)
+      );
       self.postMessage({
         jobId: data.jobId,
         jobVersion: data.jobVersion,
         type: 'grid_ready',
+        computeMs: performance.now() - startMs,
+      });
+      return;
+    }
+
+    if (data.type === 'update_cells' && data.cellUpdatesBuffer) {
+      solver.applyCellUpdates(new Uint16Array(data.cellUpdatesBuffer));
+      self.postMessage({
+        jobId: data.jobId,
+        jobVersion: data.jobVersion,
+        type: 'cells_updated',
         computeMs: performance.now() - startMs,
       });
       return;
@@ -179,14 +70,9 @@ self.onmessage = (ev: MessageEvent) => {
         const sz = queries[i * 4 + 1];
         const tx = queries[i * 4 + 2];
         const tz = queries[i * 4 + 3];
-        if (!grid) {
-          results[i * 2] = tx;
-          results[i * 2 + 1] = tz;
-        } else {
-          const [wx, wz] = computeNextWaypoint(sx, sz, tx, tz, grid);
-          results[i * 2] = wx;
-          results[i * 2 + 1] = wz;
-        }
+        solver.computeNextWaypoint(sx, sz, tx, tz);
+        results[i * 2] = solver.outWaypoint[0];
+        results[i * 2 + 1] = solver.outWaypoint[1];
       }
 
       (self as unknown as { postMessage: (m: unknown, transfer: Transferable[]) => void }).postMessage(

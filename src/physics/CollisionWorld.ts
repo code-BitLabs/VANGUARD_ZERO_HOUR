@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { PhysicsWorld, TerrainSlopeRegion } from '@/src/engine/physics/PhysicsWorld';
 import { PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
+import {
+  VAULT_MAX_PROBE_DISTANCE,
+  VAULT_PROBE_LAYER_MASK,
+  VaultProbeResult,
+} from '@/src/engine/physics/CollisionSystem';
 import { CharacterMoveResult, VehicleMoveResult } from '@/src/engine/physics/PhysicsTypes';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from './SpatialHash';
 
@@ -43,9 +48,9 @@ export class CollisionWorld {
     this.physicsWorld.setTerrainHeightFn(fn);
   }
 
-  getGroundHeightAt(x: number, z: number): number {
+  getGroundHeightAt = (x: number, z: number): number => {
     return this.physicsWorld.getGroundHeightAt(x, z);
-  }
+  };
 
   getMaxObstacleHeightInArea(x: number, z: number, radius: number): number {
     return this.physicsWorld.getMaxObstacleHeightInArea(x, z, radius);
@@ -151,6 +156,32 @@ export class CollisionWorld {
     layerMask: number = PHYSICS_MASKS.CHARACTER_SOLID
   ): boolean {
     return this.physicsWorld.canStandUp(entityId, pos, radius, targetHeight, layerMask);
+  }
+
+  /**
+   * Probes whether a character at `pos` moving along `(dirX, dirZ)` can vault over or mantle onto
+   * a low obstacle (`0.46m–1.15m`) through the authoritative PhysicsWorld.
+   */
+  probeVaultObstacle(
+    pos: THREE.Vector3,
+    dirX: number,
+    dirZ: number,
+    radius: number,
+    standingHeight: number,
+    out: VaultProbeResult,
+    maxReach = VAULT_MAX_PROBE_DISTANCE,
+    layerMask = VAULT_PROBE_LAYER_MASK
+  ): boolean {
+    return this.physicsWorld.probeVaultObstacle(
+      pos,
+      dirX,
+      dirZ,
+      radius,
+      standingHeight,
+      out,
+      maxReach,
+      layerMask
+    );
   }
 
   /**

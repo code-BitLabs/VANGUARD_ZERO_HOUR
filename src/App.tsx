@@ -4,7 +4,7 @@ import { GameEngine } from '@/src/engine/GameEngine';
 import { InputManager } from '@/src/engine/InputManager';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
-import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
+import { missionSelectionStore, useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { progressionStore } from '@/src/stores/progressionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
@@ -204,6 +204,9 @@ export default function App() {
             <GameHUD
               onRequestPointerLock={() => engineRef.current?.requestPointerLock()}
               onPause={() => engineRef.current?.pauseMission()}
+              onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
+              onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
+              onAbort={() => engineRef.current?.abortToMenu('campaign')}
               inputManager={inputManager}
               touchControlsVisible={touchControlsVisible}
             />
@@ -213,13 +216,19 @@ export default function App() {
             <PauseOverlay
               onResume={() => engineRef.current?.resumeMission()}
               onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
+              onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
               onAbort={() => engineRef.current?.abortToMenu('campaign')}
             />
           )}
 
           {screen === 'debrief' && (
             <DebriefScreen
+              onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
               onRetry={() => handleDeploy(selectedMissionId, difficulty)}
+              onChangeDifficulty={(newDiff) => {
+                missionSelectionStore.getState().setDifficulty(newDiff);
+                handleDeploy(selectedMissionId, newDiff);
+              }}
               onNextMission={(nextId) => handleDeploy(nextId, difficulty)}
               onReturnMenu={() => engineRef.current?.abortToMenu('campaign')}
             />

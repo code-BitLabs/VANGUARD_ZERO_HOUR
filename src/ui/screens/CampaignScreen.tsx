@@ -203,9 +203,26 @@ export function CampaignScreen({
                     )}
                   </div>
                   {rec?.bestScore ? (
-                    <div className="text-right font-mono text-xs">
-                      <div className="text-zinc-400">BEST SCORE</div>
-                      <div className="text-amber-400 text-lg font-bold tabular-nums">{rec.bestScore}</div>
+                    <div className="flex items-center gap-3 text-right font-mono text-xs">
+                      {rec.bestGrade && (
+                        <div>
+                          <div className="text-zinc-400">BEST RANK</div>
+                          <div className="text-cyan-400 text-lg font-bold tabular-nums">{rec.bestGrade}</div>
+                        </div>
+                      )}
+                      {rec.fastestTimeSec ? (
+                        <div>
+                          <div className="text-zinc-400">FASTEST TIME</div>
+                          <div className="text-emerald-400 text-lg font-bold tabular-nums">
+                            {Math.floor(rec.fastestTimeSec / 60)}:
+                            {(rec.fastestTimeSec % 60).toString().padStart(2, '0')}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div>
+                        <div className="text-zinc-400">BEST SCORE</div>
+                        <div className="text-amber-400 text-lg font-bold tabular-nums">{rec.bestScore}</div>
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -215,7 +232,7 @@ export function CampaignScreen({
                 {/* Primary Objectives with Step-by-Step Instructions */}
                 <div className="mt-3.5">
                   <div className="font-mono text-[11px] uppercase tracking-widest text-zinc-400 mb-1.5 flex items-center gap-2">
-                    <Target className="w-3.5 h-3.5 text-amber-400" /> Primary Combat Objectives
+                    <Target className="w-3.5 h-3.5 text-amber-400" /> Staged Combat Progression ({activeMission.objectives.length} Stages)
                   </div>
                   <div className="space-y-1.5">
                     {activeMission.objectives.map((obj, idx) => (
@@ -224,7 +241,17 @@ export function CampaignScreen({
                         className="bg-[#0B0E11] border border-zinc-800 px-3 py-2 rounded-sm flex items-start justify-between gap-3"
                       >
                         <div>
-                          <div className="text-xs sm:text-sm font-medium text-zinc-100">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-mono text-[9px] uppercase px-1.5 py-0.5 bg-zinc-900 border border-zinc-700 text-cyan-400 rounded-xs">
+                              {obj.stageTitle || `STAGE 0${idx + 1}`}
+                            </span>
+                            {obj.demolitionPolicy === 'charge_or_c4_only' && (
+                              <span className="font-mono text-[9px] uppercase px-1.5 py-0.5 bg-amber-500/15 border border-amber-400/50 text-amber-300 rounded-xs">
+                                [E] / C4 DEMOLITION
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs sm:text-sm font-medium text-zinc-100 mt-1">
                             <span className="font-mono text-amber-400 mr-1.5">0{idx + 1}.</span>
                             {obj.title}
                           </div>

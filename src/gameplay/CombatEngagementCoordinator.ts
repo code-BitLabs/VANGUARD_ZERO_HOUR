@@ -164,6 +164,7 @@ export interface AttackLeaseRequest {
 export class CombatEngagementCoordinator {
   private difficulty: Difficulty = 'normal';
   private profile: DifficultyCombatProfile = DIFFICULTY_COMBAT_PROFILES.normal;
+  private climaxActive = false;
   private squads = new Map<string, SquadCoordinator>();
   private leases = new Map<string, ActiveLease>();
   private releaseCooldownUntil = new Map<string, number>();
@@ -178,6 +179,20 @@ export class CombatEngagementCoordinator {
     this.enforceCapReductions();
   }
 
+  setEncounterClimaxActive(active: boolean): void {
+    if (this.climaxActive === active) return;
+    this.climaxActive = active;
+    if (!active) {
+      this.enforceCapReductions();
+    }
+  }
+
+  getEffectiveMaxGlobalAttackers(): number {
+    return this.climaxActive
+      ? (this.profile.maxClimaxGlobalAttackers ?? this.profile.maxGlobalAttackers)
+      : this.profile.maxGlobalAttackers;
+  }
+
   getProfile(): DifficultyCombatProfile {
     return this.profile;
   }
@@ -187,6 +202,7 @@ export class CombatEngagementCoordinator {
   }
 
   reset(): void {
+    this.climaxActive = false;
     this.squads.clear();
     this.leases.clear();
     this.releaseCooldownUntil.clear();
@@ -225,14 +241,17 @@ export class CombatEngagementCoordinator {
 
     // Check incoming-damage pressure over rolling 2s window
     const rolling2s = this.telemetry.getRollingDamage(2.0);
+    const throttleDurationSec =
+      this.profile.pressureThrottleDurationSec ??
+      AUTHORITATIVE_COMBAT_CONFIG.pressureThrottleDurationSec;
     if (rolling2s >= this.profile.damageBurstThreshold2s && nowSec > this.pressureThrottleUntilSec) {
-      this.pressureThrottleUntilSec = nowSec + AUTHORITATIVE_COMBAT_CONFIG.pressureThrottleDurationSec;
+      this.pressureThrottleUntilSec = nowSec + throttleDurationSec;
       this.telemetry.recordEvent(
         'PRESSURE_THROTTLE',
         'coordinator',
         'global',
         'ground',
-        `Incoming 2s burst (${rolling2s.toFixed(0)} HP >= ${this.profile.damageBurstThreshold2s} HP): throttling new direct leases for 1.0s`
+        `Incoming 2s burst (${rolling2s.toFixed(0)} HP >= ${this.profile.damageBurstThreshold2s} HP): throttling new direct leases for ${throttleDurationSec.toFixed(1)}s`
       );
     }
 
@@ -291,6 +310,12 @@ export class CombatEngagementCoordinator {
       return false;
     }
 
+    const isBossOrClimax =
+      this.climaxActive || (req.domain === 'air' && req.kind === 'HEAVY');
+    const maxGlobalAttackers = isBossOrClimax
+      ? (this.profile.maxClimaxGlobalAttackers ?? this.profile.maxGlobalAttackers)
+      : this.profile.maxGlobalAttackers;
+
     // Check Tier 1 (Squad) and Tier 2 (Global) budgets
     if (req.kind === 'SUPPRESS') {
       if (
@@ -304,7 +329,7 @@ export class CombatEngagementCoordinator {
     } else if (req.kind === 'HEAVY') {
       if (
         this.getActiveHeavyCount() >= this.profile.maxGlobalHeavyAttackers ||
-        this.getActiveDirectCount() >= this.profile.maxGlobalAttackers
+        this.getActiveDirectCount() >= maxGlobalAttackers
       ) {
         sq.markWaiting(req.unitId, true);
         this.waitingUnits.add(req.unitId);
@@ -314,7 +339,7 @@ export class CombatEngagementCoordinator {
       // DIRECT lease
       if (
         (req.domain === 'ground' && !sq.canGrantLocalDirect(req.unitId, this.profile)) ||
-        this.getActiveDirectCount() >= this.profile.maxGlobalAttackers
+        this.getActiveDirectCount() >= maxGlobalAttackers
       ) {
         sq.markWaiting(req.unitId, true);
         this.waitingUnits.add(req.unitId);
@@ -343,7 +368,7 @@ export class CombatEngagementCoordinator {
       req.unitId,
       req.squadId,
       req.domain,
-      `Granted ${req.kind} lease (${this.getActiveDirectCount()}/${this.profile.maxGlobalAttackers} active)`
+      `Granted ${req.kind} lease (${this.getActiveDirectCount()}/${maxGlobalAttackers} active)`
     );
 
     return true;
@@ -407,7 +432,8 @@ export class CombatEngagementCoordinator {
   }
 
   private enforceCapReductions(): void {
-    while (this.getActiveDirectCount() > this.profile.maxGlobalAttackers) {
+    const maxGlobalAttackers = this.getEffectiveMaxGlobalAttackers();
+    while (this.getActiveDirectCount() > maxGlobalAttackers) {
       let lowestId: string | null = null;
       let lowestScore = Infinity;
       for (const [id, l] of this.leases.entries()) {
@@ -439,6 +465,7 @@ export class CombatEngagementCoordinator {
     const curDirect = this.getActiveDirectCount();
     const curHeavy = this.getActiveHeavyCount();
     const curSuppress = this.getActiveSuppressCount();
+    const maxGlobalAttackers = this.getEffectiveMaxGlobalAttackers();
 
     const squadsArr: SquadStatusSnapshot[] = [];
     for (const sq of this.squads.values()) {
@@ -447,9 +474,9 @@ export class CombatEngagementCoordinator {
 
     return {
       difficulty: this.difficulty,
-      maxGlobalAttackers: this.profile.maxGlobalAttackers,
+      maxGlobalAttackers,
       currentGlobalAttackers: curDirect,
-      availableGlobalTokens: Math.max(0, this.profile.maxGlobalAttackers - curDirect),
+      availableGlobalTokens: Math.max(0, maxGlobalAttackers - curDirect),
       maxGlobalHeavyAttackers: this.profile.maxGlobalHeavyAttackers,
       currentGlobalHeavyAttackers: curHeavy,
       maxGlobalSuppressors: this.profile.maxGlobalSuppressors,

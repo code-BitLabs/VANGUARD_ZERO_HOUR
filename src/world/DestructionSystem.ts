@@ -37,12 +37,17 @@ export interface DestructibleEntity {
 export class DestructionSystem {
   private entities = new Map<string, DestructibleEntity>();
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
+  private onColliderRegionChanged?: (box: SpatialAABB) => void;
 
   constructor(
     private readonly colliderBackend: DestructionColliderBackend,
     private readonly vfx: VFXPool,
     private readonly audio: AudioManager
   ) {}
+
+  setOnColliderRegionChanged(cb?: (box: SpatialAABB) => void): void {
+    this.onColliderRegionChanged = cb;
+  }
 
   private insertCollider(box: SpatialAABB): void {
     if (isPhysicsWorld(this.colliderBackend)) {
@@ -58,6 +63,7 @@ export class DestructionSystem {
     } else {
       this.colliderBackend.update(box);
     }
+    this.onColliderRegionChanged?.(box);
   }
 
   private removeSyncedCollider(box: SpatialAABB): void {
@@ -103,15 +109,18 @@ export class DestructionSystem {
 
       if (ent.kind === 'glass_panel' || ent.kind === 'destructible_barrier') {
         this.removeSyncedCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
         ent.meshGroup.visible = false;
         this.vfx.spawnImpact(ent.position.x, ent.position.y + 1, ent.position.z, 'concrete');
       } else if (ent.kind === 'sandbag') {
         this.removeSyncedCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
         ent.meshGroup.scale.y = 0.25;
         this.vfx.spawnImpact(ent.position.x, ent.position.y + 0.6, ent.position.z, 'dirt');
       } else {
         // Explosive barrels, fuel tanks, radars, and weapons caches
         this.removeSyncedCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
         ent.meshGroup.scale.set(1.05, 0.28, 1.05);
         if (!this.charredMaterial) {
           this.charredMaterial = new THREE.MeshStandardMaterial({
@@ -143,6 +152,45 @@ export class DestructionSystem {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Transitions a destructible entity to its post-destruction visual and collider state
+   * during checkpoint reconstruction without triggering VFX explosions, spatial audio,
+   * objective callbacks, or bonus points.
+   */
+  markDestroyedSilently(id: string): boolean {
+    const ent = this.entities.get(id);
+    if (!ent || ent.state === 'DESTROYED') return false;
+
+    ent.health = 0;
+    ent.state = 'DESTROYED';
+    this.removeSyncedCollider(ent.collider);
+    this.onColliderRegionChanged?.(ent.collider);
+
+    if (ent.kind === 'glass_panel' || ent.kind === 'destructible_barrier') {
+      ent.meshGroup.visible = false;
+    } else if (ent.kind === 'sandbag') {
+      ent.meshGroup.scale.y = 0.25;
+    } else {
+      ent.meshGroup.scale.set(1.05, 0.28, 1.05);
+      if (!this.charredMaterial) {
+        this.charredMaterial = new THREE.MeshStandardMaterial({
+          color: 0x1f2428,
+          emissive: 0x3a1204,
+          emissiveIntensity: 0.4,
+          roughness: 0.85,
+          metalness: 0.25,
+        });
+      }
+      const charredMat = this.charredMaterial;
+      ent.meshGroup.traverse((c) => {
+        if (c instanceof THREE.Mesh && c.material instanceof THREE.MeshStandardMaterial) {
+          c.material = charredMat;
+        }
+      });
+    }
+    return true;
   }
 
   getAll(): DestructibleEntity[] {

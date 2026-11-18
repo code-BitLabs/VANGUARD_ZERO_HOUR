@@ -47,6 +47,13 @@ export const engineLifecycleMachine = setup({
     boot: {
       on: {
         READY: 'menu',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
       },
     },
     menu: {
@@ -66,6 +73,13 @@ export const engineLifecycleMachine = setup({
         ASSETS_LOADED: 'initializingWorld',
         CANCEL_LOAD: 'unloading',
         UNLOAD: 'unloading',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
         LOAD_FAILED: {
           target: 'error',
           actions: assign({
@@ -79,6 +93,13 @@ export const engineLifecycleMachine = setup({
         WORLD_READY: 'playing',
         CANCEL_LOAD: 'unloading',
         UNLOAD: 'unloading',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
         LOAD_FAILED: {
           target: 'error',
           actions: assign({
@@ -119,6 +140,7 @@ export const engineLifecycleMachine = setup({
     },
     debrief: {
       on: {
+        RESTART_MISSION: 'playing',
         UNLOAD: 'unloading',
         SELECT_MISSION: {
           target: 'preloading',
@@ -151,6 +173,13 @@ export const engineLifecycleMachine = setup({
       on: {
         RECOVER: 'unloading',
         UNLOAD: 'unloading',
+        SELECT_MISSION: {
+          target: 'preloading',
+          actions: assign({
+            missionId: ({ event }) => event.missionId,
+            errorMessage: null,
+          }),
+        },
       },
     },
   },

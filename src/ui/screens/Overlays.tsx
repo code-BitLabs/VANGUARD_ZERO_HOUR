@@ -36,11 +36,14 @@ export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
 
         <div className="mt-3 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 rounded-sm space-y-1.5">
           <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
-            Primary Tactical Objectives
+            Staged Tactical Objectives ({mission.objectives.length} Stages)
           </div>
-          {mission.objectives.map((obj) => (
+          {mission.objectives.map((obj, idx) => (
             <div key={obj.id} className="text-xs text-zinc-200 flex items-start justify-between gap-3">
               <div>
+                <span className="font-mono text-[10px] text-cyan-400 block">
+                  {obj.stageTitle || `STAGE ${idx + 1}`}
+                </span>
                 <span className="font-medium text-white">{obj.title}</span>
                 <span className="block text-[11px] text-zinc-400">{obj.description}</span>
               </div>
@@ -69,12 +72,17 @@ export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
 export function PauseOverlay({
   onResume,
   onRestartCheckpoint,
+  onRestartMission,
   onAbort,
 }: {
   onResume: () => void;
   onRestartCheckpoint: () => void;
+  onRestartMission?: () => void;
   onAbort: () => void;
 }) {
+  const hud = useGameSessionStore((s) => s.hud);
+  const activeObj = hud.objectives.find((o) => !o.completed && o.status === 'active') ?? hud.objectives[0];
+
   return (
     <div
       className="fixed inset-0 z-30 bg-black/82 flex items-center justify-center overflow-y-auto"
@@ -89,11 +97,22 @@ export function PauseOverlay({
         <CardContent className="space-y-2.5 p-4 sm:p-5">
           <div className="border-b border-zinc-800 pb-2.5">
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-500">
-              Operation Suspended
+              Operation Suspended // Stage {hud.activeStageIndex}/{hud.totalStages}
             </p>
             <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
               Mission Paused
             </h2>
+            {activeObj && (
+              <div className="mt-1.5 bg-[#0B0E11] border border-zinc-800 px-2.5 py-1.5 rounded-sm">
+                <div className="font-mono text-[10px] text-cyan-400 uppercase">{activeObj.stageTitle}</div>
+                <div className="text-xs font-bold text-zinc-100 mt-0.5">
+                  {activeObj.title} ({activeObj.current}/{activeObj.target})
+                </div>
+                {activeObj.description && (
+                  <div className="text-[11px] text-zinc-400 mt-0.5 leading-snug">{activeObj.description}</div>
+                )}
+              </div>
+            )}
           </div>
 
           <Button className="w-full min-h-[44px]" size="lg" onClick={onResume}>
@@ -102,14 +121,19 @@ export function PauseOverlay({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Button className="w-full min-h-[44px]" variant="secondary" onClick={onRestartCheckpoint}>
-              <RotateCcw className="w-4 h-4" /> Restart Mission
+              <RotateCcw className="w-4 h-4" /> Restart Checkpoint
             </Button>
+            {onRestartMission && (
+              <Button className="w-full min-h-[44px]" variant="outline" onClick={onRestartMission}>
+                <RotateCcw className="w-4 h-4" /> Restart Mission
+              </Button>
+            )}
             <Button
               className="w-full min-h-[44px]"
               variant="outline"
               onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
             >
-              <BookOpen className="w-4 h-4" /> Controls Guide
+              <BookOpen className="w-4 h-4" /> Field Manual (Tier 3)
             </Button>
             <Button
               className="w-full min-h-[44px]"
@@ -129,21 +153,38 @@ export function PauseOverlay({
 }
 
 export function DebriefScreen({
+  onRestartCheckpoint,
   onRetry,
+  onChangeDifficulty,
   onNextMission,
   onReturnMenu,
 }: {
+  onRestartCheckpoint?: () => void;
   onRetry: () => void;
+  onChangeDifficulty?: (difficulty: 'easy' | 'normal' | 'hard' | 'extreme') => void;
   onNextMission: (nextId: number) => void;
   onReturnMenu: () => void;
 }) {
   const debrief = useGameSessionStore((s) => s.debrief);
   const save = useProgressionStore((s) => s.save);
+  const selectedDifficulty = useMissionSelectionStore((s) => s.difficulty);
+  const setDifficulty = useMissionSelectionStore((s) => s.setDifficulty);
   if (!debrief) return null;
 
   const mission = getMissionById(debrief.missionId);
   const rank = getRankForXp(save.xp);
   const hasNext = debrief.missionId < 5;
+  const durationMin = Math.floor(debrief.durationSec / 60);
+  const durationRemSec = debrief.durationSec % 60;
+  const durationLabel = `${durationMin}m ${String(durationRemSec).padStart(2, '0')}s`;
+  const shotsLabel =
+    debrief.shotsFired !== undefined && debrief.shotsHit !== undefined
+      ? `${debrief.accuracyPct}% (${debrief.shotsHit}/${debrief.shotsFired})`
+      : `${debrief.accuracyPct}%`;
+  const headshotPctLabel =
+    debrief.headshotPct !== undefined
+      ? `${debrief.headshots} (${debrief.headshotPct}%)`
+      : String(debrief.headshots);
 
   return (
     <div
@@ -173,7 +214,10 @@ export function DebriefScreen({
 
             <div className="text-center bg-[#0B0E11] border border-amber-500/60 px-3.5 py-1.5 rounded-sm shrink-0">
               <div className="font-mono text-[10px] text-zinc-400">RATING</div>
-              <div className="font-display text-2xl sm:text-3xl font-bold text-amber-400">
+              <div
+                data-testid="debrief-grade-badge"
+                className="font-display text-2xl sm:text-3xl font-bold text-amber-400"
+              >
                 {debrief.victory ? debrief.grade : 'F'}
               </div>
             </div>
@@ -182,9 +226,71 @@ export function DebriefScreen({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono">
             <MetricBox label="Score" value={String(debrief.score)} />
             <MetricBox label="Eliminations" value={String(debrief.kills)} />
-            <MetricBox label="Headshots" value={String(debrief.headshots)} />
-            <MetricBox label="Accuracy" value={`${debrief.accuracyPct}%`} />
+            <MetricBox label="Headshots" value={headshotPctLabel} />
+            <MetricBox label="Accuracy" value={shotsLabel} />
+            <MetricBox label="Mission Time" value={durationLabel} />
+            <MetricBox label="Deaths" value={String(debrief.deathsCount ?? debrief.checkpointDeathsCount ?? 0)} />
+            <MetricBox label="Damage Taken" value={`${debrief.damageReceived ?? 0} HP`} />
+            <MetricBox label="Difficulty" value={debrief.difficulty.toUpperCase()} />
           </div>
+
+          {!debrief.victory && debrief.fatalSource && (
+            <div
+              data-testid="debrief-fatal-breakdown"
+              className="bg-red-950/35 border border-red-500/60 p-3 rounded-sm font-mono text-xs space-y-1.5"
+            >
+              <div className="text-[10px] uppercase tracking-wider text-red-400 font-bold">
+                Fatal Engagement Telemetry
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-zinc-200">
+                <div>
+                  <span className="text-zinc-400 block text-[10px]">ATTACKER</span>
+                  <span className="font-bold text-red-300">
+                    {debrief.fatalSource.attackerName} ({debrief.fatalSource.attackerArchetype})
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px]">WEAPON</span>
+                  <span className="text-amber-300">{debrief.fatalSource.weaponLabel}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px]">RANGE / HIT ZONE</span>
+                  <span className="text-cyan-300">
+                    {debrief.fatalSource.distanceMeters}m · {debrief.fatalSource.hitZone.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!debrief.victory && (
+            <div className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+                <span>Adjust Difficulty Before Redeploying</span>
+                <span className="text-amber-400">Active: {selectedDifficulty.toUpperCase()}</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(['easy', 'normal', 'hard', 'extreme'] as const).map((diff) => (
+                  <button
+                    key={diff}
+                    type="button"
+                    data-testid={`debrief-difficulty-${diff}`}
+                    onClick={() => {
+                      setDifficulty(diff);
+                      onChangeDifficulty?.(diff);
+                    }}
+                    className={`py-1.5 px-2 rounded-xs border font-mono text-[10px] uppercase font-bold transition-colors cursor-pointer ${
+                      selectedDifficulty === diff
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                        : 'bg-[#141920] border-zinc-800 text-zinc-400 hover:border-zinc-600'
+                    }`}
+                  >
+                    {diff}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
@@ -224,6 +330,11 @@ export function DebriefScreen({
             <Button variant="outline" className="min-h-[44px]" onClick={onReturnMenu}>
               Campaign HQ
             </Button>
+            {!debrief.victory && debrief.canRestartCheckpoint && onRestartCheckpoint && (
+              <Button className="min-h-[44px]" onClick={onRestartCheckpoint}>
+                <RotateCcw className="w-4 h-4" /> Restart Checkpoint
+              </Button>
+            )}
             <Button variant="secondary" className="min-h-[44px]" onClick={onRetry}>
               <RotateCcw className="w-4 h-4" /> Replay Mission
             </Button>

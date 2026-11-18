@@ -239,13 +239,13 @@ export class VFXPool {
     const { brassMat } = this.rootGroup.userData as { brassMat: THREE.Material };
     p.mesh.material = brassMat;
     p.mesh.position.set(x, y, z);
-    p.vx = rx * (2.2 + Math.random());
-    p.vy = 2.4 + Math.random() * 1.2;
-    p.vz = rz * (2.2 + Math.random());
+    p.vx = rx * (2.6 + Math.random() * 0.9);
+    p.vy = 2.0 + Math.random() * 0.8;
+    p.vz = rz * (2.6 + Math.random() * 0.9);
     p.gravity = 16;
-    p.maxLife = 0.55;
-    p.scaleStart = 0.14;
-    p.scaleEnd = 0.1;
+    p.maxLife = 0.45;
+    p.scaleStart = 0.032;
+    p.scaleEnd = 0.022;
   }
 
   spawnExplosion(x: number, y: number, z: number, scale = 1.0): void {

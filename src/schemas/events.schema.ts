@@ -36,6 +36,21 @@ export const ObjectiveStatusSchema = z.object({
   current: z.number().int().nonnegative(),
   target: z.number().int().positive(),
   completed: z.boolean(),
+  bypassed: z.boolean().optional(),
+  isPrimary: z.boolean().optional(),
+  stageIndex: z.number().int().min(1).optional(),
+  stageTitle: z.string().optional(),
+  status: z
+    .enum(['locked', 'available', 'active', 'completed', 'bypassed', 'failed', 'blocked'])
+    .optional(),
+  prerequisiteIds: z.array(z.string()).optional(),
+  blockedReason: z.string().nullable().optional(),
+  demolitionPolicy: z
+    .enum(['any_destruction', 'charge_or_c4_only', 'any_damage'])
+    .optional(),
+  screenX: z.number().optional(),
+  screenY: z.number().optional(),
+  onScreen: z.boolean().optional(),
   markerPos: z
     .object({
       x: z.number(),
@@ -46,6 +61,23 @@ export const ObjectiveStatusSchema = z.object({
 });
 export type ObjectiveStatus = z.infer<typeof ObjectiveStatusSchema>;
 
+export const ActiveTacticalHintSchema = z.object({
+  id: z.string(),
+  tier: z.number().int().optional(),
+  priority: z.enum(['critical', 'tactical', 'onboarding']),
+  text: z.string(),
+  actionKey: z.string().optional(),
+  dismissible: z.boolean().default(true),
+});
+export type ActiveTacticalHint = z.infer<typeof ActiveTacticalHintSchema>;
+
+export const IncomingThreatWarningSchema = z.object({
+  kind: z.enum(['sniper', 'rocket']),
+  label: z.string(),
+  progress: z.number().min(0).max(1),
+  angleRad: z.number(),
+});
+export type IncomingThreatWarning = z.infer<typeof IncomingThreatWarningSchema>;
 
 export const MiniMapBlipSchema = z.object({
   id: z.string(),
@@ -97,10 +129,12 @@ export const VehicleDriveGearSchema = z.enum(['FORWARD', 'BRAKING', 'NEUTRAL_HOL
 export type VehicleDriveGear = z.infer<typeof VehicleDriveGearSchema>;
 
 export const HudSnapshotSchema = z.object({
-  health: z.number().min(0).max(100),
-  maxHealth: z.number().positive(),
-  armor: z.number().min(0).max(100),
-  maxArmor: z.number().positive(),
+  health: z.number().min(0).max(250),
+  maxHealth: z.number().positive().max(250),
+  armor: z.number().min(0).max(250),
+  maxArmor: z.number().positive().max(250),
+  spawnProtectionSec: z.number().nonnegative().default(0),
+  isRegenerating: z.boolean().default(false),
   weaponId: WeaponIdSchema,
   weaponName: z.string(),
   fireMode: FireModeSchema,
@@ -119,6 +153,8 @@ export const HudSnapshotSchema = z.object({
   isSprinting: z.boolean(),
   isCrouching: z.boolean(),
   isSliding: z.boolean(),
+  canVault: z.boolean().default(false),
+  isVaulting: z.boolean().default(false),
   crosshairSpread: z.number().nonnegative(),
   playerX: z.number(),
   playerZ: z.number(),
@@ -134,8 +170,18 @@ export const HudSnapshotSchema = z.object({
   vehicleCameraMode: VehicleCameraModeSchema.default('chase'),
   interactPrompt: z.string().nullable(),
   activeActionDirective: z.string().nullable().default(null),
+  activeStageIndex: z.number().int().min(1).default(1),
+  totalStages: z.number().int().min(1).default(1),
+  activeStageTitle: z.string().default('STAGE 1 — PRIMARY OPERATION'),
+  extractionStatus: z
+    .enum(['not_applicable', 'locked', 'available', 'extracting', 'completed'])
+    .default('not_applicable'),
+  extractionBlockReason: z.string().nullable().default(null),
+  activeTacticalHint: ActiveTacticalHintSchema.nullable().default(null),
+  waveStatusText: z.string().nullable().default(null),
   subtitleText: z.string().nullable(),
   missionAlert: z.string().nullable(),
+  incomingThreatWarning: IncomingThreatWarningSchema.nullable().default(null),
   elapsedSec: z.number().nonnegative(),
   score: z.number().int().nonnegative(),
   kills: z.number().int().nonnegative(),

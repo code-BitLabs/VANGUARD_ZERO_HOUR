@@ -881,24 +881,24 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
             <div className="space-y-2.5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <MetricTile
-                  label="DMG 5s / 10s / 30s"
-                  value={`${snapshot.metrics.damageLast5s} / ${snapshot.metrics.damageLast10s} / ${snapshot.metrics.damageLast30s}`}
-                  sub={`Total: ${snapshot.metrics.totalDamageReceived} HP`}
+                  label="DMG 2s / 5s / 10s"
+                  value={`${snapshot.metrics.damageLast2s} / ${snapshot.metrics.damageLast5s} / ${snapshot.metrics.damageLast10s}`}
+                  sub={`30s: ${snapshot.metrics.damageLast30s} · Total: ${snapshot.metrics.totalDamageReceived} HP`}
                 />
                 <MetricTile
-                  label="Armor / Health"
-                  value={`${snapshot.metrics.totalArmorAbsorbed} / ${snapshot.metrics.totalHealthLost}`}
-                  sub={`Dup Guard Blocked: ${snapshot.metrics.duplicateDamageBlockedCount}`}
+                  label="Survival / Critical"
+                  value={`${snapshot.metrics.survivalBucket} (D:${snapshot.metrics.playerDeathCount})`}
+                  sub={`Crit <35% HP: ${snapshot.metrics.timeBelowCriticalHpSec}s · 1st Kill: ${snapshot.metrics.timeFirstKillSec ?? '-'}s`}
                 />
                 <MetricTile
-                  label="By Domain"
-                  value={`G:${snapshot.metrics.damageByDomain.ground} A:${snapshot.metrics.damageByDomain.air}`}
-                  sub={`Vehicle: ${snapshot.metrics.damageByDomain.vehicle}`}
+                  label="Armor / Recovery"
+                  value={`Abs:${snapshot.metrics.totalArmorAbsorbed} · Lost:${snapshot.metrics.totalHealthLost}`}
+                  sub={`Regen: +${snapshot.metrics.totalHealthRegenerated} HP · Crates: ${snapshot.metrics.supplyCratesUsed}`}
                 />
                 <MetricTile
-                  label="Hit Zones"
-                  value={`H:${snapshot.metrics.hitZoneCounts.head} T:${snapshot.metrics.hitZoneCounts.upper_torso}`}
-                  sub={`L:${snapshot.metrics.hitZoneCounts.lower_body} S:${snapshot.metrics.hitZoneCounts.splash}`}
+                  label="Enemy Hit Ratios"
+                  value={`H:${Math.round((snapshot.metrics.playerEnemyZoneRatios?.head ?? 0) * 100)}% T:${Math.round((snapshot.metrics.playerEnemyZoneRatios?.upper_torso ?? 0) * 100)}%`}
+                  sub={`L:${Math.round((snapshot.metrics.playerEnemyZoneRatios?.lower_body ?? 0) * 100)}% · G:${snapshot.metrics.damageByDomain.ground} A:${snapshot.metrics.damageByDomain.air}`}
                 />
               </div>
 

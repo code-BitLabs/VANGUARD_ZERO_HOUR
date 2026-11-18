@@ -14,7 +14,9 @@ export class EngineRenderer {
 
   private composer: EffectComposer | null = null;
   private bloomEffect: BloomEffect | null = null;
-  private effectPass: EffectPass | null = null;
+  private vignetteEffect: VignetteEffect | null = null;
+  private bloomPass: EffectPass | null = null;
+  private vignettePass: EffectPass | null = null;
   private envRT: THREE.WebGLRenderTarget | null = null;
   private renderScale = 1.0;
   private bloomEnabled = true;
@@ -83,6 +85,10 @@ export class EngineRenderer {
   }
 
   private buildPostProcessing(): void {
+    this.bloomPass?.dispose();
+    this.vignettePass?.dispose();
+    this.bloomEffect?.dispose();
+    this.vignetteEffect?.dispose();
     this.composer?.dispose();
     const composer = new EffectComposer(this.renderer, {
       frameBufferType: THREE.HalfFloatType,
@@ -99,13 +105,20 @@ export class EngineRenderer {
       offset: 0.35,
       darkness: 0.45,
     });
-    const effectPass = new EffectPass(this.camera, bloom, vignette);
+    // Separate passes so disabling Bloom completely skips mipmap blur GPU work while keeping Vignette active on all tiers
+    const bloomPass = new EffectPass(this.camera, bloom);
+    bloomPass.enabled = this.bloomEnabled;
+    const vignettePass = new EffectPass(this.camera, vignette);
+    vignettePass.enabled = true;
     composer.addPass(renderPass);
-    composer.addPass(effectPass);
+    composer.addPass(bloomPass);
+    composer.addPass(vignettePass);
 
     this.composer = composer;
     this.bloomEffect = bloom;
-    this.effectPass = effectPass;
+    this.vignetteEffect = vignette;
+    this.bloomPass = bloomPass;
+    this.vignettePass = vignettePass;
   }
 
   private bindContextEvents(): void {
@@ -159,8 +172,14 @@ export class EngineRenderer {
     this.camera.far = Math.max(150, profile.drawDistance + 40);
     this.camera.updateProjectionMatrix();
 
+    if (this.bloomPass) {
+      this.bloomPass.enabled = this.bloomEnabled;
+    }
     if (this.bloomEffect) {
       this.bloomEffect.blendMode.opacity.value = this.bloomEnabled ? 1 : 0;
+    }
+    if (this.vignettePass) {
+      this.vignettePass.enabled = true;
     }
     this.resize();
   }
@@ -199,7 +218,7 @@ export class EngineRenderer {
     this.renderer.info.reset();
     this.renderer.setRenderTarget(null);
     this.renderer.clear();
-    if (this.bloomEnabled && this.composer && this.effectPass) {
+    if (this.composer && this.vignettePass) {
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);
@@ -232,15 +251,33 @@ export class EngineRenderer {
     };
   }
 
+  getPostProcessState(): {
+    composerActive: boolean;
+    bloomEnabled: boolean;
+    bloomPassEnabled: boolean;
+    vignetteEnabled: boolean;
+  } {
+    return {
+      composerActive: Boolean(this.composer && this.vignettePass),
+      bloomEnabled: this.bloomEnabled,
+      bloomPassEnabled: Boolean(this.bloomPass?.enabled),
+      vignetteEnabled: Boolean(this.vignettePass?.enabled && this.vignetteEffect),
+    };
+  }
+
   dispose(): void {
     this.scene.environment = null;
     this.viewModelScene.environment = null;
-    this.effectPass?.dispose();
+    this.bloomPass?.dispose();
+    this.vignettePass?.dispose();
     this.bloomEffect?.dispose();
+    this.vignetteEffect?.dispose();
     this.composer?.dispose();
     this.envRT?.dispose();
-    this.effectPass = null;
+    this.bloomPass = null;
+    this.vignettePass = null;
     this.bloomEffect = null;
+    this.vignetteEffect = null;
     this.composer = null;
     this.envRT = null;
     this.renderer.dispose();

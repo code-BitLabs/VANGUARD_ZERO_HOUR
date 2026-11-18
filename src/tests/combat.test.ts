@@ -825,7 +825,7 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     localRes.disposeAll();
   });
 
-  it('Test O: AssetManager attaches procedural bumpMap and positive bumpScale on patterned PBR materials', async () => {
+  it('Test O: AssetManager attaches procedural multi-channel PBR normalMap, roughnessMap, and metalnessMap on patterned materials', async () => {
     const { AssetManager } = await import('@/src/core/AssetManager');
     const localRes = new ResourceManager();
     const assets = new AssetManager(localRes);
@@ -835,8 +835,10 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
       metalness: 0.1,
     });
     expect(mat.map).toBeDefined();
-    expect(mat.bumpMap).toBe(mat.map);
-    expect(mat.bumpScale).toBeGreaterThan(0.01);
+    expect(mat.normalMap).toBeDefined();
+    expect(mat.roughnessMap).toBeDefined();
+    expect(mat.metalnessMap).toBeDefined();
+    expect(mat.normalScale.x).toBeGreaterThan(0.1);
     assets.dispose();
     localRes.disposeAll();
   });

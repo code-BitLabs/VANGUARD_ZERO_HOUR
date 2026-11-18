@@ -77,8 +77,35 @@ export interface DamageTelemetryRecord {
   weaponClass: EnemyWeaponClass;
   hitZone: PlayerHitZone;
   damage: number;
+  rawDamage?: number;
   armorAbsorbed: number;
   healthLost: number;
+  attackerArchetype?: string;
+  attackerName?: string;
+  weaponLabel?: string;
+  distanceMeters?: number;
+  inVehicle?: boolean;
+  incomingAngleRad?: number;
+}
+
+export type SurvivalBucket = '0-15s' | '15-30s' | '30-60s' | '>60s';
+
+export interface FatalDamageAttribution {
+  unitId: string;
+  squadId: string;
+  domain: CombatDomain;
+  weaponClass: EnemyWeaponClass;
+  hitZone: PlayerHitZone;
+  timestampSec: number;
+  attackerArchetype: string;
+  attackerName: string;
+  weaponLabel: string;
+  distanceMeters: number;
+  rawDamage: number;
+  healthLost: number;
+  armorAbsorbed: number;
+  inVehicle: boolean;
+  incomingAngleRad: number;
 }
 
 export interface EnemyDebugInspectorRow {
@@ -208,12 +235,12 @@ export interface PlayerMovementTelemetry {
   velX: number;
   velY: number;
   velZ: number;
-  stance: 'standing' | 'crouching' | 'sliding';
+  stance: 'standing' | 'crouching' | 'sliding' | 'vaulting';
   grounded: boolean;
   airTimeSec: number;
   lastJumpImpulse: number;
   lastLandImpulse: number;
-  accelState: 'IDLE' | 'ACCELERATING' | 'CRUISE' | 'DECELERATING' | 'AIRBORNE' | 'SLIDING';
+  accelState: 'IDLE' | 'ACCELERATING' | 'CRUISE' | 'DECELERATING' | 'AIRBORNE' | 'SLIDING' | 'VAULTING';
   recoilPitchDeg: number;
   recoilYawDeg: number;
   suppressionLevel: number;
@@ -323,6 +350,7 @@ export interface CombatAggregateMetrics {
   enemiesAimingCount: number;
   enemiesFiringCount: number;
   incomingProjectilesCount: number;
+  damageLast2s?: number;
   damageLast5s: number;
   damageLast10s: number;
   damageLast30s: number;
@@ -345,6 +373,9 @@ export interface CombatAggregateMetrics {
   firstDetectToFirstDamageSec: number | null;
   timeSpentExposedSec: number;
   timeSpentInCoverSec: number;
+  timeBelowCriticalHpSec?: number;
+  survivalBucket?: SurvivalBucket;
+  playerDeathCount?: number;
   lastLeftCoverTimeSec: number | null;
   leaveCoverToFirstHitSec: number | null;
   damageByDomain: Record<CombatDomain, number>;
@@ -356,18 +387,19 @@ export interface CombatAggregateMetrics {
   tunnelingBlockedCount: number;
   speedOutliersCount: number;
   timePlayerDeathSec?: number | null;
-  fatalDamageSource?: {
-    unitId: string;
-    squadId: string;
-    domain: CombatDomain;
-    weaponClass: EnemyWeaponClass;
-    hitZone: PlayerHitZone;
-    timestampSec: number;
-  } | null;
+  fatalDamageSource?: FatalDamageAttribution | null;
+  lastFiveDamageEvents?: DamageTelemetryRecord[];
+  timeFirstKillSec?: number | null;
+  killsByWeapon?: Record<string, number>;
   playerShotsFired?: number;
   playerShotsHit?: number;
   playerAccuracyPct?: number;
   playerEnemyZoneHits?: { head: number; upper_torso: number; lower_body: number };
+  playerEnemyZoneRatios?: { head: number; upper_torso: number; lower_body: number };
+  totalHealthRegenerated?: number;
+  totalArmorRestored?: number;
+  healthPickupsCollected?: number;
+  supplyCratesUsed?: number;
   objectiveCompletedAtSec?: Record<string, number | null>;
   missionRestartCount?: number;
 }
@@ -505,14 +537,15 @@ export class CombatTelemetryRecorder {
   private timeFirstDetectionSec: number | null = null;
   private timeFirstDamageSec: number | null = null;
   private timePlayerDeathSec: number | null = null;
-  private fatalDamageSource: {
-    unitId: string;
-    squadId: string;
-    domain: CombatDomain;
-    weaponClass: EnemyWeaponClass;
-    hitZone: PlayerHitZone;
-    timestampSec: number;
-  } | null = null;
+  private playerDeathCount = 0;
+  private timeBelowCriticalHpSec = 0;
+  private fatalDamageSource: FatalDamageAttribution | null = null;
+  private timeFirstKillSec: number | null = null;
+  private killsByWeapon = new Map<string, number>();
+  private totalHealthRegenerated = 0;
+  private totalArmorRestored = 0;
+  private healthPickupsCollected = 0;
+  private supplyCratesUsed = 0;
   private playerShotsFired = 0;
   private playerShotsHit = 0;
   private playerEnemyZoneHits = { head: 0, upper_torso: 0, lower_body: 0 };
@@ -665,6 +698,7 @@ export class CombatTelemetryRecorder {
   setMissionId(missionId: number): void {
     if (this.missionId !== missionId) {
       this.missionRestartCount = 0;
+      this.playerDeathCount = 0;
     }
     this.missionId = missionId;
   }
@@ -709,7 +743,14 @@ export class CombatTelemetryRecorder {
     this.timeFirstDetectionSec = null;
     this.timeFirstDamageSec = null;
     this.timePlayerDeathSec = null;
+    this.timeBelowCriticalHpSec = 0;
     this.fatalDamageSource = null;
+    this.timeFirstKillSec = null;
+    this.killsByWeapon.clear();
+    this.totalHealthRegenerated = 0;
+    this.totalArmorRestored = 0;
+    this.healthPickupsCollected = 0;
+    this.supplyCratesUsed = 0;
     this.playerShotsFired = 0;
     this.playerShotsHit = 0;
     this.playerEnemyZoneHits = { head: 0, upper_torso: 0, lower_body: 0 };
@@ -728,8 +769,11 @@ export class CombatTelemetryRecorder {
     this.latestFlightSamples = [];
   }
 
-  tickExposure(dt: number, isPlayerExposedToAnyLos: boolean): void {
+  tickExposure(dt: number, isPlayerExposedToAnyLos: boolean, isCriticalHp = false): void {
     this.elapsedSec += dt;
+    if (isCriticalHp) {
+      this.timeBelowCriticalHpSec += dt;
+    }
     if (isPlayerExposedToAnyLos) {
       if (!this.currentlyExposed) {
         this.currentlyExposed = true;
@@ -740,6 +784,59 @@ export class CombatTelemetryRecorder {
       this.currentlyExposed = false;
       this.timeSpentInCoverSec += dt;
     }
+  }
+
+  recordPlayerKill(weaponId: string): void {
+    if (this.timeFirstKillSec === null) {
+      this.timeFirstKillSec = Number(this.elapsedSec.toFixed(2));
+    }
+    this.killsByWeapon.set(weaponId, (this.killsByWeapon.get(weaponId) ?? 0) + 1);
+  }
+
+  recordHealthRegenerated(amount: number): void {
+    if (amount > 0) {
+      this.totalHealthRegenerated += amount;
+    }
+  }
+
+  recordArmorRestored(amount: number): void {
+    if (amount > 0) {
+      this.totalArmorRestored += amount;
+    }
+  }
+
+  recordHealthPickupCollected(amount: number): void {
+    this.healthPickupsCollected++;
+    if (amount > 0) {
+      this.totalHealthRegenerated += amount;
+    }
+  }
+
+  recordSupplyCrateUsed(): void {
+    this.supplyCratesUsed++;
+  }
+
+  getSurvivalBucket(timeSec = this.timePlayerDeathSec ?? this.elapsedSec): SurvivalBucket {
+    if (timeSec < 15) return '0-15s';
+    if (timeSec < 30) return '15-30s';
+    if (timeSec < 60) return '30-60s';
+    return '>60s';
+  }
+
+  getLastFiveDamageEvents(): DamageTelemetryRecord[] {
+    return this.damageRing.slice(-5);
+  }
+
+  getFatalDamageAttribution(): FatalDamageAttribution | null {
+    return this.fatalDamageSource ? { ...this.fatalDamageSource } : null;
+  }
+
+  getTotalDamageReceived(): number {
+    return Number(this.totalDamageReceived.toFixed(1));
+  }
+
+  getPlayerDeathCount(): number {
+    return this.playerDeathCount;
   }
 
   getElapsedSec(): number {
@@ -858,6 +955,7 @@ export class CombatTelemetryRecorder {
   recordPlayerDeath(): void {
     if (this.timePlayerDeathSec !== null) return;
     this.timePlayerDeathSec = Number(this.elapsedSec.toFixed(2));
+    this.playerDeathCount++;
     const lastDmg = this.damageRing[this.damageRing.length - 1];
     if (lastDmg) {
       this.fatalDamageSource = {
@@ -867,6 +965,15 @@ export class CombatTelemetryRecorder {
         weaponClass: lastDmg.weaponClass,
         hitZone: lastDmg.hitZone,
         timestampSec: lastDmg.timestampSec,
+        attackerArchetype: lastDmg.attackerArchetype ?? lastDmg.domain,
+        attackerName: lastDmg.attackerName ?? lastDmg.unitId,
+        weaponLabel: lastDmg.weaponLabel ?? lastDmg.weaponClass,
+        distanceMeters: lastDmg.distanceMeters ?? 0,
+        rawDamage: lastDmg.rawDamage ?? lastDmg.damage,
+        healthLost: lastDmg.healthLost,
+        armorAbsorbed: lastDmg.armorAbsorbed,
+        inVehicle: Boolean(lastDmg.inVehicle),
+        incomingAngleRad: lastDmg.incomingAngleRad ?? 0,
       };
     }
   }
@@ -958,7 +1065,16 @@ export class CombatTelemetryRecorder {
     hitZone: PlayerHitZone,
     damage: number,
     armorAbsorbed = 0,
-    healthLost = damage
+    healthLost = damage,
+    meta?: {
+      rawDamage?: number;
+      attackerArchetype?: string;
+      attackerName?: string;
+      weaponLabel?: string;
+      distanceMeters?: number;
+      inVehicle?: boolean;
+      incomingAngleRad?: number;
+    }
   ): void {
     if (damage <= 0) return;
 
@@ -984,9 +1100,16 @@ export class CombatTelemetryRecorder {
       domain,
       weaponClass,
       hitZone,
-      damage,
-      armorAbsorbed,
-      healthLost,
+      damage: Number(damage.toFixed(2)),
+      rawDamage: Number((meta?.rawDamage ?? damage).toFixed(2)),
+      armorAbsorbed: Number(armorAbsorbed.toFixed(2)),
+      healthLost: Number(healthLost.toFixed(2)),
+      attackerArchetype: meta?.attackerArchetype ?? domain,
+      attackerName: meta?.attackerName ?? unitId,
+      weaponLabel: meta?.weaponLabel ?? weaponClass,
+      distanceMeters: Number((meta?.distanceMeters ?? 0).toFixed(1)),
+      inVehicle: Boolean(meta?.inVehicle),
+      incomingAngleRad: Number((meta?.incomingAngleRad ?? 0).toFixed(3)),
     };
 
     if (this.damageRing.length >= CombatTelemetryRecorder.MAX_DAMAGE_RECORDS) {
@@ -999,7 +1122,7 @@ export class CombatTelemetryRecorder {
       unitId,
       squadId,
       domain,
-      `${unitId} (${weaponClass}) hit ${hitZone} for ${damage.toFixed(1)} dmg`
+      `${rec.attackerName ?? unitId} (${rec.weaponLabel ?? weaponClass}) hit ${hitZone} for ${damage.toFixed(1)} dmg (HP -${healthLost.toFixed(1)}, ARM -${armorAbsorbed.toFixed(1)})`
     );
   }
 
@@ -1096,6 +1219,11 @@ export class CombatTelemetryRecorder {
       damageByWeaponObj[k] = Number(v.toFixed(1));
     });
 
+    const killsByWeaponObj: Record<string, number> = {};
+    this.killsByWeapon.forEach((v, k) => {
+      killsByWeaponObj[k] = v;
+    });
+
     const damageByEnemyArr = Array.from(this.statsByEnemy.entries())
       .map(([unitId, st]) => ({
         unitId,
@@ -1123,6 +1251,19 @@ export class CombatTelemetryRecorder {
     const rayAvg =
       this.raycastsExecuted > 0 ? Number((this.raycastMsSum / this.raycastsExecuted).toFixed(3)) : 0;
 
+    const totalZoneHits =
+      this.playerEnemyZoneHits.head +
+      this.playerEnemyZoneHits.upper_torso +
+      this.playerEnemyZoneHits.lower_body;
+    const zoneRatios =
+      totalZoneHits > 0
+        ? {
+            head: Number(((this.playerEnemyZoneHits.head / totalZoneHits) * 100).toFixed(1)),
+            upper_torso: Number(((this.playerEnemyZoneHits.upper_torso / totalZoneHits) * 100).toFixed(1)),
+            lower_body: Number(((this.playerEnemyZoneHits.lower_body / totalZoneHits) * 100).toFixed(1)),
+          }
+        : { head: 0, upper_torso: 0, lower_body: 0 };
+
     return {
       missionId: this.missionId,
       coordinator,
@@ -1132,6 +1273,7 @@ export class CombatTelemetryRecorder {
         enemiesAimingCount: aiming,
         enemiesFiringCount: firing,
         incomingProjectilesCount,
+        damageLast2s: Number(this.getRollingDamage(2).toFixed(1)),
         damageLast5s: Number(this.getRollingDamage(5).toFixed(1)),
         damageLast10s: Number(this.getRollingDamage(10).toFixed(1)),
         damageLast30s: Number(this.getRollingDamage(30).toFixed(1)),
@@ -1156,6 +1298,9 @@ export class CombatTelemetryRecorder {
         firstDetectToFirstDamageSec,
         timeSpentExposedSec: Number(this.timeSpentExposedSec.toFixed(1)),
         timeSpentInCoverSec: Number(this.timeSpentInCoverSec.toFixed(1)),
+        timeBelowCriticalHpSec: Number(this.timeBelowCriticalHpSec.toFixed(1)),
+        survivalBucket: this.getSurvivalBucket(),
+        playerDeathCount: this.playerDeathCount,
         lastLeftCoverTimeSec:
           this.lastLeftCoverTimeSec !== null ? Number(this.lastLeftCoverTimeSec.toFixed(2)) : null,
         leaveCoverToFirstHitSec:
@@ -1179,6 +1324,9 @@ export class CombatTelemetryRecorder {
         speedOutliersCount: this.speedOutliersCount,
         timePlayerDeathSec: this.timePlayerDeathSec,
         fatalDamageSource: this.fatalDamageSource ? { ...this.fatalDamageSource } : null,
+        lastFiveDamageEvents: this.getLastFiveDamageEvents(),
+        timeFirstKillSec: this.timeFirstKillSec,
+        killsByWeapon: killsByWeaponObj,
         playerShotsFired: this.playerShotsFired,
         playerShotsHit: this.playerShotsHit,
         playerAccuracyPct:
@@ -1186,6 +1334,11 @@ export class CombatTelemetryRecorder {
             ? Number(((this.playerShotsHit / this.playerShotsFired) * 100).toFixed(1))
             : 0,
         playerEnemyZoneHits: { ...this.playerEnemyZoneHits },
+        playerEnemyZoneRatios: zoneRatios,
+        totalHealthRegenerated: Number(this.totalHealthRegenerated.toFixed(1)),
+        totalArmorRestored: Number(this.totalArmorRestored.toFixed(1)),
+        healthPickupsCollected: this.healthPickupsCollected,
+        supplyCratesUsed: this.supplyCratesUsed,
         objectiveCompletedAtSec: { ...this.objectiveCompletedAtSec },
         missionRestartCount: this.missionRestartCount,
       },

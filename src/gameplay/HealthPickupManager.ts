@@ -252,7 +252,8 @@ export class HealthPickupManager {
     player: PlayerController,
     inVehicle: boolean,
     onAlert?: (msg: string, dur: number) => void,
-    onSubtitle?: (msg: string, dur: number) => void
+    onSubtitle?: (msg: string, dur: number) => void,
+    onPickupCollected?: (healedAmount: number) => void
   ): void {
     this.nearbyFullHealthPrompt = null;
     if (this.fullHealthSubtitleCooldown > 0) {
@@ -287,15 +288,20 @@ export class HealthPickupManager {
           this.scene.remove(p.meshGroup);
           this.vfx.spawnImpact(p.position.x, p.position.y + 0.9, p.position.z, 'metal');
           this.audio.play2D('ui_click', 6, 0.65);
+          onPickupCollected?.(actualHealed);
           onAlert?.(
             `HEART MEDKIT COLLECTED: +${actualHealed} HP (${Math.round(player.health)}/${player.maxHealth})`,
             2.4
           );
         } else {
-          this.nearbyFullHealthPrompt = 'HEART MEDKIT NEARBY — HEALTH FULL (100/100)';
+          const maxHp = Math.round(player.maxHealth);
+          this.nearbyFullHealthPrompt = `HEART MEDKIT NEARBY — HEALTH FULL (${maxHp}/${maxHp})`;
           if (this.fullHealthSubtitleCooldown <= 0) {
             this.fullHealthSubtitleCooldown = 3.2;
-            onSubtitle?.('MEDKIT: Health already full (100/100) — saved for combat recovery.', 2.4);
+            onSubtitle?.(
+              `MEDKIT: Health already full (${maxHp}/${maxHp}) — saved for combat recovery.`,
+              2.4
+            );
           }
         }
       }

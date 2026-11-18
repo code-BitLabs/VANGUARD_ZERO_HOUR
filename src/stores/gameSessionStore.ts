@@ -1,14 +1,36 @@
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
-import { CombatDebugSnapshot } from '@/src/gameplay/CombatTelemetryRecorder';
+import {
+  CombatDebugSnapshot,
+  DamageTelemetryRecord,
+  FatalDamageAttribution,
+} from '@/src/gameplay/CombatTelemetryRecorder';
 import { AssetLoadProgress } from '@/src/schemas/asset.schema';
 import { DamageArc, HitFeedback, HudSnapshot, KillFeedItem } from '@/src/schemas/events.schema';
 import { MissionResultPayload } from './progressionStore';
 
 export interface DebriefSummary extends MissionResultPayload {
   accuracyPct: number;
+  shotsFired?: number;
+  shotsHit?: number;
+  headshotPct?: number;
+  deathsCount?: number;
+  damageReceived?: number;
+  survivalTimeSec?: number;
+  fatalSource?: FatalDamageAttribution | null;
+  lastHits?: DamageTelemetryRecord[];
   newAchievements: string[];
+  canRestartCheckpoint?: boolean;
+  checkpointDeathsCount?: number;
+}
+
+export interface DownedState {
+  active: boolean;
+  remainingSec: number;
+  fatalSource: FatalDamageAttribution | null;
+  lastHits: DamageTelemetryRecord[];
+  canRestartCheckpoint: boolean;
 }
 
 export interface EngineDiagnosticsSnapshot {
@@ -43,6 +65,7 @@ export interface GameSessionState {
   damageArcs: DamageArc[];
   loadProgress: AssetLoadProgress;
   debrief: DebriefSummary | null;
+  downedState: DownedState | null;
   diagnostics: EngineDiagnosticsSnapshot;
   combatDebug: CombatDebugSnapshot | null;
   updateHudSnapshot: (snapshot: HudSnapshot) => void;
@@ -52,6 +75,7 @@ export interface GameSessionState {
   decayDamageArcs: () => void;
   setLoadProgress: (progress: AssetLoadProgress) => void;
   setDebrief: (debrief: DebriefSummary | null) => void;
+  setDownedState: (downedState: DownedState | null) => void;
   updateDiagnostics: (diag: EngineDiagnosticsSnapshot) => void;
   updateCombatDebug: (snapshot: CombatDebugSnapshot | null) => void;
   resetSession: () => void;
@@ -80,6 +104,8 @@ const DEFAULT_HUD: HudSnapshot = {
   isSprinting: false,
   isCrouching: false,
   isSliding: false,
+  canVault: false,
+  isVaulting: false,
   crosshairSpread: 0.02,
   playerX: 0,
   playerZ: 0,
@@ -95,6 +121,13 @@ const DEFAULT_HUD: HudSnapshot = {
   vehicleCameraMode: 'chase',
   interactPrompt: null,
   activeActionDirective: null,
+  activeStageIndex: 1,
+  totalStages: 1,
+  activeStageTitle: 'STAGE 1 — PRIMARY OPERATION',
+  extractionStatus: 'not_applicable',
+  extractionBlockReason: null,
+  activeTacticalHint: null,
+  waveStatusText: null,
   subtitleText: null,
   missionAlert: null,
   elapsedSec: 0,
@@ -108,6 +141,9 @@ const DEFAULT_HUD: HudSnapshot = {
   blips: [],
   activeBossLabel: null,
   activeBossHealthPct: 0,
+  spawnProtectionSec: 0,
+  isRegenerating: false,
+  incomingThreatWarning: null,
 };
 
 const DEFAULT_DIAG: EngineDiagnosticsSnapshot = {
@@ -146,6 +182,7 @@ export const gameSessionStore = createStore<GameSessionState>()(
     damageArcs: [],
     loadProgress: { loaded: 0, total: 1, currentAsset: 'Initializing', percent: 0, usedFallbackCount: 0 },
     debrief: null,
+    downedState: null,
     diagnostics: DEFAULT_DIAG,
     combatDebug: null,
     updateHudSnapshot: (hud) => set({ hud }),
@@ -169,6 +206,7 @@ export const gameSessionStore = createStore<GameSessionState>()(
       }),
     setLoadProgress: (loadProgress) => set({ loadProgress }),
     setDebrief: (debrief) => set({ debrief }),
+    setDownedState: (downedState) => set({ downedState }),
     updateDiagnostics: (diagnostics) => set({ diagnostics }),
     updateCombatDebug: (combatDebug) => set({ combatDebug }),
     resetSession: () =>
@@ -178,6 +216,7 @@ export const gameSessionStore = createStore<GameSessionState>()(
         hitFeedback: null,
         damageArcs: [],
         debrief: null,
+        downedState: null,
         combatDebug: null,
       }),
   }))

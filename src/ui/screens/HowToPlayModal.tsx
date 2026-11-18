@@ -1,5 +1,6 @@
 import React from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ShieldAlert } from 'lucide-react';
+import { TIER3_MECHANIC_CARDS } from '@/src/gameplay/TacticalGuidanceSystem';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
 
@@ -39,7 +40,7 @@ const SECTIONS = [
   {
     title: 'Vehicles, Guided Missiles & Systems',
     items: [
-      ['E', 'Enter/Exit Vehicle, Collect Supply Crate, Sabotage Target'],
+      ['E', 'Enter/Exit Vehicle, Collect Supply Crate, Plant Demolition Charge'],
       ['F', 'Cycle Vehicle Camera (Chase / Driver FPV / Turret / Orbit)'],
       ['Slot 8 (FIM-92X)', 'Hold aim on Helicopters, Drones, Jets or APCs to Lock On'],
       ['Esc', 'Pause Operation / Unlock Cursor'],
@@ -59,17 +60,57 @@ export function HowToPlayModal({ onBack }: { onBack: () => void }) {
         paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
-      <div className="max-w-5xl w-full space-y-4 my-auto">
+      <div className="max-w-5xl w-full space-y-4 my-auto py-3">
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500">Field Manual</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500">
+              Field Manual // Tier 3 Tactical Mechanics Reference
+            </p>
             <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
-              Combat Controls &amp; Systems
+              Combat Controls &amp; Tactical Systems
             </h2>
           </div>
           <Button variant="secondary" size="sm" className="min-h-[44px] px-4" onClick={onBack}>
             <ArrowLeft className="w-4 h-4" /> Back
           </Button>
+        </div>
+
+        {/* Tier 3 Advanced Mechanic Cards */}
+        <div data-testid="tier3-mechanic-cards" className="space-y-2">
+          <div className="font-mono text-[11px] uppercase tracking-widest text-cyan-400 flex items-center gap-1.5">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+            <span>Specialized Tactical Systems &amp; Stage Rules</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {TIER3_MECHANIC_CARDS.map((card) => (
+              <div
+                key={card.id}
+                data-testid={`mechanic-card-${card.id}`}
+                className="bg-[#141920] border border-zinc-800 p-3 rounded-sm space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-display text-xs font-bold uppercase text-amber-400">
+                    {card.title}
+                  </span>
+                  <span className="font-mono text-[9px] uppercase px-1.5 py-0.5 bg-zinc-900 border border-zinc-700 text-zinc-300 rounded-xs">
+                    {card.badge}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-300 leading-snug">{card.summary}</p>
+                <div className="pt-1 border-t border-zinc-800/80 font-mono text-[10px] space-y-0.5">
+                  <div className="text-cyan-300">
+                    <span className="text-zinc-500">DESKTOP: </span>
+                    {card.desktopControls}
+                  </div>
+                  <div className="text-amber-300">
+                    <span className="text-zinc-500">MOBILE: </span>
+                    {card.mobileControls}
+                  </div>
+                </div>
+                <div className="text-[10px] text-emerald-300/90 italic">{card.tacticalNotes[0]}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">

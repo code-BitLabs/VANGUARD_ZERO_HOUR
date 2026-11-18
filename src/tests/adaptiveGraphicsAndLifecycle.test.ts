@@ -208,4 +208,72 @@ describe('Adaptive Graphics, Ownership, Telemetry & Lifecycle Suspend', () => {
   it('handles THREE.WebGLRenderer fallback metrics safely when headless', () => {
     expect(typeof THREE.REVISION).toBe('string');
   });
+
+  it('TRN-03: keeps VignetteEffect and EffectComposer active across all quality tiers even when Bloom is disabled', () => {
+    const composerRender = vi.fn();
+    const rendererRender = vi.fn();
+    const bloomPass = { enabled: true, dispose: vi.fn() };
+    const vignettePass = { enabled: true, dispose: vi.fn() };
+    const bloomEffect = { blendMode: { opacity: { value: 1 } }, dispose: vi.fn() };
+    const vignetteEffect = { dispose: vi.fn() };
+
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 1280 });
+    Object.defineProperty(container, 'clientHeight', { value: 720 });
+
+    const fakeInstance = Object.create(EngineRenderer.prototype) as EngineRenderer;
+
+    Object.assign(fakeInstance as unknown as Record<string, unknown>, {
+      container,
+      width: 1280,
+      height: 720,
+      renderScale: 1,
+      bloomEnabled: true,
+      camera: new THREE.PerspectiveCamera(78, 16 / 9, 0.15, 420),
+      viewModelCamera: new THREE.PerspectiveCamera(58, 16 / 9, 0.03, 12),
+      scene: new THREE.Scene(),
+      viewModelScene: new THREE.Scene(),
+      composer: { render: composerRender, setSize: vi.fn() },
+      bloomEffect,
+      vignetteEffect,
+      bloomPass,
+      vignettePass,
+      renderer: {
+        shadowMap: { enabled: true },
+        info: { reset: vi.fn(), render: { calls: 10, triangles: 500 }, memory: { geometries: 1, textures: 1 } },
+        getContext: () => ({ isContextLost: () => false }),
+        setRenderTarget: vi.fn(),
+        clear: vi.fn(),
+        clearDepth: vi.fn(),
+        render: rendererRender,
+        setPixelRatio: vi.fn(),
+        setSize: vi.fn(),
+      },
+    });
+
+    const tiers = ['low', 'medium', 'high', 'ultra'] as const;
+    for (const tier of tiers) {
+      for (const userBloomSetting of [true, false]) {
+        composerRender.mockClear();
+        rendererRender.mockClear();
+
+        const governor = new PerformanceGovernor(tier, false);
+        const profile = governor.getProfile();
+        fakeInstance.applyGovernorProfile(profile, true, userBloomSetting, null);
+        fakeInstance.renderFrame(false);
+
+        const state = fakeInstance.getPostProcessState();
+        const expectedBloom = profile.bloomEnabled && userBloomSetting;
+        expect(state.composerActive).toBe(true);
+        expect(state.vignetteEnabled).toBe(true);
+        expect(vignettePass.enabled).toBe(true);
+        expect(state.bloomEnabled).toBe(expectedBloom);
+        expect(state.bloomPassEnabled).toBe(expectedBloom);
+        expect(bloomEffect.blendMode.opacity.value).toBe(expectedBloom ? 1 : 0);
+        // Composer always renders main scene so Vignette never vanishes on low/medium/bloom-off
+        expect(composerRender).toHaveBeenCalledTimes(1);
+        expect(rendererRender).not.toHaveBeenCalled();
+      }
+    }
+  });
 });

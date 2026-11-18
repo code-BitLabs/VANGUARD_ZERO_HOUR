@@ -10,6 +10,7 @@ interface PersistedCampaignPref {
   hasSeenCampaignBriefing: boolean;
   seenMissionBriefings: Record<string, string>;
   hasSeenVehicleControlHint: boolean;
+  dismissedHintIds: Record<string, boolean>;
 }
 
 function loadPersistedPref(): PersistedCampaignPref {
@@ -22,6 +23,7 @@ function loadPersistedPref(): PersistedCampaignPref {
         hasSeenCampaignBriefing: false,
         seenMissionBriefings: {},
         hasSeenVehicleControlHint: false,
+        dismissedHintIds: {},
       };
     }
     const parsed = JSON.parse(raw) as Partial<PersistedCampaignPref>;
@@ -40,12 +42,21 @@ function loadPersistedPref(): PersistedCampaignPref {
         }
       }
     }
+    const dismissedMap: Record<string, boolean> = {};
+    if (parsed.dismissedHintIds && typeof parsed.dismissedHintIds === 'object') {
+      for (const [k, v] of Object.entries(parsed.dismissedHintIds)) {
+        if (Boolean(v)) {
+          dismissedMap[k] = true;
+        }
+      }
+    }
     return {
       selectedMissionId: missionId,
       difficulty: diffRes.success ? diffRes.data : 'normal',
       hasSeenCampaignBriefing: Boolean(parsed.hasSeenCampaignBriefing),
       seenMissionBriefings: seenMap,
       hasSeenVehicleControlHint: Boolean(parsed.hasSeenVehicleControlHint),
+      dismissedHintIds: dismissedMap,
     };
   } catch {
     return {
@@ -54,6 +65,7 @@ function loadPersistedPref(): PersistedCampaignPref {
       hasSeenCampaignBriefing: false,
       seenMissionBriefings: {},
       hasSeenVehicleControlHint: false,
+      dismissedHintIds: {},
     };
   }
 }
@@ -72,12 +84,16 @@ export interface MissionSelectionState {
   hasSeenCampaignBriefing: boolean;
   seenMissionBriefings: Record<string, string>;
   hasSeenVehicleControlHint: boolean;
+  dismissedHintIds: Record<string, boolean>;
   setSelectedMission: (id: number) => void;
   setDifficulty: (difficulty: Difficulty) => void;
   markCampaignBriefingSeen: () => void;
   hasSeenMissionBriefing: (missionKey: string, briefingVersion: string) => boolean;
   markMissionBriefingSeen: (missionKey: string, briefingVersion: string) => void;
   markVehicleControlHintSeen: () => void;
+  dismissTacticalHint: (hintId: string) => void;
+  isTacticalHintDismissed: (hintId: string) => boolean;
+  resetDismissedHints: () => void;
 }
 
 const initial = loadPersistedPref();
@@ -89,6 +105,7 @@ function persistFromState(state: MissionSelectionState): void {
     hasSeenCampaignBriefing: state.hasSeenCampaignBriefing,
     seenMissionBriefings: state.seenMissionBriefings,
     hasSeenVehicleControlHint: state.hasSeenVehicleControlHint,
+    dismissedHintIds: state.dismissedHintIds,
   });
 }
 
@@ -98,6 +115,7 @@ export const missionSelectionStore = createStore<MissionSelectionState>()((set, 
   hasSeenCampaignBriefing: initial.hasSeenCampaignBriefing,
   seenMissionBriefings: initial.seenMissionBriefings,
   hasSeenVehicleControlHint: initial.hasSeenVehicleControlHint,
+  dismissedHintIds: initial.dismissedHintIds,
   setSelectedMission: (selectedMissionId) => {
     set({ selectedMissionId });
     persistFromState(get());
@@ -126,8 +144,22 @@ export const missionSelectionStore = createStore<MissionSelectionState>()((set, 
     set({ hasSeenVehicleControlHint: true });
     persistFromState(get());
   },
+  dismissTacticalHint: (hintId) => {
+    if (get().dismissedHintIds[hintId]) return;
+    const nextDismissed = { ...get().dismissedHintIds, [hintId]: true };
+    set({ dismissedHintIds: nextDismissed });
+    persistFromState(get());
+  },
+  isTacticalHintDismissed: (hintId) => {
+    return Boolean(get().dismissedHintIds[hintId]);
+  },
+  resetDismissedHints: () => {
+    set({ dismissedHintIds: {} });
+    persistFromState(get());
+  },
 }));
 
 export function useMissionSelectionStore<T>(selector: (state: MissionSelectionState) => T): T {
   return useStore(missionSelectionStore, selector);
 }
+

@@ -1,6 +1,7 @@
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
-import { SpatialHash, COLLISION_LAYER } from '@/src/physics/SpatialHash';
+import { SpatialAABB, SpatialHash, COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import { WorkerJobRequestSchema, WorkerJobResponseSchema } from '@/src/schemas/worker.schema';
+import { NAV_GRID_DEFAULTS } from './navigationCore';
 
 export interface PathQuery {
   sx: number;
@@ -14,10 +15,55 @@ export interface PathWaypoint {
   wz: number;
 }
 
+const NAV_OBSTACLE_MASK =
+  COLLISION_LAYER.WORLD |
+  COLLISION_LAYER.COVER |
+  COLLISION_LAYER.WINDOW_SILL |
+  COLLISION_LAYER.DESTRUCTIBLE;
+
+function isNavCellBlocked(
+  spatialHash: SpatialHash,
+  wx: number,
+  wz: number,
+  scratch: SpatialAABB[],
+  groundHeightFn?: (x: number, z: number) => number
+): 0 | 1 {
+  const hits = spatialHash.queryAABB(
+    wx - 0.55,
+    wz - 0.55,
+    wx + 0.55,
+    wz + 0.55,
+    NAV_OBSTACLE_MASK,
+    scratch
+  );
+
+  let hasBridge = false;
+  for (let i = 0; i < hits.length; i++) {
+    const box = hits[i];
+    if (box.tag === 'bridge') {
+      hasBridge = true;
+    }
+    // Block navigation only if the obstacle occupies pedestrian height [0.48m .. 1.85m].
+    // Doorway lintels (minY >= 2.4m), bridge decks (maxY <= 0.28m), and ground slabs remain walkable.
+    if (box.minY < 1.85 && box.maxY > 0.48) {
+      return 1;
+    }
+  }
+
+  // Deep river channels (e.g. jungle_zone z in (10, 22) outside bridge spans) are impassable on foot
+  if (!hasBridge && groundHeightFn && groundHeightFn(wx, wz) <= -0.5) {
+    return 1;
+  }
+
+  return 0;
+}
+
 export class WorkerBridge {
   private worker: Worker | null = null;
   private currentVersion = 1;
   private nextJobId = 1;
+  private groundHeightFn?: (x: number, z: number) => number;
+  private readonly cellQueryScratch: SpatialAABB[] = [];
   private pendingResolvers = new Map<
     number,
     {
@@ -56,39 +102,26 @@ export class WorkerBridge {
     }
   }
 
-  uploadCollisionGrid(spatialHash: SpatialHash): void {
+  uploadCollisionGrid(
+    spatialHash: SpatialHash,
+    getGroundHeightAt?: (x: number, z: number) => number
+  ): void {
+    this.groundHeightFn = getGroundHeightAt;
     if (!this.worker || !this.healthy) return;
 
-    const gridWidth = 120;
-    const gridHeight = 120;
-    const cellSize = 2;
-    const originX = -120;
-    const originZ = -120;
+    const gridWidth = NAV_GRID_DEFAULTS.width;
+    const gridHeight = NAV_GRID_DEFAULTS.height;
+    const cellSize = NAV_GRID_DEFAULTS.cellSize;
+    const originX = NAV_GRID_DEFAULTS.originX;
+    const originZ = NAV_GRID_DEFAULTS.originZ;
     const blocked = new Uint8Array(gridWidth * gridHeight);
-    const scratch: ReturnType<SpatialHash['queryAABB']> = [];
-    const navMask =
-      COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER | COLLISION_LAYER.WINDOW_SILL;
 
     for (let cz = 0; cz < gridHeight; cz++) {
+      const wz = originZ + (cz + 0.5) * cellSize;
       for (let cx = 0; cx < gridWidth; cx++) {
         const wx = originX + (cx + 0.5) * cellSize;
-        const wz = originZ + (cz + 0.5) * cellSize;
-        const hits = spatialHash.queryAABB(
-          wx - 0.55,
-          wz - 0.55,
-          wx + 0.55,
-          wz + 0.55,
-          navMask,
-          scratch
-        );
-        for (let i = 0; i < hits.length; i++) {
-          const box = hits[i];
-          // Block navigation only if the obstacle occupies pedestrian height [0.48m .. 1.85m].
-          // Doorway lintels (minY >= 2.4m) and ground floor slabs (maxY <= 0.45m) remain walkable!
-          if (box.minY < 1.85 && box.maxY > 0.48) {
-            blocked[cz * gridWidth + cx] = 1;
-            break;
-          }
+        if (isNavCellBlocked(spatialHash, wx, wz, this.cellQueryScratch, this.groundHeightFn) === 1) {
+          blocked[cz * gridWidth + cx] = 1;
         }
       }
     }
@@ -105,6 +138,65 @@ export class WorkerBridge {
     });
 
     this.worker.postMessage({ ...header, blockedBuffer: blocked.buffer }, [blocked.buffer]);
+  }
+
+  /**
+   * TRN-01C: Re-rasterizes only the grid cells overlapping a modified/destroyed collider region
+   * and pushes compact [cellIndex, blockedFlag] pairs to the worker.
+   */
+  updateCollisionRegion(
+    spatialHash: SpatialHash,
+    minX: number,
+    minZ: number,
+    maxX: number,
+    maxZ: number
+  ): void {
+    if (!this.worker || !this.healthy) return;
+
+    const gridWidth = NAV_GRID_DEFAULTS.width;
+    const gridHeight = NAV_GRID_DEFAULTS.height;
+    const cellSize = NAV_GRID_DEFAULTS.cellSize;
+    const originX = NAV_GRID_DEFAULTS.originX;
+    const originZ = NAV_GRID_DEFAULTS.originZ;
+    const maxWorldX = originX + gridWidth * cellSize;
+    const maxWorldZ = originZ + gridHeight * cellSize;
+
+    if (maxX < originX || minX >= maxWorldX || maxZ < originZ || minZ >= maxWorldZ) {
+      return;
+    }
+
+    const cxMin = Math.max(0, Math.min(gridWidth - 1, Math.floor((minX - originX) / cellSize)));
+    const cxMax = Math.max(0, Math.min(gridWidth - 1, Math.floor((maxX - originX) / cellSize)));
+    const czMin = Math.max(0, Math.min(gridHeight - 1, Math.floor((minZ - originZ) / cellSize)));
+    const czMax = Math.max(0, Math.min(gridHeight - 1, Math.floor((maxZ - originZ) / cellSize)));
+
+    const cellCount = (cxMax - cxMin + 1) * (czMax - czMin + 1);
+    if (cellCount <= 0) return;
+
+    const updates = new Uint16Array(cellCount * 2);
+    let ptr = 0;
+    for (let cz = czMin; cz <= czMax; cz++) {
+      const wz = originZ + (cz + 0.5) * cellSize;
+      for (let cx = cxMin; cx <= cxMax; cx++) {
+        const wx = originX + (cx + 0.5) * cellSize;
+        updates[ptr++] = cz * gridWidth + cx;
+        updates[ptr++] = isNavCellBlocked(
+          spatialHash,
+          wx,
+          wz,
+          this.cellQueryScratch,
+          this.groundHeightFn
+        );
+      }
+    }
+
+    const header = WorkerJobRequestSchema.parse({
+      jobId: this.nextJobId++,
+      jobVersion: this.currentVersion,
+      type: 'update_cells',
+    });
+
+    this.worker.postMessage({ ...header, cellUpdatesBuffer: updates.buffer }, [updates.buffer]);
   }
 
   requestPaths(queries: PathQuery[]): Promise<PathWaypoint[] | null> {
@@ -167,6 +259,7 @@ export class WorkerBridge {
 
   dispose(): void {
     this.flushPendingWithFallback();
+    this.groundHeightFn = undefined;
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

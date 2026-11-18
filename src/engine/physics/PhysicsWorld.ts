@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
-import { CollisionSystem, RaycastHitResult } from './CollisionSystem';
+import {
+  CollisionSystem,
+  RaycastHitResult,
+  VAULT_MAX_PROBE_DISTANCE,
+  VAULT_PROBE_LAYER_MASK,
+  VaultProbeResult,
+} from './CollisionSystem';
 import { CollisionResponseSystem } from './CollisionResponseSystem';
 import { PhysicsDebugSystem } from './PhysicsDebugSystem';
 import { formatCollisionLayer, PHYSICS_MASKS } from './PhysicsLayers';
@@ -185,6 +191,37 @@ export class PhysicsWorld {
       this.debugSystem.recordCeilingStandupBlocked(entityId, pos.x, pos.y + targetHeight, pos.z, res.blocker.id);
     }
     return res.clear;
+  }
+
+  /**
+   * Probes whether a character at `pos` moving along `(dirX, dirZ)` can vault over or mantle onto
+   * a low obstacle (`0.46m–1.15m`) using the unified SpatialHash and CollisionSystem.
+   */
+  probeVaultObstacle(
+    pos: THREE.Vector3,
+    dirX: number,
+    dirZ: number,
+    radius: number,
+    standingHeight: number,
+    out: VaultProbeResult,
+    maxReach = VAULT_MAX_PROBE_DISTANCE,
+    layerMask = VAULT_PROBE_LAYER_MASK
+  ): boolean {
+    return this.collisionSystem.probeVaultObstacle(
+      this.spatialHash,
+      pos.x,
+      pos.y,
+      pos.z,
+      dirX,
+      dirZ,
+      radius,
+      standingHeight,
+      this.worldBoundLimit,
+      this.getGroundHeightAt,
+      out,
+      maxReach,
+      layerMask
+    );
   }
 
   /**

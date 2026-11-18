@@ -55,7 +55,12 @@ export interface ExplosiveCallbacks {
   onEnemyKilled: (unit: EnemyUnit, weaponLabel: string) => void;
   onAirKilled: (unit: AirUnit, weaponLabel: string) => void;
   onConvoyDestroyed: (veh: VehicleEntity) => void;
-  onDestructibleDestroyed: (id: string, kind: string) => void;
+  onDestructibleDestroyed: (
+    id: string,
+    kind: string,
+    explosiveId?: ExplosiveId,
+    distanceMeters?: number
+  ) => void;
   onAlert: (text: string, durationSec?: number) => void;
 }
 
@@ -768,6 +773,7 @@ export class ExplosiveManager {
         if (player.alive) {
           const dp = Math.hypot(player.position.x - zone.center.x, player.position.z - zone.center.z);
           if (dp <= zone.radius) {
+            const wasInVehicle = player.isOccupyingVehicle();
             player.applyDamage(stepDmg, zone.center.x, zone.center.z);
             const { armorAbsorbed, healthLost } = player.getLastDamageBreakdown();
             if (armorAbsorbed + healthLost > 0 && this.telemetry) {
@@ -780,7 +786,16 @@ export class ExplosiveManager {
                 'splash',
                 armorAbsorbed + healthLost,
                 armorAbsorbed,
-                healthLost
+                healthLost,
+                {
+                  attackerArchetype: 'fallout_hazard',
+                  attackerName: 'Radiation Fallout Zone',
+                  weaponLabel: 'Nuclear Fallout',
+                  distanceMeters: Number(dp.toFixed(1)),
+                  rawDamage: Number(stepDmg.toFixed(2)),
+                  inVehicle: wasInVehicle,
+                  incomingAngleRad: player.computeRelativeThreatAngle(zone.center.x, zone.center.z),
+                }
               );
             }
           }
@@ -905,6 +920,7 @@ export class ExplosiveManager {
     }
 
     const occupiedVeh = vehicles.getPlayerVehicle();
+    const label = EXPLOSIVE_BY_ID[ev.explosiveId]?.shortName ?? 'EXPLOSIVE';
 
     // 1. Player radial splash & physical blast impulse (only when on foot; occupied vehicle hull is evaluated in section 3)
     if (!occupiedVeh && distToPlayer <= ev.radius && player.alive) {
@@ -940,14 +956,22 @@ export class ExplosiveManager {
             'splash',
             applied,
             armorAbsorbed,
-            healthLost
+            healthLost,
+            {
+              attackerArchetype: ev.fromPlayer ? 'self_ordnance' : 'rocket_trooper',
+              attackerName: ev.fromPlayer ? 'Friendly Ordnance' : 'Hostile Ordnance',
+              weaponLabel: label,
+              distanceMeters: Number(distToPlayer.toFixed(1)),
+              rawDamage: Number(dmg.toFixed(2)),
+              inVehicle: false,
+              incomingAngleRad: player.computeRelativeThreatAngle(ev.x, ev.z),
+            }
           );
         }
       }
     }
 
     // 2. Ground Enemies
-    const label = EXPLOSIVE_BY_ID[ev.explosiveId]?.shortName ?? 'EXPLOSIVE';
     for (const u of enemies.getUnits()) {
       if (!u.alive) continue;
       const dist = Math.hypot(u.position.x - ev.x, u.position.y + 1 - ev.y, u.position.z - ev.z);
@@ -1005,7 +1029,16 @@ export class ExplosiveManager {
               'splash',
               applied,
               armorAbsorbed,
-              healthLost
+              healthLost,
+              {
+                attackerArchetype: 'vehicle_breach',
+                attackerName: `${v.displayName} Hull Breach`,
+                weaponLabel: label,
+                distanceMeters: Number(dist.toFixed(1)),
+                rawDamage: Number(breachDmg.toFixed(2)),
+                inVehicle: true,
+                incomingAngleRad: player.computeRelativeThreatAngle(ev.x, ev.z),
+              }
             );
           }
         }
@@ -1081,7 +1114,13 @@ export class ExplosiveManager {
             callbacks
           );
         },
-        (destroyedEnt) => callbacks.onDestructibleDestroyed(destroyedEnt.id, destroyedEnt.kind)
+        (destroyedEnt) =>
+          callbacks.onDestructibleDestroyed(
+            destroyedEnt.id,
+            destroyedEnt.kind,
+            ev.explosiveId,
+            dist
+          )
       );
       if (d.state !== prevState) {
         this.telemetry?.recordDestruction({

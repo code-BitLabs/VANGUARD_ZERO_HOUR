@@ -39,6 +39,24 @@ export const ObjectiveActionMetadataSchema = z.object({
 });
 export type ObjectiveActionMetadata = z.infer<typeof ObjectiveActionMetadataSchema>;
 
+export const ObjectiveLifecycleStatusSchema = z.enum([
+  'locked',
+  'available',
+  'active',
+  'completed',
+  'bypassed',
+  'failed',
+  'blocked',
+]);
+export type ObjectiveLifecycleStatus = z.infer<typeof ObjectiveLifecycleStatusSchema>;
+
+export const DemolitionPolicySchema = z.enum([
+  'any_destruction',
+  'charge_or_c4_only',
+  'any_damage',
+]);
+export type DemolitionPolicy = z.infer<typeof DemolitionPolicySchema>;
+
 export const ObjectiveSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -48,6 +66,14 @@ export const ObjectiveSchema = z.object({
   markerPos: Vec3Schema,
   targetAirUnitTypes: z.array(AirUnitTypeSchema).optional(),
   isOptional: z.boolean().default(false),
+  stageIndex: z.number().int().min(1).default(1),
+  stageTitle: z.string().default('STAGE 1 — PRIMARY OPERATION'),
+  prerequisiteIds: z.array(z.string()).default([]),
+  demolitionPolicy: DemolitionPolicySchema.default('any_destruction'),
+  demolitionZoneRadius: z.number().positive().default(6.5),
+  bonusScore: z.number().int().min(0).default(350),
+  bypassScore: z.number().int().min(0).default(125),
+  blockedExplanation: z.string().optional(),
   actionMeta: ObjectiveActionMetadataSchema.optional(),
 });
 export type MissionObjectiveConfig = z.infer<typeof ObjectiveSchema>;

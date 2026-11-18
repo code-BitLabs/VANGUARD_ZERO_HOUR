@@ -7,31 +7,39 @@ import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { getMissionById } from '@/src/data/missions';
 import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { VFXPool } from '@/src/effects/VFXPool';
-import { AirCombatManager, AirUnit } from '@/src/gameplay/AirCombatManager';
-import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from '@/src/gameplay/BallisticSolver';
+import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
+import { BallisticSolver } from '@/src/gameplay/BallisticSolver';
+import { CombatDamageResolver } from '@/src/gameplay/CombatDamageResolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { DiagnosticRulesEngine } from '@/src/gameplay/diagnostics/DiagnosticRulesEngine';
-import { EnemyManager, EnemyUnit } from '@/src/gameplay/EnemyManager';
-import { ExplosiveCallbacks, ExplosiveManager } from '@/src/gameplay/ExplosiveManager';
+import { EnemyManager } from '@/src/gameplay/EnemyManager';
+import { ExplosiveManager } from '@/src/gameplay/ExplosiveManager';
 import { HealthPickupManager } from '@/src/gameplay/HealthPickupManager';
+import {
+  CheckpointHazardPoint,
+  clampCheckpointVitals,
+  MissionAttemptContext,
+  MissionCheckpointSnapshot,
+  selectMissionCheckpointAnchor,
+  validateSafeCheckpointSpawn,
+} from '@/src/gameplay/MissionCheckpoint';
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
 import { PlayerController } from '@/src/gameplay/PlayerController';
-import { ExplosionEvent, ProjectileManager } from '@/src/gameplay/ProjectileManager';
+import { ProjectileManager } from '@/src/gameplay/ProjectileManager';
 import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
-import { VehicleEntity, VehicleManager } from '@/src/gameplay/VehicleManager';
-import { HitscanTarget, WeaponSystem } from '@/src/gameplay/WeaponSystem';
-import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
-import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
+import { VehicleManager } from '@/src/gameplay/VehicleManager';
+import { WeaponSystem } from '@/src/gameplay/WeaponSystem';
+import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { DIFFICULTY_COMBAT_PROFILES } from '@/src/schemas/combat.schema';
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { EXPLOSIVE_BY_ID } from '@/src/schemas/explosive.schema';
-import { MiniMapBlip } from '@/src/schemas/events.schema';
-import { MissionConfig } from '@/src/schemas/mission.schema';
+import { AirUnitType, MissionConfig } from '@/src/schemas/mission.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 import { audioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import { missionSelectionStore } from '@/src/stores/missionSelectionStore';
-import { progressionStore } from '@/src/stores/progressionStore';
+import { MissionResultPayload, progressionStore } from '@/src/stores/progressionStore';
 import { settingsStore } from '@/src/stores/settingsStore';
 import { uiStore } from '@/src/stores/uiStore';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
@@ -43,6 +51,7 @@ import { CombatDebugRenderer } from './CombatDebugRenderer';
 import { engineLifecycleMachine } from './EngineLifecycle';
 import { GameLoop } from './GameLoop';
 import { detectGpuCapability, GpuCapabilityReport } from './GpuCapabilityDetector';
+import { HudSnapshotPublisher } from './HudSnapshotPublisher';
 import { InputManager } from './InputManager';
 import { PerformanceGovernor } from './PerformanceGovernor';
 import { PerformanceMonitor } from './PerformanceMonitor';
@@ -76,6 +85,8 @@ export class GameEngine {
   private readonly vehicles: VehicleManager;
   private readonly airCombat: AirCombatManager;
   private readonly healthPickups: HealthPickupManager;
+  private readonly hudPublisher = new HudSnapshotPublisher();
+  private readonly combatDamage: CombatDamageResolver;
 
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
@@ -84,79 +95,21 @@ export class GameEngine {
   private activeMission: MissionConfig | null = null;
   private activeScope: ResourceScope | null = null;
   private activeAbortController: AbortController | null = null;
+  private attemptContext: MissionAttemptContext | null = null;
+  private activeCheckpointSnapshot: MissionCheckpointSnapshot | null = null;
+  private pendingDefeatPayload: MissionResultPayload | null = null;
   private dioramaAngle = 0;
   private dioramaLoaded = false;
   private reinforcementTimer = 28;
-  private hudDecayAccum = 0;
   private debugPublishAccum = 0;
   private suppressAutoPauseOnUnlock = false;
   private gpuReport: GpuCapabilityReport | null = null;
   private initialProbeFrames: number[] = [];
   private initialProbeSettled = false;
+  private downedTimerSec = 0;
+  private downedActive = false;
   private readonly _audioDir = new THREE.Vector3();
-  private readonly _hitscanTargetsScratch: HitscanTarget[] = [];
-  private readonly _lockCandidatesScratch: Array<{
-    id: string;
-    alive: boolean;
-    position: THREE.Vector3;
-    label: string;
-  }> = [];
-  private readonly _proxScratch: Array<{ position: THREE.Vector3; radius: number }> = [];
-  private readonly _blipsScratch: MiniMapBlip[] = [];
-  private readonly _turretRayHit: RayHit = {
-    hit: false,
-    distance: 110,
-    pointX: 0,
-    pointY: 0,
-    pointZ: 0,
-    normalX: 0,
-    normalY: 1,
-    normalZ: 0,
-    collider: null,
-  };
-  private readonly cachedExplosiveCallbacks: ExplosiveCallbacks = {
-    onEnemyKilled: (unit, weaponLabel) => {
-      gameSessionStore.getState().triggerHit(false, true, 120);
-      this.missionDirector?.onEnemyKilled(false, 120);
-      if (this.activeScope) {
-        this.healthPickups.tryEvaluateEnemyDrop(
-          unit,
-          this.player.health,
-          this.player.maxHealth,
-          this.activeScope
-        );
-      }
-      gameSessionStore.getState().pushKillFeed({
-        id: `${unit.id}_${Date.now()}`,
-        killer: 'VANGUARD-1',
-        victim: unit.displayName,
-        weaponName: weaponLabel,
-        isHeadshot: false,
-        timestamp: Date.now(),
-      });
-    },
-    onAirKilled: (unit, weaponLabel) => {
-      gameSessionStore.getState().triggerHit(false, true, 180);
-      this.missionDirector?.onAirUnitKilled(350, unit.type);
-      gameSessionStore.getState().pushKillFeed({
-        id: `${unit.id}_${Date.now()}`,
-        killer: 'VANGUARD-1',
-        victim: unit.displayName,
-        weaponName: weaponLabel,
-        isHeadshot: false,
-        timestamp: Date.now(),
-      });
-    },
-    onConvoyDestroyed: () => {
-      this.missionDirector?.onConvoyVehicleDestroyed(400);
-    },
-    onDestructibleDestroyed: (_id, kind) => {
-      this.missionDirector?.onDestructibleTargetDestroyed(300, kind);
-    },
-    onAlert: (msg, dur) => {
-      this.missionDirector?.showAlert(msg, dur);
-    },
-  };
+  private readonly _aimAssistForward = new THREE.Vector3();
 
   private unsubscribers: Array<() => void> = [];
 
@@ -239,7 +192,19 @@ export class GameEngine {
       this.telemetry
     );
     this.destruction = new DestructionSystem(this.collisionWorld.physicsWorld, this.vfx, this.audio);
+    this.destruction.setOnColliderRegionChanged((box) => {
+      this.workerBridge?.updateCollisionRegion(
+        this.collisionWorld.spatialHash,
+        box.minX - 1,
+        box.minZ - 1,
+        box.maxX + 1,
+        box.maxZ + 1
+      );
+    });
     this.player = new PlayerController(this.audio);
+    this.player.onHealthRegenerated = (amt) => {
+      this.telemetry.recordHealthRegenerated(amt);
+    };
     this.weapons = new WeaponSystem(this.renderer.viewModelScene, this.audio, this.vfx, this.projectiles);
     this.enemies = new EnemyManager(
       this.renderer.scene,
@@ -275,6 +240,23 @@ export class GameEngine {
       this.vfx,
       this.audio
     );
+    this.combatDamage = new CombatDamageResolver({
+      audio: this.audio,
+      vfx: this.vfx,
+      collisionWorld: this.collisionWorld,
+      player: this.player,
+      weapons: this.weapons,
+      enemies: this.enemies,
+      vehicles: this.vehicles,
+      airCombat: this.airCombat,
+      explosives: this.explosives,
+      destruction: this.destruction,
+      healthPickups: this.healthPickups,
+      monitor: this.monitor,
+      telemetry: this.telemetry,
+      getMissionDirector: () => this.missionDirector,
+      getActiveScope: () => this.activeScope,
+    });
 
     this.loop = new GameLoop({
       sampleInput: this.onSampleInput,
@@ -477,12 +459,21 @@ export class GameEngine {
   async startMission(missionId: number, difficulty: Difficulty, preferredWeapon?: WeaponId): Promise<void> {
     this.audio.unlock();
     this.input.clearAllInputs();
+    this.flushPendingDefeatProgression();
     const mission = getMissionById(missionId);
     missionSelectionStore.getState().setSelectedMission(mission.id);
     missionSelectionStore.getState().setDifficulty(difficulty);
 
     // Cleanly unload prior diorama or mission before starting next one
     this.unloadCurrentWorld();
+
+    this.activeCheckpointSnapshot = null;
+    this.attemptContext = {
+      missionId: mission.id,
+      difficulty,
+      cumulativeElapsedSec: 0,
+      checkpointDeathsCount: 0,
+    };
 
     this.lifecycle.send({ type: 'SELECT_MISSION', missionId: mission.id });
     uiStore.getState().setScreen('loading');
@@ -543,12 +534,87 @@ export class GameEngine {
     }
   }
 
+  private flushPendingDefeatProgression(): void {
+    if (!this.pendingDefeatPayload) return;
+    progressionStore.getState().recordMissionResult(this.pendingDefeatPayload);
+    this.pendingDefeatPayload = null;
+  }
+
+  private captureCheckpointSnapshot(): MissionCheckpointSnapshot | null {
+    if (!this.activeMission || !this.missionDirector) return null;
+    const activeObjIdx = this.missionDirector.getActiveObjectiveIndex();
+    const completedIds = this.missionDirector.getCompletedObjectiveIds();
+    const bypassedIds = this.missionDirector.getBypassedObjectiveIds();
+    const destroyedTargetIds = this.missionDirector.getDestroyedTargetIds();
+    const ammoSnap = this.weapons.captureAmmoSnapshot();
+    const anchor = selectMissionCheckpointAnchor(this.activeMission, activeObjIdx);
+
+    const snapshot: MissionCheckpointSnapshot = {
+      missionId: this.activeMission.id,
+      difficulty: missionSelectionStore.getState().difficulty,
+      checkpointSequence: this.missionDirector.getCheckpointSequence(),
+      activeObjectiveIndex: activeObjIdx,
+      activeStageIndex: this.missionDirector.getActiveStageIndex(),
+      completedObjectiveIds: completedIds,
+      bypassedObjectiveIds: bypassedIds,
+      destroyedTargetIds,
+      playerSpawn: anchor,
+      healthAtCheckpoint: this.player.health,
+      armorAtCheckpoint: this.player.armor,
+      activeWeaponId: ammoSnap.activeWeaponId,
+      weaponAmmoState: ammoSnap.weaponAmmoState,
+      scoreAtCheckpoint: this.missionDirector.score,
+      killsAtCheckpoint: this.missionDirector.kills,
+      headshotsAtCheckpoint: this.missionDirector.headshots,
+      airKillsAtCheckpoint: this.missionDirector.airKills,
+    };
+    this.activeCheckpointSnapshot = snapshot;
+    return snapshot;
+  }
+
+  private reconstructCompletedDestructibles(
+    mission: MissionConfig,
+    completedIds: ReadonlySet<string>,
+    destroyedTargetIds: ReadonlySet<string>
+  ): void {
+    const completedTypes = new Set(
+      mission.objectives.filter((o) => completedIds.has(o.id)).map((o) => o.type)
+    );
+
+    for (const ent of this.destruction.getAll()) {
+      if (ent.state === 'DESTROYED') continue;
+      if (destroyedTargetIds.has(ent.id)) {
+        this.destruction.markDestroyedSilently(ent.id);
+        continue;
+      }
+      if (!ent.isObjectiveTarget) continue;
+      if (completedTypes.has('plant_charge') && ent.kind === 'weapons_cache') {
+        this.destruction.markDestroyedSilently(ent.id);
+      } else if (
+        completedTypes.has('destroy_targets') &&
+        (ent.kind === 'radar_relay' || ent.kind === 'fuel_tank')
+      ) {
+        this.destruction.markDestroyedSilently(ent.id);
+      }
+    }
+  }
+
   private populateMissionWorld(
     mission: MissionConfig,
     difficulty: Difficulty,
     scope: ResourceScope,
-    preferredWeapon?: WeaponId
+    preferredWeapon?: WeaponId,
+    restoredCheckpoint?: MissionCheckpointSnapshot
   ): void {
+    if (!this.attemptContext || this.attemptContext.missionId !== mission.id) {
+      this.attemptContext = {
+        missionId: mission.id,
+        difficulty,
+        cumulativeElapsedSec: 0,
+        checkpointDeathsCount: 0,
+      };
+    }
+
     const profile = this.governor.getProfile();
     const gSettings = settingsStore.getState().graphics;
     this.lights = setupLightingRig(
@@ -576,18 +642,20 @@ export class GameEngine {
       this.destruction
     );
 
-    this.workerBridge = new WorkerBridge(this.resourceManager, scope);
-    this.workerBridge.uploadCollisionGrid(this.collisionWorld.spatialHash);
+    const completedSet = new Set([
+      ...(restoredCheckpoint?.completedObjectiveIds ?? []),
+      ...(restoredCheckpoint?.bypassedObjectiveIds ?? []),
+    ]);
+    const destroyedTargetSet = new Set(restoredCheckpoint?.destroyedTargetIds ?? []);
+    if (restoredCheckpoint && (completedSet.size > 0 || destroyedTargetSet.size > 0)) {
+      this.reconstructCompletedDestructibles(mission, completedSet, destroyedTargetSet);
+    }
 
-    this.player.spawn(
-      mission.playerSpawn.x,
-      mission.playerSpawn.y,
-      mission.playerSpawn.z,
-      mission.playerYaw
+    this.workerBridge = new WorkerBridge(this.resourceManager, scope);
+    this.workerBridge.uploadCollisionGrid(
+      this.collisionWorld.spatialHash,
+      this.collisionWorld.getGroundHeightAt
     );
-    const startWeapon =
-      preferredWeapon ?? ((mission.recommendedLoadout[0] as WeaponId) || 'assault_rifle');
-    this.weapons.resetLoadout(startWeapon);
 
     this.telemetry.reset();
     this.telemetry.setMissionId(mission.id);
@@ -599,16 +667,64 @@ export class GameEngine {
     this.enemies.setDifficulty(difficulty);
     this.vehicles.setDifficulty(difficulty);
     this.airCombat.setDifficulty(difficulty);
+    this.player.setDifficultyProfile(DIFFICULTY_COMBAT_PROFILES[difficulty]);
+    this.downedActive = false;
+    this.downedTimerSec = 0;
+    gameSessionStore.getState().setDownedState(null);
 
-    for (const w of mission.initialWaves) {
-      this.enemies.spawnWave(w.archetype, w.count, w.spawnArea, w.radius, this.collisionWorld, scope);
+    const completedObjectives = mission.objectives.filter((o) => completedSet.has(o.id));
+    const incompleteObjectives = mission.objectives.filter((o) => !completedSet.has(o.id));
+    const convoyCompleted = completedObjectives.some((o) => o.type === 'convoy_intercept');
+    const waveCompleted = completedObjectives.some((o) => o.type === 'eliminate_wave');
+
+    const neededAirTypes = new Set<AirUnitType>();
+    let hasIncompleteOpenAirObj = false;
+    for (const o of incompleteObjectives) {
+      if (o.type === 'air_defense') {
+        if (o.targetAirUnitTypes && o.targetAirUnitTypes.length > 0) {
+          for (const t of o.targetAirUnitTypes) neededAirTypes.add(t);
+        } else {
+          hasIncompleteOpenAirObj = true;
+        }
+      }
+    }
+    const completedAirTypes = new Set<AirUnitType>();
+    for (const o of completedObjectives) {
+      if (o.type === 'air_defense' && o.targetAirUnitTypes) {
+        for (const t of o.targetAirUnitTypes) completedAirTypes.add(t);
+      }
+    }
+
+    if (!waveCompleted) {
+      for (const w of mission.initialWaves) {
+        this.enemies.spawnWave(w.archetype, w.count, w.spawnArea, w.radius, this.collisionWorld, scope);
+      }
+    } else if (incompleteObjectives.length > 0) {
+      const nextGroundObj =
+        incompleteObjectives.find((o) => o.type !== 'air_defense') ?? incompleteObjectives[0];
+      this.enemies.spawnWave(
+        'elite_assault',
+        2,
+        { x: nextGroundObj.markerPos.x, y: 0, z: nextGroundObj.markerPos.z },
+        10,
+        this.collisionWorld,
+        scope
+      );
     }
 
     for (const v of mission.vehicles) {
+      if (convoyCompleted && v.isConvoyTarget) continue;
       this.vehicles.spawnVehicle(v.type, v.position, v.yaw, v.hostile, v.isConvoyTarget, this.collisionWorld, scope);
     }
 
     for (const a of mission.airUnits) {
+      if (
+        completedAirTypes.has(a.type) &&
+        !hasIncompleteOpenAirObj &&
+        !neededAirTypes.has(a.type)
+      ) {
+        continue;
+      }
       for (let k = 0; k < a.count; k++) {
         const angle = (k / Math.max(1, a.count)) * Math.PI * 2 + Math.random() * 0.4;
         this.airCombat.spawnUnit(a.type, a.altitude, a.orbitRadius, angle, scope);
@@ -617,7 +733,67 @@ export class GameEngine {
 
     this.healthPickups.spawnMapMedStations(mission.mapId, this.collisionWorld, scope);
 
-    this.missionDirector = new MissionDirector(mission, difficulty);
+    const startWeapon =
+      preferredWeapon ?? ((mission.recommendedLoadout[0] as WeaponId) || 'assault_rifle');
+
+    if (restoredCheckpoint) {
+      const hazards: CheckpointHazardPoint[] = [];
+      for (const u of this.enemies.getUnits()) {
+        if (u.alive) hazards.push({ x: u.position.x, z: u.position.z });
+      }
+      for (const veh of this.vehicles.getVehicles()) {
+        if (veh.alive && veh.hostile) hazards.push({ x: veh.position.x, z: veh.position.z });
+      }
+      for (const ent of this.destruction.getAll()) {
+        if (ent.state !== 'DESTROYED' && ent.blastRadius > 0) {
+          hazards.push({ x: ent.position.x, z: ent.position.z });
+        }
+      }
+
+      const safeSpawn = validateSafeCheckpointSpawn(
+        restoredCheckpoint.playerSpawn,
+        { ...mission.playerSpawn, yaw: mission.playerYaw },
+        this.collisionWorld,
+        hazards
+      );
+      this.player.spawn(safeSpawn.x, safeSpawn.y, safeSpawn.z, safeSpawn.yaw);
+      const vitals = clampCheckpointVitals(
+        restoredCheckpoint.healthAtCheckpoint,
+        restoredCheckpoint.armorAtCheckpoint,
+        this.player.maxHealth,
+        this.player.maxArmor
+      );
+      this.player.applyCheckpointVitals(vitals.health, vitals.armor);
+
+      this.weapons.resetLoadout(startWeapon);
+      this.weapons.restoreCheckpointLoadout(
+        restoredCheckpoint,
+        mission,
+        incompleteObjectives.map((o) => ({ type: o.type, actionMeta: o.actionMeta }))
+      );
+    } else {
+      this.player.spawn(
+        mission.playerSpawn.x,
+        mission.playerSpawn.y,
+        mission.playerSpawn.z,
+        mission.playerYaw
+      );
+      this.weapons.resetLoadout(startWeapon);
+    }
+
+    this.missionDirector = new MissionDirector(
+      mission,
+      difficulty,
+      this.attemptContext,
+      restoredCheckpoint,
+      () => {
+        this.captureCheckpointSnapshot();
+        this.missionDirector?.showAlert('CHECKPOINT SAVED', 2.4);
+      }
+    );
+    if (!restoredCheckpoint) {
+      this.captureCheckpointSnapshot();
+    }
     this.reinforcementTimer = 28;
     this.dioramaLoaded = false;
   }
@@ -664,6 +840,14 @@ export class GameEngine {
     const currentWeaponId = this.weapons.getActiveState().config.id;
     const scope: ResourceScope = `mission:${mission.id}`;
 
+    // Player chose checkpoint recovery rather than abandoning a failed attempt
+    this.pendingDefeatPayload = null;
+    if (this.attemptContext) {
+      this.attemptContext.checkpointDeathsCount += 1;
+    }
+    const preservedAttempt = this.attemptContext;
+    const snapshotToRestore = this.activeCheckpointSnapshot;
+
     this.activeAbortController?.abort();
     this.activeAbortController = null;
     this.audio.resume();
@@ -675,12 +859,19 @@ export class GameEngine {
     this.clearWorldState();
     this.telemetry.recordMissionRestart();
 
+    this.attemptContext = preservedAttempt;
+    this.activeCheckpointSnapshot = snapshotToRestore;
     this.activeScope = scope;
     this.activeMission = mission;
     gameSessionStore.getState().resetSession();
 
-    this.populateMissionWorld(mission, difficulty, scope, currentWeaponId);
-    this.missionDirector?.showAlert('MISSION RESTARTED — FULL BASELINE RESTORED', 2.8);
+    this.populateMissionWorld(
+      mission,
+      difficulty,
+      scope,
+      currentWeaponId,
+      snapshotToRestore ?? undefined
+    );
 
     this.lifecycle.send({ type: 'RESTART_MISSION' });
     this.audio.startMissionAmbienceAndMusic();
@@ -695,6 +886,9 @@ export class GameEngine {
   }
 
   abortToMenu(targetScreen: 'title' | 'campaign' = 'campaign'): void {
+    this.flushPendingDefeatProgression();
+    this.attemptContext = null;
+    this.activeCheckpointSnapshot = null;
     this.suppressAutoPauseOnUnlock = false;
     uiStore.getState().setDebugSimPaused(false);
     this.input.exitPointerLock();
@@ -773,6 +967,7 @@ export class GameEngine {
     this.coordinator.reset();
     this.telemetry.reset();
     this.rulesEngine.reset();
+    this.hudPublisher.reset();
     this.debugRenderer.setVisible(false);
 
     this.resourceManager.unloadScope('mission:lights');
@@ -785,6 +980,9 @@ export class GameEngine {
     this.worldData = null;
     this.missionDirector = null;
     this.activeMission = null;
+    this.downedActive = false;
+    this.downedTimerSec = 0;
+    gameSessionStore.getState().setDownedState(null);
   }
 
   private onSampleInput = (): void => {
@@ -891,7 +1089,14 @@ export class GameEngine {
       if (!c.used && c.position.distanceTo(this.player.position) < 3.4) {
         c.used = true;
         c.mesh.visible = false;
-        this.player.resupply();
+        const res = this.player.resupply();
+        if (res.healthRestored > 0) {
+          this.telemetry.recordHealthRegenerated(res.healthRestored);
+        }
+        if (res.armorRestored > 0) {
+          this.telemetry.recordArmorRestored(res.armorRestored);
+        }
+        this.telemetry.recordSupplyCrateUsed();
         this.weapons.resupplyAll();
         this.explosives.resupplyC4(2);
         this.audio.play2D('reload', 6, 0.65);
@@ -899,14 +1104,36 @@ export class GameEngine {
         return true;
       }
     }
-    // Check weapons caches / destructible objectives to sabotage directly via [E]
+    // Check weapons caches / destructible objectives to plant charge or sabotage directly via [E]
     for (const d of this.destruction.getAll()) {
-      if (d.state !== 'DESTROYED' && d.isObjectiveTarget && d.position.distanceTo(this.player.position) < 4.2) {
+      if (
+        d.state !== 'DESTROYED' &&
+        d.isObjectiveTarget &&
+        d.position.distanceTo(this.player.position) < 4.2
+      ) {
+        if (d.kind === 'weapons_cache') {
+          this.missionDirector.onChargePlanted(300, d.id, 'interact_charge');
+          this.destruction.markDestroyedSilently(d.id);
+          this.vfx.spawnExplosion(
+            d.position.x,
+            d.position.y + 0.8,
+            d.position.z,
+            1.4
+          );
+          this.audio.playSpatial('explosion', d.position.x, d.position.y, d.position.z, 9, 0.9);
+          return true;
+        }
         this.destruction.applyDamage(
           d.id,
           9999,
-          this.handleExplosion,
-          (ent) => this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind)
+          this.combatDamage.handleExplosion,
+          (ent) =>
+            this.missionDirector?.onDestructibleTargetDestroyed(
+              300,
+              ent.kind,
+              ent.id,
+              'interact_charge'
+            )
         );
         return true;
       }
@@ -936,6 +1163,8 @@ export class GameEngine {
     const weaponCfg = this.weapons.getActiveState().config;
     const settings = settingsStore.getState();
 
+    this.player.touchAimFrictionScale = inVehicle ? 1.0 : this.computeTouchAimFrictionScale();
+
     this.player.update(
       dt,
       this.input,
@@ -957,14 +1186,7 @@ export class GameEngine {
     }
 
     // Build combined hitscan & lock-on targets without per-tick array/closure allocations
-    this._hitscanTargetsScratch.length = 0;
-    this.enemies.fillHitscanTargets(this._hitscanTargetsScratch, this.onEnemyHitscanHit);
-    this.airCombat.fillHitscanTargets(this._hitscanTargetsScratch, this.onAirHitscanHit);
-    this.vehicles.fillHitscanTargets(this._hitscanTargetsScratch, this.onVehicleHitscanHit);
-
-    this._lockCandidatesScratch.length = 0;
-    this.airCombat.fillLockCandidates(this._lockCandidatesScratch);
-    this.vehicles.fillLockCandidates(this._lockCandidatesScratch);
+    const { hitscanTargets, lockCandidates } = this.combatDamage.collectFrameTargets();
 
     const tGame0 = performance.now();
     this.weapons.update(
@@ -973,9 +1195,9 @@ export class GameEngine {
       this.player,
       this.renderer.camera,
       this.collisionWorld,
-      this._hitscanTargetsScratch,
-      this._lockCandidatesScratch,
-      this.onWeaponApplyDestructionDamage,
+      hitscanTargets,
+      lockCandidates,
+      this.combatDamage.onWeaponApplyDestructionDamage,
       inVehicle
     );
 
@@ -988,8 +1210,8 @@ export class GameEngine {
       this.renderer.camera,
       this.collisionWorld,
       this.worldData?.roadWaypoints ?? [],
-      this.onTurretShotCheck,
-      this.onVehicleConvoyDestroyed,
+      this.combatDamage.onTurretShotCheck,
+      this.combatDamage.onVehicleConvoyDestroyed,
       settings.graphics.fov,
       hadManualLookInput
     );
@@ -1001,20 +1223,19 @@ export class GameEngine {
       this.player,
       nowDrivingVehicle,
       (msg, dur) => this.missionDirector?.showAlert(msg, dur),
-      (msg, dur) => this.missionDirector?.showSubtitle(msg, dur)
+      (msg, dur) => this.missionDirector?.showSubtitle(msg, dur),
+      (healedAmount) => this.telemetry.recordHealthPickupCollected(healedAmount)
     );
 
     // Pooled projectiles (rockets, guided missiles, grenades, aerial bombs, TRIDENT-X)
     const tProj0 = performance.now();
-    this._proxScratch.length = 0;
-    this.enemies.fillPositionsForProximity(this._proxScratch);
-    this.airCombat.fillPositionsForProximity(this._proxScratch);
-    const explosiveCallbacks = this.getExplosiveCallbacks();
+    const proxScratch = this.combatDamage.collectProximityPositions();
+    const explosiveCallbacks = this.combatDamage.getExplosiveCallbacks();
     this.projectiles.update(
       dt,
       this.collisionWorld,
-      this.handleExplosionEvent,
-      this._proxScratch
+      this.combatDamage.handleExplosionEvent,
+      proxScratch
     );
     const tProjEnd = performance.now();
     this.monitor.recordPhase('projectilesFlight', tProjEnd - tProj0);
@@ -1036,7 +1257,7 @@ export class GameEngine {
     this.monitor.recordPhase('explosions', performance.now() - tExp0);
 
     // Extraction Beacon check for Mission 5
-    if (this.activeMission.extractionPoint) {
+    if (this.activeMission.extractionPoint && this.player.alive) {
       const ep = this.activeMission.extractionPoint;
       const distEx = Math.hypot(this.player.position.x - ep.x, this.player.position.z - ep.z);
       if (distEx < 8.5) {
@@ -1044,25 +1265,34 @@ export class GameEngine {
       }
     }
 
-    // Dynamic enemy reinforcement drop if mission is still active and count drops low
+    // Dynamic anti-stall & reinforcement progression
     this.reinforcementTimer -= dt;
-    if (this.reinforcementTimer <= 0 && this.enemies.getActiveCount() < 4 && this.activeScope) {
-      this.reinforcementTimer = 26;
+    const aliveEnemies = this.enemies.getActiveCount();
+    const waveProg = this.missionDirector.evaluateWaveProgression(aliveEnemies);
+
+    if (
+      this.activeScope &&
+      (waveProg.shouldSpawnReinforcements ||
+        (this.reinforcementTimer <= 0 && aliveEnemies < 4))
+    ) {
+      this.reinforcementTimer = 24;
+      const countToSpawn = waveProg.shouldSpawnReinforcements ? waveProg.spawnCount : 3;
       this.enemies.spawnWave(
         'elite_assault',
-        3,
-        { x: (Math.random() - 0.5) * 44, y: 0, z: -28 },
+        countToSpawn,
+        { x: (Math.random() - 0.5) * 44, y: 0, z: -24 },
         12,
         this.collisionWorld,
         this.activeScope
       );
-      this.missionDirector.showSubtitle('INTEL: Enemy reinforcement squad spotted moving in.', 3.8);
+      this.missionDirector.showSubtitle(
+        waveProg.shouldSpawnReinforcements
+          ? `COMMAND: Hostile reinforcements (${countToSpawn} units) entering sector to contest objective.`
+          : 'INTEL: Enemy reinforcement squad spotted moving in.',
+        3.8
+      );
     }
 
-    if (!this.player.alive) {
-      this.input.clearAllInputs();
-      this.telemetry.recordPlayerDeath();
-    }
     this.telemetry.setPlayerWeaponTelemetry(
       this.weapons.shotsFired,
       this.weapons.shotsHit,
@@ -1072,16 +1302,59 @@ export class GameEngine {
       this.missionDirector.getObjectiveCompletionTimestamps()
     );
 
-    const missionTick = this.missionDirector.update(dt, this.player.health, this.player.armor);
-    if (missionTick.finished) {
-      this.completeMission(missionTick.victory);
+    if (!this.player.alive) {
+      if (!this.downedActive) {
+        this.downedActive = true;
+        this.downedTimerSec = 2.4;
+        this.input.clearAllInputs();
+        this.releasePointerLockForDebug();
+        this.telemetry.recordPlayerDeath();
+      } else {
+        this.downedTimerSec = Math.max(0, this.downedTimerSec - dt);
+      }
+
+      // Gently lower and tilt camera during the ~2.4s downed / kill-cam phase
+      const downedProgress = Math.min(1, 1 - this.downedTimerSec / 2.4);
+      this.renderer.camera.position.y = Math.max(
+        this.player.position.y + 0.35,
+        this.renderer.camera.position.y - downedProgress * 0.85
+      );
+      this.renderer.camera.rotation.z = downedProgress * 0.22;
+
+      gameSessionStore.getState().setDownedState({
+        active: true,
+        remainingSec: Number(this.downedTimerSec.toFixed(1)),
+        fatalSource: this.telemetry.getFatalDamageAttribution(),
+        lastHits: this.telemetry.getLastFiveDamageEvents(),
+        canRestartCheckpoint: this.activeCheckpointSnapshot !== null,
+      });
+
+      if (this.downedTimerSec <= 0) {
+        gameSessionStore.getState().setDownedState(null);
+        this.completeMission(false);
+        return;
+      }
+    } else {
+      const missionTick = this.missionDirector.update(dt, this.player.health, this.player.armor);
+      if (missionTick.finished) {
+        this.completeMission(missionTick.victory);
+        return;
+      }
     }
 
-    this.hudDecayAccum += dt;
-    if (this.hudDecayAccum >= 0.08) {
-      this.hudDecayAccum = 0;
-      gameSessionStore.getState().decayDamageArcs();
-    }
+    this.hudPublisher.tickDamageArcDecay(dt);
+
+    // Update climax encounter state (boss aircraft active or final objective stage)
+    const isFinalObjective =
+      this.missionDirector.getActiveObjectiveIndex() >=
+      Math.max(1, this.activeMission.objectives.length - 1);
+    const hasBossActive =
+      this.airCombat.getActiveBossInfo({
+        playerPosition: this.player.position,
+        isPrimaryObjective: isFinalObjective,
+        lockStatus: this.weapons.getLockOnState().status,
+      }) !== null;
+    this.coordinator.setEncounterClimaxActive(isFinalObjective || hasBossActive);
 
     // Tick Combat Engagement Coordinator leases and exposure telemetry (zero allocation)
     this.coordinator.tick(this.telemetry.getElapsedSec());
@@ -1191,221 +1464,9 @@ export class GameEngine {
     this.input.endFrame();
   };
 
-  private getExplosiveCallbacks(): ExplosiveCallbacks {
-    return this.cachedExplosiveCallbacks;
-  }
-
-  private handleExplosionEvent = (ev: ExplosionEvent): void => {
-    const t0 = performance.now();
-    const settings = settingsStore.getState();
-    this.explosives.resolveExplosion(
-      ev,
-      this.player,
-      this.collisionWorld,
-      this.enemies,
-      this.vehicles,
-      this.airCombat,
-      this.destruction,
-      settings.accessibility.reducedMotion,
-      this.getExplosiveCallbacks()
-    );
-    this.monitor.recordPhase('explosions', performance.now() - t0);
-  };
-
-  private handleExplosion = (x: number, y: number, z: number, radius: number, damage: number): void => {
-    this.handleExplosionEvent({
-      explosiveId: 'grenade_shell',
-      category: 'launcher',
-      x,
-      y,
-      z,
-      innerRadius: Math.max(1.2, radius * 0.25),
-      radius,
-      damage,
-      falloffExponent: 1.3,
-      vehicleDamageMultiplier: 1.25,
-      destructionPower: 1.35,
-      fromPlayer: true,
-      sourceUnitId: 'ordnance',
-      sourceSquadId: 'ordnance',
-      sourceDomain: 'ground',
-    });
-  };
-
-  private onEnemyHitscanHit = (unit: EnemyUnit, dmg: number, isHead: boolean, killed: boolean): void => {
-    gameSessionStore.getState().triggerHit(isHead, killed, dmg);
-    this.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
-    if (killed) {
-      this.missionDirector?.onEnemyKilled(isHead, 120);
-      if (this.activeScope) {
-        this.healthPickups.tryEvaluateEnemyDrop(
-          unit,
-          this.player.health,
-          this.player.maxHealth,
-          this.activeScope
-        );
-      }
-      gameSessionStore.getState().pushKillFeed({
-        id: `${unit.id}_${Date.now()}`,
-        killer: 'VANGUARD-1',
-        victim: unit.displayName,
-        weaponName: this.weapons.getActiveState().config.shortName,
-        isHeadshot: isHead,
-        timestamp: Date.now(),
-      });
-    }
-  };
-
-  private onAirHitscanHit = (unit: AirUnit, killed: boolean): void => {
-    gameSessionStore.getState().triggerHit(false, killed, 25);
-    this.audio.play2D('hit_marker', 8, 0.5);
-    if (killed) {
-      this.missionDirector?.onAirUnitKilled(350, unit.type);
-      gameSessionStore.getState().pushKillFeed({
-        id: `${unit.id}_${Date.now()}`,
-        killer: 'VANGUARD-1',
-        victim: unit.displayName,
-        weaponName: this.weapons.getActiveState().config.shortName,
-        isHeadshot: false,
-        timestamp: Date.now(),
-      });
-    }
-  };
-
-  private onVehicleHitscanHit = (veh: VehicleEntity, killed: boolean): void => {
-    gameSessionStore.getState().triggerHit(false, killed, 20);
-    this.audio.play2D('hit_marker', 7, 0.45);
-    if (killed) {
-      if (veh.isConvoyTarget) {
-        this.missionDirector?.onConvoyVehicleDestroyed(400);
-      } else {
-        this.missionDirector?.onEnemyKilled(false, 280);
-      }
-      gameSessionStore.getState().pushKillFeed({
-        id: `${veh.id}_${Date.now()}`,
-        killer: 'VANGUARD-1',
-        victim: veh.displayName,
-        weaponName: this.weapons.getActiveState().config.shortName,
-        isHeadshot: false,
-        timestamp: Date.now(),
-      });
-    }
-  };
-
-  private onDestructibleTargetDestroyed = (ent: { kind: string }): void => {
-    this.missionDirector?.onDestructibleTargetDestroyed(300, ent.kind);
-  };
-
-  private onWeaponApplyDestructionDamage = (colliderId: string, dmg: number): void => {
-    this.destruction.applyDamage(
-      colliderId,
-      dmg,
-      this.handleExplosion,
-      this.onDestructibleTargetDestroyed
-    );
-  };
-
-  private onVehicleConvoyDestroyed = (): void => {
-    this.missionDirector?.onConvoyVehicleDestroyed(400);
-  };
-
   private onSpawnDynamicDrone = (x: number, y: number, z: number): void => {
     if (this.activeScope) {
       this.airCombat.spawnDynamicDrone(x, y, z, this.activeScope);
-    }
-  };
-
-  private onTurretShotCheck = (origin: THREE.Vector3, dir: THREE.Vector3): void => {
-    const playerVehicleId = this.vehicles.getPlayerVehicle()?.collider.id;
-    this._turretRayHit.hit = false;
-    this._turretRayHit.distance = 110;
-    this._turretRayHit.collider = null;
-
-    const hitWall = this.collisionWorld.sweptSegmentTest(
-      origin.x,
-      origin.y,
-      origin.z,
-      dir.x,
-      dir.y,
-      dir.z,
-      110,
-      SOLID_OBSTRUCTION_MASK,
-      this._turretRayHit,
-      playerVehicleId
-    );
-
-    let bestDist = hitWall ? this._turretRayHit.distance : 110;
-    let hitTarget: HitscanTarget | null = null;
-    let hitZone: 'head' | 'upper_torso' | 'lower_body' = 'upper_torso';
-
-    for (let i = 0; i < this._hitscanTargetsScratch.length; i++) {
-      const t = this._hitscanTargetsScratch[i];
-      if (!t.alive) continue;
-
-      const cMain = t.position;
-      let toX = cMain.x - origin.x;
-      let toY = cMain.y - origin.y;
-      let toZ = cMain.z - origin.z;
-      let proj = toX * dir.x + toY * dir.y + toZ * dir.z;
-      if (proj >= 0 && proj <= bestDist) {
-        const r = t.hitRadius + 0.45;
-        if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
-          bestDist = proj;
-          hitTarget = t;
-          hitZone = 'upper_torso';
-        }
-      }
-
-      if (t.lowerBodyPosition && t.lowerBodyRadius) {
-        const cLow = t.lowerBodyPosition;
-        toX = cLow.x - origin.x;
-        toY = cLow.y - origin.y;
-        toZ = cLow.z - origin.z;
-        proj = toX * dir.x + toY * dir.y + toZ * dir.z;
-        if (proj >= 0 && proj <= bestDist) {
-          const r = t.lowerBodyRadius + 0.45;
-          if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
-            bestDist = proj;
-            hitTarget = t;
-            hitZone = 'lower_body';
-          }
-        }
-      }
-
-      if (t.headPosition && t.headRadius) {
-        const cHead = t.headPosition;
-        toX = cHead.x - origin.x;
-        toY = cHead.y - origin.y;
-        toZ = cHead.z - origin.z;
-        proj = toX * dir.x + toY * dir.y + toZ * dir.z;
-        if (proj >= 0 && proj <= bestDist) {
-          const r = t.headRadius + 0.45;
-          if (toX * toX + toY * toY + toZ * toZ - proj * proj <= r * r) {
-            bestDist = proj;
-            hitTarget = t;
-            hitZone = 'head';
-          }
-        }
-      }
-    }
-
-    if (hitTarget) {
-      const isHead = hitZone === 'head';
-      const zoneMult = hitZone === 'head' ? 1.5 : hitZone === 'lower_body' ? 0.85 : 1.0;
-      hitTarget.onHit(Math.round(26 * zoneMult), isHead, hitTarget.position, hitZone);
-    } else if (hitWall) {
-      const wallHit = this._turretRayHit as RayHit;
-      if (wallHit.collider && (wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE)) {
-        this.destruction.applyDamage(
-          wallHit.collider.id,
-          26,
-          this.handleExplosion,
-          this.onDestructibleTargetDestroyed
-        );
-        this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
-      } else {
-        this.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'concrete');
-      }
     }
   };
 
@@ -1453,9 +1514,10 @@ export class GameEngine {
     const t0 = performance.now();
     const isPlaying = uiStore.getState().screen === 'playing';
     const inVehicle = this.vehicles.getPlayerVehicle() !== null;
-    if (isPlaying && !inVehicle && this.activeMission && this.input.hasPendingLookDelta()) {
+    if (isPlaying && !inVehicle && this.activeMission && this.player.alive && this.input.hasPendingLookDelta()) {
       const settings = settingsStore.getState();
       const weaponCfg = this.weapons.getActiveState().config;
+      this.player.touchAimFrictionScale = this.computeTouchAimFrictionScale();
       this.player.applyLookInput(this.input, this.weapons.isAds);
       this.player.syncCamera(
         this.renderer.camera,
@@ -1526,140 +1588,79 @@ export class GameEngine {
     );
   };
 
-  private publishHudSnapshot = (): void => {
-    if (!this.missionDirector || !this.activeMission) return;
-    const wState = this.weapons.getActiveState();
-    const veh = this.vehicles.getPlayerVehicle();
-    const nearVeh = !veh ? this.vehicles.getNearestInteractableVehicle(this.player.position) : null;
-    const objStatuses = this.missionDirector.getObjectiveStatuses();
-    const firstActiveObj = objStatuses.find((o) => !o.completed);
-    const lockState = this.weapons.getLockOnState();
-    const boss = this.airCombat.getActiveBossInfo({
-      playerPosition: this.player.position,
-      isPrimaryObjective: firstActiveObj?.type === 'air_defense',
-      lockStatus: lockState.status,
-    });
+  private computeTouchAimFrictionScale(): number {
+    const inputSettings = settingsStore.getState().input;
+    if (!inputSettings.mobileAimAssist) return 1.0;
+    if (this.hudPublisher.resolveEffectiveDevice(this.input) !== 'touch') return 1.0;
 
-    let interactPrompt: string | null = null;
-    if (veh) {
-      interactPrompt = `[E] Exit ${veh.displayName}`;
-    } else if (nearVeh) {
-      interactPrompt = `[E] Drive ${nearVeh.displayName}`;
-    } else if (this.worldData) {
-      for (const c of this.worldData.supplyCrates) {
-        if (!c.used && c.position.distanceTo(this.player.position) < 3.4) {
-          interactPrompt = '[E] Resupply Ammo & Armor';
-          break;
-        }
-      }
-      if (!interactPrompt) {
-        for (const d of this.destruction.getAll()) {
-          if (d.state !== 'DESTROYED' && d.isObjectiveTarget && d.position.distanceTo(this.player.position) < 4.2) {
-            interactPrompt = '[E] Plant Detonation Charge';
-            break;
-          }
-        }
+    this.renderer.camera.getWorldDirection(this._aimAssistForward);
+    const camPos = this.renderer.camera.position;
+    const coneCosThreshold = Math.cos(0.115); // ~6.6 deg friction cone
+    let bestProximity = 0;
+
+    const units = this.enemies.getUnits();
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      if (!u.alive || !u.hasLos) continue;
+      const dx = u.position.x - camPos.x;
+      const dy = u.position.y + 1.15 - camPos.y;
+      const dz = u.position.z - camPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < 1.0 || distSq > 65 * 65) continue;
+      const invDist = 1 / Math.sqrt(distSq);
+      const dot =
+        (dx * this._aimAssistForward.x +
+          dy * this._aimAssistForward.y +
+          dz * this._aimAssistForward.z) *
+        invDist;
+      if (dot >= coneCosThreshold) {
+        const prox = (dot - coneCosThreshold) / (1 - coneCosThreshold);
+        if (prox > bestProximity) bestProximity = prox;
       }
     }
 
-    this._blipsScratch.length = 0;
-    this.enemies.fillMiniMapBlips(this._blipsScratch);
-    this.airCombat.fillMiniMapBlips(this._blipsScratch);
-    this.vehicles.fillMiniMapBlips(this._blipsScratch);
-    this.missionDirector.fillObjectiveBlips(this._blipsScratch);
-    const blips = this._blipsScratch.slice();
+    if (bestProximity <= 0) return 1.0;
+    const strength = Math.max(0.1, Math.min(0.75, inputSettings.mobileAimAssistStrength ?? 0.35));
+    return Math.max(0.55, Math.min(1.0, 1 - strength * 0.65 * bestProximity));
+  }
 
-    const rpgState = this.weapons.getWeaponState('rocket_launcher');
-    const rpgAmmoInMag = rpgState?.ammoInMag ?? 0;
-    const rpgReserveAmmo = rpgState?.reserveAmmo ?? 0;
-    const rpgEquipped = wState.config.id === 'rocket_launcher';
-
-    const touchOverride = uiStore.getState().touchHudOverride;
-    const touchMode = settingsStore.getState().input.touchMode;
-    const effectiveDevice: 'touch' | 'keyboard' =
-      touchOverride === true || touchMode === 'always_on'
-        ? 'touch'
-        : touchOverride === false || touchMode === 'always_off'
-          ? 'keyboard'
-          : this.input.getLastInputDevice();
-
-    const activeActionDirective = this.missionDirector.getActiveActionDirective(
-      effectiveDevice,
-      Boolean(veh),
-      rpgEquipped
-    );
-
-    gameSessionStore.getState().updateHudSnapshot({
-      health: Math.round(this.player.health),
-      maxHealth: this.player.maxHealth,
-      armor: Math.round(this.player.armor),
-      maxArmor: this.player.maxArmor,
-      weaponId: wState.config.id,
-      weaponName: wState.config.shortName,
-      fireMode: this.weapons.getActiveFireMode(),
-      ammoInMag: wState.ammoInMag,
-      magSize: wState.magSize,
-      reserveAmmo: wState.reserveAmmo,
-      grenades: this.player.grenades,
-      isReloading: this.weapons.isReloading,
-      reloadProgress: this.weapons.getReloadProgress(),
-      isAds: this.weapons.isAds,
-      isScoped: this.weapons.isScoped,
-      isSprinting: this.player.isSprinting,
-      isCrouching: this.player.isCrouching,
-      isSliding: this.player.isSliding,
-      crosshairSpread:
-        (this.weapons.isAds ? wState.config.spreadAdsRad : wState.config.spreadHipRad) +
-        this.player.currentSpeed * 0.002,
-      rpgAvailable: rpgAmmoInMag + rpgReserveAmmo > 0,
-      rpgAmmoInMag,
-      rpgReserveAmmo,
-      rpgEquipped,
-      playerX: this.player.position.x,
-      playerZ: this.player.position.z,
-      playerYaw: this.player.yaw,
-      inVehicle: Boolean(veh),
-      vehicleName: veh?.displayName ?? '',
-      vehicleHealth: veh ? Math.round((veh.health / veh.maxHealth) * 100) : 100,
-      vehicleMaxHealth: 100,
-      vehicleSpeedKmh: veh ? Math.round(Math.abs(veh.speed) * 3.6) : 0,
-      vehicleGear: veh?.driveGear ?? 'FORWARD',
-      vehicleSteerDeg: veh ? Math.round(THREE.MathUtils.radToDeg(veh.steerAngle)) : 0,
-      vehicleHandbrake: veh?.handbrakeActive ?? false,
-      vehicleCameraMode: this.vehicles.getCameraMode(),
-      interactPrompt,
-      activeActionDirective,
-      subtitleText: settingsStore.getState().accessibility.subtitles ? this.missionDirector.subtitleText : null,
-      missionAlert: this.missionDirector.alertText,
-      elapsedSec: Math.floor(this.missionDirector.elapsedSec),
-      score: this.missionDirector.score,
-      kills: this.missionDirector.kills,
-      headshots: this.missionDirector.headshots,
-      shotsFired: this.weapons.shotsFired,
-      shotsHit: this.weapons.shotsHit,
-      lockOn: this.weapons.getLockOnState(),
-      objectives: this.missionDirector.getObjectiveStatuses(),
-      blips,
-      activeBossLabel: boss?.label ?? null,
-      activeBossHealthPct: boss?.healthPct ?? 0,
-      ordnance: this.explosives.getOrdnanceHud(
-        this.player.position,
-        progressionStore.getState().save.requisitionPoints,
-        isDeveloperModeActiveForSetting(settingsStore.getState().developer.devModeEnabled) &&
-          settingsStore.getState().developer.sandboxOrdnanceAuthorized
-      ),
+  private publishHudSnapshot = (): void => {
+    this.hudPublisher.publish({
+      player: this.player,
+      weapons: this.weapons,
+      enemies: this.enemies,
+      vehicles: this.vehicles,
+      airCombat: this.airCombat,
+      explosives: this.explosives,
+      destruction: this.destruction,
+      input: this.input,
+      missionDirector: this.missionDirector,
+      activeMission: this.activeMission,
+      worldData: this.worldData,
+      camera: this.renderer.camera,
     });
   };
 
   private completeMission(victory: boolean): void {
     if (!this.activeMission || !this.missionDirector) return;
+    this.downedActive = false;
+    this.downedTimerSec = 0;
+    gameSessionStore.getState().setDownedState(null);
     this.input.exitPointerLock();
     this.input.clearAllInputs();
     this.loop.setPaused(true);
 
-    const summary = this.missionDirector.buildSummary(victory);
+    const checkpointDeaths = this.attemptContext?.checkpointDeathsCount ?? 0;
+    const totalDeaths = checkpointDeaths + (victory ? 0 : 1);
+    const summary = this.missionDirector.buildSummary(victory, {
+      shotsFired: this.weapons.shotsFired,
+      shotsHit: this.weapons.shotsHit,
+      deathsCount: totalDeaths,
+      damageReceived: this.telemetry.getTotalDamageReceived(),
+      survivalTimeSec: this.telemetry.getElapsedSec(),
+    });
     const difficulty = missionSelectionStore.getState().difficulty;
-    const { newAchievements } = progressionStore.getState().recordMissionResult({
+    const resultPayload: MissionResultPayload = {
       missionId: this.activeMission.id,
       difficulty,
       victory: summary.victory,
@@ -1671,19 +1672,26 @@ export class GameEngine {
       headshots: summary.headshots,
       airKills: summary.airKills,
       durationSec: summary.durationSec,
-    });
+    };
 
-    const accuracyPct =
-      this.weapons.shotsFired > 0
-        ? Math.min(100, Math.round((this.weapons.shotsHit / this.weapons.shotsFired) * 100))
-        : 0;
+    let newAchievements: string[] = [];
+    if (victory) {
+      this.pendingDefeatPayload = null;
+      newAchievements = progressionStore.getState().recordMissionResult(resultPayload).newAchievements;
+    } else {
+      // Defer defeat progression write until the player permanently aborts/replays instead of checkpoint-restarting
+      this.pendingDefeatPayload = resultPayload;
+    }
 
     gameSessionStore.getState().setDebrief({
       missionId: this.activeMission.id,
       difficulty,
       ...summary,
-      accuracyPct,
+      fatalSource: this.telemetry.getFatalDamageAttribution(),
+      lastHits: this.telemetry.getLastFiveDamageEvents(),
       newAchievements,
+      canRestartCheckpoint: !victory && this.activeCheckpointSnapshot !== null,
+      checkpointDeathsCount: checkpointDeaths,
     });
 
     this.lifecycle.send({ type: 'MISSION_ENDED' });

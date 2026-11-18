@@ -10,6 +10,7 @@ export type PhysicalMotionState =
   | 'AIRBORNE'
   | 'CROUCHED'
   | 'SLIDING'
+  | 'VAULTING'
   | 'CRUISING'
   | 'DEFLECTING'
   | 'HOVERING'

@@ -41,6 +41,8 @@ export interface EnemyShotParams {
   isSuppressionFire: boolean;
   difficultyProfile: DifficultyCombatProfile;
   ignoreColliderId?: string | null;
+  attackerArchetype?: string;
+  attackerName?: string;
 }
 
 export interface EnemyShotResult {
@@ -309,6 +311,7 @@ export class BallisticSolver {
       const hitOccupiedVehicleHull =
         worldHit &&
         player.alive &&
+        !player.isSpawnProtected() &&
         !params.isSuppressionFire &&
         player.isOccupyingVehicle() &&
         envBlockerId !== null &&
@@ -317,7 +320,12 @@ export class BallisticSolver {
       if (hitOccupiedVehicleHull) {
         playerHitDist = envDist;
         hitZone = 'upper_torso';
-      } else if (player.alive && !player.isOccupyingVehicle() && !params.isSuppressionFire) {
+      } else if (
+        player.alive &&
+        !player.isSpawnProtected() &&
+        !player.isOccupyingVehicle() &&
+        !params.isSuppressionFire
+      ) {
         const dHead = this.intersectRaySphere(
           params.muzzleOrigin,
           this._shotDir,
@@ -380,6 +388,7 @@ export class BallisticSolver {
         const rawDmg = weapon.baseDamage * params.difficultyProfile.damageMultiplier * zoneMult;
         const armorBefore = player.armor;
         const healthBefore = player.health;
+        const wasOccupyingVehicle = player.isOccupyingVehicle();
         const applied = player.applyValidatedShotDamage(
           shotId,
           rawDmg,
@@ -387,15 +396,16 @@ export class BallisticSolver {
           params.muzzleOrigin.z,
           hitZone
         );
-        if (applied <= 0) {
+        if (applied <= 0 && !wasOccupyingVehicle) {
           this.telemetry.recordDuplicateDamageBlocked();
         }
         const armorAbsorbed = Math.max(0, armorBefore - player.armor);
         const healthLost = Math.max(0, healthBefore - player.health);
+        const effectiveDamage = Number((armorAbsorbed + healthLost).toFixed(2));
 
         anyHitPlayer = true;
         bestHitZone = hitZone;
-        totalDamageApplied += rawDmg;
+        totalDamageApplied += effectiveDamage;
 
         this.vfx?.spawnImpact(this._endPoint.x, this._endPoint.y, this._endPoint.z, 'blood');
 
@@ -417,7 +427,7 @@ export class BallisticSolver {
           blockerColliderId: null,
           blockerCategory: null,
           hitZone,
-          damageDealt: rawDmg,
+          damageDealt: effectiveDamage,
           raycastMs: Number(rayMs.toFixed(3)),
         });
 
@@ -428,9 +438,21 @@ export class BallisticSolver {
           params.domain,
           params.weaponClass,
           hitZone,
-          rawDmg,
+          effectiveDamage,
           armorAbsorbed,
-          healthLost
+          healthLost,
+          {
+            attackerArchetype: params.attackerArchetype ?? params.domain,
+            attackerName: params.attackerName ?? params.unitId,
+            weaponLabel: weapon.displayName,
+            distanceMeters: Number(finalDist.toFixed(1)),
+            rawDamage: Number(rawDmg.toFixed(2)),
+            inVehicle: wasOccupyingVehicle,
+            incomingAngleRad: player.computeRelativeThreatAngle(
+              params.muzzleOrigin.x,
+              params.muzzleOrigin.z
+            ),
+          }
         );
       } else {
         // Check if the shot was blocked by cover along the line between shooter and player

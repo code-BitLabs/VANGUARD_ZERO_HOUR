@@ -207,6 +207,8 @@ export const InputSettingsSchema = z.object({
   rightFireEnabled: z.boolean().default(true),
   touchSensitivity: z.number().min(0.3).max(3.0).default(1.15),
   touchLookSmoothing: z.number().min(0).max(0.6).default(0),
+  mobileAimAssist: z.boolean().default(true),
+  mobileAimAssistStrength: z.number().min(0.1).max(0.75).default(0.35),
   touchJoystickScale: z.number().min(0.75).max(1.35).default(1.0),
   touchDeadzone: z.number().min(0.05).max(0.28).default(0.1),
   touchButtonScale: z.number().min(0.75).max(1.35).default(1.0),
@@ -242,6 +244,7 @@ export type InputSettings = z.infer<typeof InputSettingsSchema>;
 export const AccessibilitySettingsSchema = z.object({
   colorblindMode: ColorblindModeSchema.default('standard'),
   subtitles: z.boolean().default(true),
+  tacticalHints: z.boolean().default(true),
   reducedMotion: z.boolean().default(false),
   uiScale: z.number().min(0.85).max(1.25).default(1.0),
 });

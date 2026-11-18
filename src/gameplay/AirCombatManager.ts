@@ -665,6 +665,8 @@ export class AirCombatManager {
             isSuppressedOrStaggered: false,
             isSuppressionFire: false,
             difficultyProfile: diffProf,
+            attackerArchetype: u.type,
+            attackerName: u.displayName,
           },
           player,
           collision

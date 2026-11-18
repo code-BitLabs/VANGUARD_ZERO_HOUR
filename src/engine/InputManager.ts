@@ -436,11 +436,17 @@ export class InputManager {
     );
   }
 
-  consumeLookDelta(isAds: boolean): { yawDelta: number; pitchDelta: number } {
+  consumeLookDelta(
+    isAds: boolean,
+    touchAimFrictionScale = 1.0
+  ): { yawDelta: number; pitchDelta: number } {
     const adsScale = isAds ? this.settings.adsSensitivity : 1.0;
     const baseSens = 0.0022 * this.settings.mouseSensitivity * adsScale;
-    const touchYawSens = 0.0135 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
-    const touchPitchSens = 0.0095 * (this.settings.touchSensitivity ?? 1.15) * adsScale;
+    const friction = Number.isFinite(touchAimFrictionScale)
+      ? Math.max(0.45, Math.min(1.0, touchAimFrictionScale))
+      : 1.0;
+    const touchYawSens = 0.0135 * (this.settings.touchSensitivity ?? 1.15) * adsScale * friction;
+    const touchPitchSens = 0.0095 * (this.settings.touchSensitivity ?? 1.15) * adsScale * friction;
 
     const rawTouchDx = this.virtualLookDeltaX * touchYawSens;
     const rawTouchDy = this.virtualLookDeltaY * touchPitchSens;

@@ -1508,7 +1508,7 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
               type="button"
               data-testid="touch-btn-jump"
               data-control-id="jump"
-              aria-label="Jump"
+              aria-label={hud.canVault ? 'Vault Obstacle' : 'Jump'}
               onPointerDown={(e) => startHoldActions(e, ['jump'])}
               onPointerUp={endHoldActions}
               onPointerCancel={endHoldActions}
@@ -1524,10 +1524,17 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
               className={`pointer-events-auto touch-none touch-none-surface fixed rounded-full border flex flex-col items-center justify-center ${
                 heldActionsUi.has('jump')
                   ? 'bg-amber-500/35 border-amber-400 text-amber-200'
-                  : 'bg-[#0B0E11]/78 border-white/20 text-zinc-200'
+                  : hud.canVault
+                    ? 'bg-cyan-500/35 border-cyan-300 text-cyan-100 ring-2 ring-cyan-400/40'
+                    : 'bg-[#0B0E11]/78 border-white/20 text-zinc-200'
               }`}
             >
-              <ArrowUp className="w-4 h-4" />
+              <ArrowUp className={hud.canVault ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+              {hud.canVault && (
+                <span className="font-mono text-[8px] font-bold leading-none mt-0.5 tracking-tight">
+                  VAULT
+                </span>
+              )}
             </button>
           )}
 

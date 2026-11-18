@@ -1,22 +1,44 @@
-# VANGUARD: ZERO HOUR — V1 PRODUCTION-READINESS AUDIT
+# VANGUARD: ZERO HOUR — V1 PRODUCTION-READINESS AUDIT & TRANSFORMATION ASSESSMENT
 
-**Audit Date:** 2026-11-15  
-**Target Version:** V1 (Single-Player Tactical Browser FPS — Mobile Landscape & Desktop WebGL2)  
-**Scope:** End-to-End Source Code, Runtime Architecture, Physics/Collision Pipeline, Rendering & Shaders, CPU/GPU Performance, Memory/GC Lifecycle, Mobile Browser Controls, Audio Engine, and Open-Source Technology Evaluation.
+**Audit & Discovery Date:** 2026-11-15 (Final Implementation Readiness Gate)  
+**Target Version:** V1 Baseline + Controlled Transformation Masterplan (Single-Player Tactical Browser FPS — Mobile Landscape & Desktop WebGL2)  
+**Scope:** End-to-End Source Code, Runtime Architecture, Project Recovery Baseline, Physics/Collision Pipeline, Tactical AI & Navigation, Rendering & Shaders, CPU/GPU Performance, Memory/GC Lifecycle, Mobile Browser Controls, Audio Engine, Candidate Asset/Library Ecosystem Evaluation, and Full Player Journey Assessment.
 
 ---
 
-## 1. Executive Summary
+## Repository Provenance & Verified Recovery Baseline
 
-**VANGUARD: ZERO HOUR (V1)** is a self-contained browser-based first-person tactical shooter built on **Three.js (`^0.187.0`)**, **React 19**, **Zustand 5**, **Tailwind CSS 4**, a deterministic custom **SpatialHash + Capsule/OBB Collision System**, **three-mesh-bvh**, and a procedural **Web Audio API** synthesizer. Across 5 campaign missions, V1 supports infantry firefights, destructible cover, drivable ground vehicles with roof-mounted turrets, hostile air units (helicopters, drones, strike jets), guided ordnance, and a 2-finger / 3-finger claw mobile HUD with a 1:1 interactive layout editor.
+- **Workspace Root:** `/app/applet`
+- **Git Status / Branch / Commit Hash:** The AI Studio container workspace `/app/applet` (and parent `/app`) contains no `.git` directory (`find /app -maxdepth 3 -name ".git"` returns empty; `git status` returns `fatal: not a git repository`). No upstream `.git` archive or remote metadata exists on the container filesystem, so original commit hashes and branch names cannot be recovered from disk and are **not** fabricated.
+- **Project Recovery Baseline (`/var/tmp/vanguard-v1-recovery-baseline`):**
+  - Because Git history is absent in the container, a read-only (`chmod 0444` / `0555`) full-project snapshot and cryptographic file manifest have been established outside the working tree at `/var/tmp/vanguard-v1-recovery-baseline/`. *(Note: POSIX permissions provide local accidental-modification protection, not tamper-proof immutability.)*
+    1. **Archive:** `/var/tmp/vanguard-v1-recovery-baseline/vanguard-v1-baseline.tar.gz` (contains all tracked project files across `src/`, `e2e/`, `docs/`, `CHECKPOINT.md`, `package.json`, `bun.lock`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, `index.html`, `metadata.json`, `.env.example`, and `.gitignore`).
+    2. **SHA-256 Manifest:** `/var/tmp/vanguard-v1-recovery-baseline/MANIFEST.sha256` (records exact SHA-256 digests for every baseline file) and `/var/tmp/vanguard-v1-recovery-baseline/ARCHIVE.sha256`.
+    3. **Verified Restore Procedure:**
+       - *Audit / Diff Check:* `sha256sum -c /var/tmp/vanguard-v1-recovery-baseline/MANIFEST.sha256` from `/app/applet` identifies any modified or missing baseline file.
+       - *Clean Staged Rollback:* Extract to a clean staging directory (`rm -rf /tmp/vanguard-stage && mkdir -p /tmp/vanguard-stage && tar -xzf /var/tmp/vanguard-v1-recovery-baseline/vanguard-v1-baseline.tar.gz -C /tmp/vanguard-stage`), verify staging (`(cd /tmp/vanguard-stage && sha256sum -c /var/tmp/vanguard-v1-recovery-baseline/MANIFEST.sha256)`), remove any new files introduced in `/app/applet` outside `MANIFEST.sha256` (preserving `node_modules/`), copy verified staging files over `/app/applet`, and re-verify `sha256sum -c /var/tmp/vanguard-v1-recovery-baseline/MANIFEST.sha256`.
+- **Priority Scale Definition (Authoritative across Audit & Roadmap):**
+  - **`P0`:** Critical correctness, progression, or core gameplay defect.
+  - **`P1`:** High-impact gameplay or production-quality improvement.
+  - **`P2`:** Significant quality, immersion, or performance improvement.
+  - **`P3`:** Optional polish or lower-impact enhancement.
 
-During the initial production-readiness audit and follow-up completion audit, all primary engineering defects and bottlenecks were identified and resolved in `REP-01` through `REP-10` plus `FND-09` through `FND-17`:
+---
+
+# PART I — V1 PRODUCTION-READINESS AUDIT & HISTORICAL REPAIR RECORD
+
+## 1. Executive Summary (V1 Baseline)
+
+**VANGUARD: ZERO HOUR (V1)** is a self-contained browser-based first-person tactical shooter built on **Three.js (`^0.187.0`)**, **React 19.2.5**, **Zustand 5**, **Tailwind CSS 4**, a deterministic custom **SpatialHash + Analytical Capsule/OBB Collision System**, **three-mesh-bvh**, an off-thread **A* Web Worker (`navigation.worker.ts`)**, and a procedural **Web Audio API** synthesizer. Across 5 campaign missions, V1 supports infantry firefights, destructible cover (`DestructionSystem.ts`), drivable ground vehicles with roof-mounted turrets, hostile air units (helicopters, drones, strike jets, gunships), guided ordnance, and a 2-finger / 3-finger claw / PUBG-style vehicle mobile HUD with a 1:1 interactive layout editor.
+
+During the V1 production-readiness audit, completion audit, and real player feedback repair cycle, all primary V1 engineering defects and player-reported blockers were identified and resolved in `REP-01` through `REP-16` plus `FND-09` through `FND-19`:
 
 1. **Weapon View-Model & Handling Mechanics (`RESOLVED` — `REP-01`, `REP-02`):** Repaired slide/bolt recoil spring return (`slideRestZ`) and restored per-weapon `sprintToFireSec` handling delays across all 9 weapons.
 2. **Redundant Dual-Physics Stepping & Unreleased BVH/WASM Memory (`RESOLVED` — `REP-04`, `FND-12`):** Removed idle `@dimforge/rapier3d-compat` WASM stepping and duplicate collider syncing (`2.17 MB` runtime bundle eliminated) and added `disposeBoundsTree()` cleanup on `PhysicsWorld.clear()`.
 3. **60Hz Fixed-Step Garbage Collection & Unconditional Debug Row Construction (`RESOLVED` — `REP-03`, `REP-05`, `FND-09`):** Gated `getDebugInspectorRows()` behind Developer Mode ticks and replaced 60Hz spread arrays, closures, capsule results, and per-shot `Vector3.clone()` allocations with slot-pooled `fill*()` APIs and reusable scratch buffers.
 4. **Procedural PBR Surface Response & Shadow Focus (`RESOLVED` — `REP-06`, `REP-08`):** Added procedural `bumpMap` micro-surface relief in `AssetManager.ts` and a texel-snapped player-following directional shadow frustum in `LightingRig.ts`.
 5. **Unused Audio Vendor Bundle & Lifecycle Mute Hygiene (`RESOLVED` — `REP-07`, `REP-09`, `FND-11`):** Removed `howler` (`36.46 kB` `vendor-audio` chunk), unified native Web Audio lifecycle muting (`syncMasterGain()`), and locked tactical UI/lock cues to `playbackRate = 1.0`.
+6. **Real Player Feedback Repairs (`RESOLVED` — `FND-14`–`FND-19` / `REP-11`–`REP-16`):** Fixed 8-direction movement & fixed-ring left/right strafe (`1.45×` radius) with deduplicated `TouchEvent` edge-swipe fallback; built the PUBG Mobile-inspired Vehicle Driving HUD with progressive speed-sensitive steering, `160ms` hysteresis brake-to-reverse, and Chase Camera heading follow; added structured `actionMeta` `NEXT ACTION` HUD directives and versioned Pre-Deployment Mission Briefings; added collectible 3D Heart (`+35 HP`) pickups; and upgraded Slot 7 `AT-4X / RPG-7V Bazooka` with a 1-tap `RPG` quick-equip button and `45 HP` self-damage cap.
 
 ---
 
@@ -25,196 +47,201 @@ During the initial production-readiness audit and follow-up completion audit, al
 ### 2.1 High-Level Module Graph
 | Subsystem | Primary Source Files | Actual Runtime Responsibility |
 |---|---|---|
-| **Boot & Lifecycle** | `src/engine/GameEngine.ts`, `src/core/LifecycleStateMachine.ts`, `src/core/ResourceManager.ts` | Owns the `requestAnimationFrame` loop, fixed-step accumulator (`1/60s`, max 4 substeps), mission loading/unloading, and scoped resource disposal (`shared`, `mission:<id>`, `pool:<id>`). |
+| **Boot & Lifecycle** | `src/engine/GameEngine.ts`, `src/engine/EngineLifecycle.ts`, `src/core/ResourceManager.ts` | Owns the `requestAnimationFrame` loop (`GameLoop.ts`), fixed-step accumulator (`1/60s`, max 4 substeps), mission loading/unloading, and scoped resource disposal (`shared`, `mission:<id>`, `mission:world`, `mission:audio`). |
 | **Rendering & GPU Scaling** | `src/engine/Renderer.ts`, `src/engine/PerformanceGovernor.ts`, `src/engine/GpuCapabilityDetector.ts`, `src/world/LightingRig.ts` | Manages `THREE.WebGLRenderer`, perspective camera, `RoomEnvironment` PMREM reflections, `pmndrs/postprocessing` (`EffectComposer`, `BloomEffect`, `VignetteEffect`), and dynamic resolution/tier scaling. |
-| **Input & Mobile HUD** | `src/engine/InputManager.ts`, `src/ui/hud/MobileTouchControls.tsx`, `src/ui/hud/mobileHudLayoutEngine.ts`, `src/ui/components/MobileHudEditorModal.tsx` | Unified desktop (Keyboard + Pointer Lock + Gamepad) and mobile touch (Left 360° analog joystick + Right-screen camera look surface + 2-Finger / 3-Finger Claw / Custom HUD layout engine). |
-| **Physics & Collision** | `src/physics/CollisionWorld.ts`, `src/physics/SpatialHash.ts`, `src/engine/physics/PhysicsWorld.ts`, `src/engine/physics/CollisionResponseSystem.ts` | 2D spatial hash grid (`cellSize = 8m`) storing `SpatialAABB` colliders, custom iterative capsule-vs-AABB/OBB solver, swept-sphere queries, and `three-mesh-bvh` acceleration structures. |
-| **Combat & Weapons** | `src/gameplay/PlayerController.ts`, `src/gameplay/WeaponSystem.ts`, `src/gameplay/BallisticSolver.ts`, `src/gameplay/ProjectilePool.ts`, `src/gameplay/ExplosiveSystem.ts` | First-person kinematic controller, 9-weapon state machine (hitscan + pooled ballistic/guided ordnance), procedural view-model rig, recoil/spread solver, and C4/airstrike/nuclear ordnance. |
-| **AI & Vehicles** | `src/gameplay/EnemyManager.ts`, `src/gameplay/CombatEngagementCoordinator.ts`, `src/gameplay/VehicleManager.ts`, `src/gameplay/AirCombatManager.ts` | Token-leased AI fire coordination (`MAX_SIMULTANEOUS_ATTACKERS`), ground infantry state machine (`UNAWARE` → `COMBAT` / `COVER` / `FLANK`), OBB vehicles with spring-arm camera, and multi-phase aircraft. |
-| **World & Assets** | `src/world/MapBuilder.ts`, `src/core/AssetManager.ts`, `src/effects/VFXPool.ts`, `src/gameplay/DestructionSystem.ts` | Procedural urban/desert/jungle/industrial/night map generation, `InstancedMesh` static batching (`63` colliders / `20+` buildings), procedural canvas textures, and pooled particle/tracer/nuke VFX. |
-| **State & Telemetry** | `src/state/gameSessionStore.ts`, `src/state/settingsStore.ts`, `src/state/uiStore.ts`, `src/gameplay/CombatTelemetryRecorder.ts` | Zustand state stores for HUD, persisted player settings (`localStorage`), and developer combat/physics telemetry. |
-
-### 2.2 Frame Execution Path (`GameEngine.loop`)
-1. `requestAnimationFrame` callback computes `rawDt` and clamps frame delta (`max 0.1s`).
-2. `InputManager.pollGamepad()` updates gamepad axes/buttons.
-3. Fixed-step accumulator (`FIXED_STEP = 1/60s`, clamped to `MAX_SUBSTEPS = 4`) executes `onFixedStep(FIXED_STEP)`:
-   - Updates `CollisionWorld.beginFrame(dt)` → `PhysicsWorld.beginFrame(dt)`.
-   - Updates `PlayerController.update()` (or `VehicleManager.update()` when driving).
-   - Gathers hitscan targets and lock candidates from `EnemyManager`, `AirCombatManager`, and `VehicleManager`.
-   - Updates `WeaponSystem.update()` (recoil, spread, hitscan/projectile firing, view-model transform).
-   - Steps `EnemyManager.update()`, `AirCombatManager.update()`, `ProjectilePool.update()`, and `ExplosiveSystem.update()`.
-   - Ticks `MissionDirector.update()`, `CombatEngagementCoordinator.tick()`, and HUD/telemetry snapshots.
-4. Variable-rate render tail executes `VFXPool.update(clampedDt)`, `AudioManager.updateListener()`, `PerformanceGovernor.recordSample()`, and `EngineRenderer.renderFrame()`.
+| **Input & Mobile HUD** | `src/engine/InputManager.ts`, `src/ui/hud/MobileTouchControls.tsx`, `src/ui/hud/mobileHudLayoutEngine.ts`, `src/ui/components/MobileHudEditorModal.tsx` | Unified desktop (Keyboard + Pointer Lock + Gamepad) and mobile touch (Left 360° analog joystick + Right-screen camera look surface + 2-Finger / 3-Finger Claw / Vehicle Driving HUD / Custom HUD layout engine). |
+| **Physics & Collision** | `src/physics/CollisionWorld.ts`, `src/physics/SpatialHash.ts`, `src/engine/physics/PhysicsWorld.ts`, `src/engine/physics/CollisionSystem.ts`, `src/engine/physics/CollisionResponseSystem.ts` | Public `CollisionWorld` facade delegating to `PhysicsWorld`, 2D XZ `SpatialHash` broadphase (`cellSize = 8m`), and `CollisionSystem` / `CollisionResponseSystem` analytical narrowphase for capsules, OBB vehicles, and swept rays/spheres. |
+| **Combat & Weapons** | `src/gameplay/PlayerController.ts`, `src/gameplay/WeaponSystem.ts`, `src/gameplay/WeaponViewModels.ts`, `src/gameplay/BallisticSolver.ts`, `src/gameplay/ProjectileManager.ts`, `src/gameplay/ExplosiveManager.ts` | First-person kinematic controller, 9-weapon state machine (hitscan + pooled ballistic/guided ordnance), procedural view-model rig, recoil/spread solver, and C4/airstrike/nuclear/RPG ordnance. |
+| **AI, Navigation & Vehicles** | `src/gameplay/EnemyManager.ts`, `src/gameplay/CombatEngagementCoordinator.ts`, `src/workers/WorkerBridge.ts`, `src/workers/navigation.worker.ts`, `src/gameplay/VehicleManager.ts`, `src/gameplay/VehicleCameraRig.ts`, `src/gameplay/AirCombatManager.ts` | Token-leased AI fire coordination (`MAX_SIMULTANEOUS_ATTACKERS`), 9-state ground infantry FSM, off-thread 2D grid A* worker, OBB vehicles with Chase/FPV camera rig, and multi-phase aircraft. |
+| **World & Assets** | `src/world/MapBuilder.ts`, `src/world/DestructionSystem.ts`, `src/world/rigs/*`, `src/core/AssetManager.ts`, `src/effects/VFXPool.ts`, `src/gameplay/HealthPickupManager.ts` | Procedural urban/desert/jungle/industrial/night map generation, `InstancedMesh` static batching, procedural canvas textures with bump relief, 3D Heart pickups, and pooled particle/tracer/nuke VFX. |
+| **State & Telemetry** | `src/stores/gameSessionStore.ts`, `src/stores/settingsStore.ts`, `src/stores/missionSelectionStore.ts`, `src/stores/progressionStore.ts`, `src/gameplay/CombatTelemetryRecorder.ts` | Zustand state stores for HUD, persisted player settings, progression/grades, and versioned mission briefings (`localStorage`), plus developer combat/physics telemetry. |
 
 ---
 
-## 3. Post-Repair Test & Benchmark Results
+## 3. Verified Baseline Test, Build & E2E Evidence
 
-### 3.1 Automated Unit & Integration Suite (`Vitest`)
-- **Command:** `npx vitest run --pool=vmThreads`
-- **Post-Repair Status (`VERIFIED`):** **14 test files passed, 92 tests passed (`0` failures)** (`playerFeedbackRepairs.test.ts` + `v1RepairsVerification.test.ts` + all 12 core suites).
-- **Coverage:** Physics capsule/OBB collision & BVH disposal, combat LOS/token leases, zero-alloc `BallisticSolver.checkLineOfSight()` & `fireWeaponRay()`, weapon ballistics/recoil/sprint-to-fire, GPU capability scoring, native audio lifecycle muting & idempotent `mission:audio` cleanup, texel-snapped shadow frustum tracking, zero-alloc target buffers & clean `clear()` release, modular rig builders + 12-cycle `ResourceManager` load/unload leak stress test, 8-direction movement & diagonal sprint/slide steering (`FND-14`), PUBG-style vehicle controls + brake-to-reverse hysteresis + Chase Camera heading follow (`FND-15`), structured mission directives & versioned pre-deployment briefings (`FND-16`, `FND-17`), Collectible 3D Heart health pickups (`FND-18`), Slot 7 RPG/Bazooka + `45 HP` self-damage cap + wall occlusion (`FND-19`), and mobile HUD layout non-overlap across Infantry & Vehicle modes.
-
-### 3.2 Production Bundle & Build Verification (`Vite 8.3.8`)
-- **Command:** `npm run build` (`vite build`)
-- **Post-Repair Status (`VERIFIED`):** Clean TypeScript (`tsc --noEmit`: 0 errors) + Vite production build.
-- **Verification Note (`VERIFIED`):** Both the `2,175.87 kB` Rapier WASM chunk (`vendor-physics`) and the `36.46 kB` `howler` chunk (`vendor-audio`) have been completely eliminated from the production client bundle. (`@dimforge/rapier3d-compat` stays in `package.json` solely for the standalone `src/physics/PhysicsBenchmark.ts` developer helper via dynamic import and is never bundled into `dist/assets/`.)
-
-### 3.3 Playwright Browser E2E & Mobile Viewport Verification
-- **Command:** `npx playwright test e2e/responsive-and-gameplay.spec.ts`
-- **Post-Repair Status (`VERIFIED` in headless Chromium — Automated Browser Verification + Browser Emulation):** **7 passed** across `1920×1080` (Desktop), `1366×768` (Laptop), `1024×768` (Tablet), `844×390` (Phone Landscape), `915×412` (Pixel Landscape), `390×844` (Mobile Portrait gate), and live Mission 1 `844×390` / `844×315` multitouch gameplay.
-- **Verified Runtime Metrics:**
-  - Zero horizontal/vertical document overflow (`scrollWidth <= innerWidth + 1`).
-  - Pre-Deployment Mission Briefing (`mission-briefing-panel`, `briefing-version-badge`, `briefing-controls-guide`, `mission-briefing-modal`), in-combat `NEXT ACTION` directive (`hud-action-directive`), and 1-tap `RPG` quick-equip (`touch-btn-rpg`) verified in live browser gameplay.
-  - Zero bounding-box overlap across all visible touch controls in **2-Finger**, **3-Finger Claw**, and **Vehicle Driving HUD** profiles (including 1:1 Full-Screen HUD Editor Infantry & Vehicle mode round-trip and `844×315` compact browser height).
-  - Full 360° camera yaw traversal, independent 4-way movement + strafe, and 3rd-finger firing verified in live headless Chromium gameplay with zero page/console errors.
-
----
-
-## 4. Gameplay & Realism Findings
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **G-01** | `VERIFIED` | **P0** | `src/gameplay/WeaponSystem.ts:697–700` | **Weapon Slide/Bolt Permanent Backward Drift:** `rig.slideOrBolt.position.z = rig.slideOrBolt.position.z + (this.recoilKickZ * 0.5 - rig.slideOrBolt.position.z * 0.0) * 0.1;` multiplies the current position by `0.0`. Instead of springing back to its initial rest Z coordinate, the slide/bolt accumulates `0.05 * recoilKickZ` every frame while `recoilKickZ > 0`, permanently detaching backward behind the gun body. |
-| **G-02** | `VERIFIED` | **P0** | `src/gameplay/WeaponSystem.ts:67–68, 292–293, 345` | **Sprint-to-Fire Delay Hardcoded to Zero:** Every weapon in `src/data/weapons.ts` specifies `sprintToFireSec` (`0.11s` for pistol/SMG up to `0.30s` for LMG/launchers). `WeaponSystem` tracks `wasSprinting` (`line 68`) and checks `this.sprintToFireTimer <= 0` (`line 345`), but `line 293` sets `this.sprintToFireTimer = 0` unconditionally every frame instead of arming `this.sprintToFireTimer = cfg.sprintToFireSec` when transitioning out of sprint. |
-| **G-03** | `VERIFIED` | **P2** | `src/gameplay/WeaponSystem.ts:606–676` | **Box-Primitive Weapon View-Models:** Weapon view-models are constructed from 4–6 untextured `BoxGeometry` / `CylinderGeometry` primitives without barrel rifling, iron-sight apertures, rails, or surface wear maps, limiting first-person visual immersion. |
-| **G-04** | `VERIFIED` | **P2** | `src/gameplay/EnemyManager.ts:1100–1234` | **Procedural Box-Limb Enemy Rigs:** Enemy soldiers use hierarchical box primitives with procedural sinusoidal walk cycles (`walkCycle += dt * speed`). While readable and fast to render, hit reactions are limited to a brief torso pitch kick (`hitReactTimer`). |
-
----
-
-## 5. Visual & Rendering Limitations
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **R-01** | `VERIFIED` | **P1** | `src/core/AssetManager.ts:125–138` | **Missing Bump/Roughness Micro-Detail on Procedural Materials:** `getSharedMaterial()` creates `THREE.MeshStandardMaterial` with only `map` (a 256×256 procedural 2D canvas texture) and scalar `roughness` / `metalness`. Without a `bumpMap` (`bumpScale`), large concrete walls, asphalt roads, sand dunes, and metal plates produce flat, mirror-uniform specular lobes under the directional sun light and `RoomEnvironment` IBL. |
-| **R-02** | `VERIFIED` | **P2** | `src/engine/Renderer.ts:207–214` | **EffectComposer Bypassed When Bloom Is Disabled:** `renderFrame()` only runs `this.composer.render()` when `this.bloomEnabled && this.composer` is truthy. On `low` and `medium` tiers (or mobile `high` where bloom defaults to `false`), `VignetteEffect` is also bypassed. |
-| **R-03** | `VERIFIED` | **P2** | `src/world/LightingRig.ts:29–46` | **Static Non-Cascaded Shadow Frustum Centered on Origin:** The directional light shadow camera uses a fixed ortho frustum (`[-shadowDistance, shadowDistance]`) targeting `(0, 0, 0)` rather than snapping to the player's texel-aligned camera frustum, reducing effective shadow texel density when the player moves 100m+ from the map center. |
-
----
-
-## 6. CPU / GPU Performance Findings
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **P-01** | `VERIFIED` | **P0** | `src/engine/GameEngine.ts:1161–1166` | **Unconditional 60Hz Debug Inspector Row Construction:** On every fixed step (`60Hz`), `GameEngine.onFixedStep` calls `this.enemies.getDebugInspectorRows(this.player)`, `this.airCombat.getDebugInspectorRows(this.player)`, and `this.vehicles.getDebugInspectorRows(this.player)` outside `if (devActive)` just to compute `const anyEnemyHasLos = allDebugUnits.some((u) => u.hasLos)`. Each call iterates all units, computes Euclidean distances, formats 12+ numbers via `Number(val.toFixed(1))`, and allocates a 31-property object per unit—even in production gameplay when Developer Mode is OFF. |
-| **P-02** | `VERIFIED` | **P1** | `src/engine/physics/PhysicsWorld.ts:91–94, 108–150` | **Redundant Per-Frame Rapier WASM Stepping:** `PhysicsWorld.beginFrame(dt)` calls `this.rapierWorld.step()` every frame and `syncRapierCollider()` creates WASM rigid bodies/colliders for every static AABB, even though all gameplay physics queries (`resolveCharacterCapsule`, `resolveVehicleMovement`, `raycast`, `sweptSphere`) execute against `CollisionSystem` + `SpatialHash`. |
-| **P-03** | `VERIFIED` | **P1** | `src/engine/GameEngine.ts:970–971, 1082–1085` | **60Hz Spread-Array Allocations in Fixed Step:** `allHitscan`, `lockCandidates`, and `prox` arrays are reconstructed via spread syntax (`[...a, ...b, ...c]`) on every 60Hz tick instead of reusing pre-allocated buffers on `GameEngine`. |
-
----
-
-## 7. Memory & Garbage-Collection Findings
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **M-01** | `VERIFIED` | **P0** | `src/engine/physics/PhysicsWorld.ts:152–182` | **Unreleased `three-mesh-bvh` & Rapier Colliders on `PhysicsWorld.clear()`:** `registerMeshBVH()` computes a `MeshBVH` (`computeBoundsTree()`) and pushes the geometry into `this.bvhGeometries`, and `syncRapierCollider()` inserts colliders into `this.rapierWorld`. However, `PhysicsWorld.clear()` only clears `staticColliders` and `rapierColliderHandles` without calling `disposeBoundsTree()` on `this.bvhGeometries` or removing colliders from `this.rapierWorld`, leaking memory across mission transitions. |
-| **M-02** | `VERIFIED` | **P1** | `src/gameplay/WeaponSystem.ts:281, 449–453, 494–498, 573` | **Per-Shot & Per-Pellet `THREE.Vector3` Heap Allocations:** `getMuzzleWorldPosition()` returns `this._muzzleWorld.clone()`, `fireShot()` clones `dir` and `endPoint` (`dir.clone().multiplyScalar(...)`), and `spawnProjectileShot()` clones `muzzlePos` and `aimDir`, creating short-lived heap allocations during rapid automatic or shotgun fire. |
-
----
-
-## 8. Browser & Mobile Limitations
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **B-01** | `VERIFIED` | **Resolved in V1** | `src/ui/hud/mobileHudLayoutEngine.ts`, `src/ui/hud/MobileTouchControls.tsx` | **Mobile Landscape Ergonomics & Multi-Touch Isolation:** Previously suffered from right-side button overlap and restricted camera rotation. Resolved via the deterministic `computeMobileHudLayout()` and `computeMobileVehicleHudLayout()` engines, non-overlapping right-thumb arc, bottom-center weapon bar with 1-tap `RPG`, independent Left/Right Fire buttons, and `PointerEvent.pointerId` tracking on `right-look-surface`. |
-| **B-02** | `PARTIALLY VERIFIED` | **P2** | `src/ui/hooks/useFullscreenLandscape.ts`, `index.html` | **iOS Safari Fullscreen & Dynamic Browser Chrome:** iOS Safari on iPhone does not support the standard Fullscreen API (`element.requestFullscreen`) on arbitrary elements (only on `<video>` or PWA standalone mode). While `100dvh` and `env(safe-area-inset-*)` are applied, iOS Safari's URL bar can still consume vertical height unless added to Home Screen. |
-
----
-
-## 9. Audio & Immersion Findings
-
-| ID | Status | Severity | Location | Finding & Technical Proof |
-|---|---|---|---|---|
-| **A-01** | `VERIFIED` | **P2** | `src/audio/AudioManager.ts:1, 101–126` | **Redundant `howler` Dependency (`36.46 kB`):** `Howler` is imported only to call `Howler.mute()` and `Howler.volume()`, while all sound generation, spatialization (`PannerNode`), and mixing (`GainNode`) are implemented directly in native Web Audio API (`AudioContext`). |
-| **A-02** | `VERIFIED` | **P1** | `src/audio/AudioManager.ts:314–318` | **Uniform Synthesis Envelope & Footstep Cadence:** While `playInternal` applies a small playbackRate jitter (`0.96 + Math.random() * 0.08`), `hit_marker`, `headshot`, `lock_beep`, `lock_ready`, and `ui_click` also receive random pitch shifts (which makes tactical UI/lock tones waver unnaturally), whereas weapon shots and footsteps lack per-weapon filter cutoff variation and sprint/crouch volume scaling. |
-
----
-
-## 10. Developer Experience & Maintainability
-
-- **Strengths (`VERIFIED`):**
-  - Clean separation between `src/engine/`, `src/gameplay/`, `src/physics/`, `src/world/`, `src/ui/`, and `src/schemas/` (Zod validation).
-  - Scoped resource lifecycle tracking (`ResourceManager`) with post-unload leak auditing (`auditTransitionDelta()`).
-  - Built-in Combat & Physics Debug Inspector (`CombatDebugOverlay.tsx`) gated behind Developer Mode.
-  - Procedural mesh builders (`EnemyRigBuilder.ts`, `VehicleRigBuilder.ts`, `AirRigBuilder.ts`) extracted into `src/world/rigs/` (`REP-10`).
-
----
-
-## 11. Open-Source Research (`ADOPT` / `ADAPT` / `LEARN` / `REJECT`)
-
-| Technology / Pattern | Decision | Engineering Rationale for VANGUARD: ZERO HOUR (V1) |
-|---|---|---|
-| **`three-mesh-bvh` (`^0.9.9`, installed)** | **ADOPT & EXPAND** | Already installed and fast for static triangle raycasting. Must fix `disposeBoundsTree()` cleanup in `PhysicsWorld.clear()` to prevent memory leaks. |
-| **Custom `CollisionSystem` + `SpatialHash` (`src/physics/`)** | **ADOPT (Authoritative V1)** | Deterministic, zero-WASM-marshaling overhead, supports OBB yaw rotation, step-up climbing, and fast ray/capsule sweeps in `< 0.4ms/frame`. |
-| **`@dimforge/rapier3d-compat` (`^0.19.3`, installed)** | **LEARN / DORMANT IN V1** | Currently adds a `2.17 MB` WASM bundle and steps an unused world every frame while all gameplay queries use `CollisionSystem`. Disable idle per-frame Rapier stepping and duplicate collider syncing in V1 so CPU/memory budgets are not wasted. |
-| **`postprocessing` (`^6.38.3`, installed)** | **ADAPT** | Merges post-processing passes efficiently, but should only run when enabled by the active quality profile and must respect software-rasterizer / low-tier bypass rules. |
-| **`howler` (`^2.2.4`, installed)** | **REJECT FOR V1 AUDIO** | 100% of V1 audio uses native `AudioContext` procedural buffers and `PannerNode`. `Howler` is dead weight (`36.46 kB`) used only for no-op `.mute()` calls. |
-| **Procedural Canvas Bump/Roughness Maps (`AssetManager.ts`)** | **ADAPT** | Reusing the existing 2D canvas procedural textures as a shared `bumpMap` (`bumpScale: 0.015–0.035`) adds tangible surface micro-relief to concrete, asphalt, sand, and metal with zero external asset downloads. |
-
----
-
-## 12. Verified Defects & Player Feedback Backlog Summary
-
-| ID | Classification | Priority | Summary |
+| Gate | Command | Result | Status |
 |---|---|---|---|
-| **FND-01** | `VERIFIED & RESOLVED` | **P0** | Weapon view-model slide/bolt permanently drifts backward during firing (`WeaponSystem.ts`). |
-| **FND-02** | `VERIFIED & RESOLVED` | **P0** | Sprint-to-fire delay (`sprintToFireSec`) overwritten with `0` every frame (`WeaponSystem.ts`). |
-| **FND-03** | `VERIFIED & RESOLVED` | **P0** | `PhysicsWorld.clear()` leaks `bvhGeometries` and steps an unused Rapier WASM world every frame (`PhysicsWorld.ts`). |
-| **FND-04** | `VERIFIED & RESOLVED` | **P0** | `GameEngine.onFixedStep()` builds full `EnemyDebugInspectorRow[]` tables at 60Hz even when Developer Mode is disabled (`GameEngine.ts`). |
-| **FND-05** | `VERIFIED & RESOLVED` | **P1** | Per-shot `THREE.Vector3.clone()` and 60Hz spread-array allocations in `WeaponSystem.ts` and `GameEngine.ts`. |
-| **FND-06** | `VERIFIED & RESOLVED` | **P1** | Procedural `MeshStandardMaterial` lacks `bumpMap` micro-relief, causing flat specular surfaces (`AssetManager.ts`). |
-| **FND-07** | `VERIFIED & RESOLVED` | **P1** | `AudioManager` applies random pitch jitter to tactical UI/lock tones (`AudioManager.ts`). |
-| **FND-08** | `PARTIALLY VERIFIED` | **P2** | iOS Safari non-PWA fullscreen limitations due to WebKit Fullscreen API restrictions on iPhone (`useFullscreenLandscape.ts`). |
-| **FND-09–13d** | `VERIFIED & RESOLVED` | **P1–P3** | Zero-alloc `BallisticSolver`, non-mutating `ignoreColliderId`, lifecycle mute sync, honest `solverBackend` label, and checkpoint `AbortController` cleanup. |
-| **FND-14** | `VERIFIED & RESOLVED` | **P0** | **Real Player Feedback (`"Left right kaj kore na, movement problem."`)**: Immediate 8-direction joystick response inside `1.45×` ring, deduplicated `TouchEvent` edge-swipe recovery, `ArrowKey` + non-QWERTY support, diagonal sprint (`W+A`/`W+D`), and lateral slide steering. |
-| **FND-15** | `VERIFIED & RESOLVED` | **P0** | **Real Player Feedback (`"Car only forward jai."`)**: Unified `getVehicleControls()`, PUBG Mobile-inspired Vehicle Driving HUD (`STEER LEFT`/`RIGHT` or `WHEEL`, `GAS`, `BRAKE/REV`, `HANDBRAKE`, `EXIT`), progressive speed-sensitive steering with self-centering, brake-to-reverse hysteresis (`160ms` hold), and smooth Chase Camera heading follow. |
-| **FND-16** | `VERIFIED & RESOLVED` | **P1** | **Real Player Feedback (`"Mission e kora lagbe eta aro valo kore bola lagbe."`)**: Structured `actionMeta` per objective and platform-matched `NEXT ACTION` HUD directive (`hud-action-directive`). |
-| **FND-17** | `VERIFIED & RESOLVED` | **P1** | **Real Player Feedback (`"Mission start hower age kora lagbe eta add koro."`)**: Versioned `(missionKey, briefingVersion)` persistence, Pre-Deployment Mission Briefing panel (`mission-briefing-panel`), platform controls guide, and `Full Briefing Dossier` modal (`mission-briefing-modal`). |
-| **FND-18** | `VERIFIED & RESOLVED` | **P1** | **Real Player Feedback (Collectible 3D Heart ❤️ Health Pickups)**: 4 map med-stations + single-evaluation enemy drops (`healthDropEvaluated`, max 3 active drops) restoring `+35 HP` up to `100` max within `2.25m`. |
-| **FND-19** | `VERIFIED & RESOLVED` | **P1** | **Real Player Feedback (`"Can you add Baduka? RPG"`)**: Upgraded Slot 7 `AT-4X / RPG-7V Bazooka` 3D view-model with conical PG-7V warhead, 1-tap `RPG` quick-equip HUD button (`touch-btn-rpg` / `desktop-btn-rpg`), `45 HP` self-damage cap, and wall LOS blast occlusion. |
+| **Unit & Integration Suite (`Vitest`)** | `bun run test` | **20 test files passed, 135 tests passed (`0` failed)** | `VERIFIED (Stage 4A Complete)` |
+| **TypeScript Static Analysis** | `npx tsc --noEmit` (`lint_applet`) | **0 errors** | `VERIFIED (Stage 4A Complete)` |
+| **Production Bundle (`Vite 8.3.8`)** | `npm run build` (`compile_applet`) | **Clean build** (`35` prod deps, `9` devDeps; `vendor-audio` and Rapier WASM runtime chunks absent from `dist/assets/`) | `VERIFIED (Stage 4A Complete)` |
+| **Playwright Multi-Viewport E2E** | `npx playwright test e2e/responsive-and-gameplay.spec.ts` | **7 / 7 passed** (`1920×1080`, `1366×768`, `1024×768`, `844×390`, `844×315`, `915×412`, `390×844` portrait gate) (`0` errors) | `VERIFIED (Headless Chromium)` |
+| **Physical Mobile Hardware QA** | Manual device matrix (`CHECKPOINT.md` Section F) | Requires physical iOS Safari / Android Chrome / In-App WebView devices | `NOT VERIFIED (Container Limit)` |
 
 ---
 
-## 13. The Ten Biggest Problems Holding V1 Back (And Their Resolution)
+## 4. Historical V1 Findings & Player Feedback Summary (`FND-01`–`FND-19`)
 
-1. **Unconditional 60Hz Debug Row Allocations in Production Gameplay (`GameEngine.ts`)** — `RESOLVED (REP-03)`
-2. **Weapon Slide/Bolt Permanent Mesh Drift (`WeaponSystem.ts`)** — `RESOLVED (REP-01)`
-3. **Broken Sprint-to-Fire Weapon Weight (`WeaponSystem.ts`)** — `RESOLVED (REP-02)`
-4. **Idle Rapier WASM World Stepping & Duplicate Static Colliders (`PhysicsWorld.ts`)** — `RESOLVED (REP-04)`
-5. **Unreleased BVH Trees on Mission Reset (`PhysicsWorld.ts`)** — `RESOLVED (REP-04)`
-6. **Hot-Path Vector & Spread-Array Allocations (`WeaponSystem.ts` & `GameEngine.ts`)** — `RESOLVED (REP-05, FND-09, FND-13a)`
-7. **Player Left/Right Movement & Touch Edge-Swipe Interruption (`MobileTouchControls.tsx`, `InputManager.ts`, `PlayerController.ts`)** — `RESOLVED (FND-14 / REP-11)`
-8. **Vehicle Forward-Only Driving Feel & Missing Dedicated Driving HUD (`VehicleManager.ts`, `VehicleCameraRig.ts`, `MobileTouchControls.tsx`)** — `RESOLVED (FND-15 / REP-12)`
-9. **Unclear Pre-Mission & In-Combat Objective Guidance (`CampaignScreen.tsx`, `MissionDirector.ts`, `GameHUD.tsx`)** — `RESOLVED (FND-16, FND-17 / REP-13, REP-14)`
-10. **Mid-Combat Health Sustain & 1-Tap Heavy RPG Accessibility (`HealthPickupManager.ts`, `WeaponViewModels.ts`, `ExplosiveManager.ts`)** — `RESOLVED (FND-18, FND-19 / REP-15, REP-16)`
+| ID | Status | Priority | Location | Summary |
+|---|---|---|---|---|
+| **FND-01 (`G-01`)** | `VERIFIED & RESOLVED (REP-01)` | **P0** | `src/gameplay/WeaponSystem.ts`, `WeaponViewModels.ts` | Weapon view-model slide/bolt permanently drifted backward; fixed via `slideRestZ` spring return. |
+| **FND-02 (`G-02`)** | `VERIFIED & RESOLVED (REP-02)` | **P0** | `src/gameplay/WeaponSystem.ts` | Sprint-to-fire delay (`sprintToFireSec`) was overwritten with `0` every frame; restored per-weapon handling timer. |
+| **FND-03 (`M-01`/`P-02`)** | `VERIFIED & RESOLVED (REP-04)` | **P0** | `src/engine/physics/PhysicsWorld.ts` | Removed idle per-frame Rapier WASM stepping (`2.17 MB` chunk) and added `disposeBoundsTree()` on `clear()`. |
+| **FND-04 (`P-01`)** | `VERIFIED & RESOLVED (REP-03)` | **P0** | `src/engine/GameEngine.ts` | Gated 60Hz `getDebugInspectorRows()` allocations behind `devActive` and zero-alloc `hasAnyEnemyWithLos()`. |
+| **FND-05 (`P-03`/`M-02`)** | `VERIFIED & RESOLVED (REP-05)` | **P1** | `src/gameplay/WeaponSystem.ts`, `src/engine/GameEngine.ts` | Replaced per-shot `Vector3.clone()` and 60Hz spread-array allocations with pre-allocated scratch buffers. |
+| **FND-06 (`R-01`)** | `VERIFIED & RESOLVED (REP-06)` | **P1** | `src/core/AssetManager.ts` | Attached procedural canvas textures as `bumpMap` (`bumpScale: 0.015–0.025`) on shared `MeshStandardMaterial`s. |
+| **FND-07 (`A-02`)** | `VERIFIED & RESOLVED (REP-07)` | **P1** | `src/audio/AudioManager.ts` | Locked tactical UI, hit-marker, and lock-on cues to deterministic `playbackRate = 1.0`. |
+| **FND-08 (`B-02`)** | `PARTIALLY VERIFIED` | **P2** | `src/ui/hooks/useFullscreenLandscape.ts` | iOS Safari on iPhone restricts Fullscreen API outside standalone PWA; mitigated via `100dvh` + compact layout scaling. |
+| **FND-09–13d** | `VERIFIED & RESOLVED` | **P1–P3** | `BallisticSolver.ts`, `PhysicsWorld.ts`, `AudioManager.ts`, `GameEngine.ts` | Zero-alloc `BallisticSolver`, non-mutating `ignoreColliderId`, lifecycle mute sync, honest `solverBackend` label, and checkpoint `AbortController` cleanup. |
+| **FND-14 (`REP-11`)** | `VERIFIED & RESOLVED` | **P0** | `InputManager.ts`, `PlayerController.ts`, `MobileTouchControls.tsx` | **Real Player Feedback (`"Left right kaj kore na, movement problem."`)**: Immediate 8-direction joystick response inside `1.45×` ring, deduplicated `TouchEvent` edge-swipe recovery, `ArrowKey` + non-QWERTY support, diagonal sprint (`W+A`/`W+D`), and lateral slide steering. |
+| **FND-15 (`REP-12`)** | `VERIFIED & RESOLVED` | **P0** | `VehicleManager.ts`, `VehicleCameraRig.ts`, `MobileTouchControls.tsx` | **Real Player Feedback (`"Car only forward jai."`)**: Unified `getVehicleControls()`, PUBG Mobile-inspired Vehicle Driving HUD (`STEER LEFT`/`RIGHT` or `WHEEL`, `GAS`, `BRAKE/REV`, `HANDBRAKE`, `EXIT`), progressive speed-sensitive steering, `160ms` brake-to-reverse hysteresis, and Chase Camera heading follow. |
+| **FND-16 (`REP-13`)** | `VERIFIED & RESOLVED` | **P1** | `missions.ts`, `MissionDirector.ts`, `GameHUD.tsx` | **Real Player Feedback (`"Mission e kora lagbe eta aro valo kore bola lagbe."`)**: Structured `actionMeta` per objective and platform-matched `NEXT ACTION` HUD directive (`hud-action-directive`). |
+| **FND-17 (`REP-14`)** | `VERIFIED & RESOLVED` | **P1** | `missionSelectionStore.ts`, `TitleScreen.tsx`, `CampaignScreen.tsx` | **Real Player Feedback (`"Mission start hower age kora lagbe eta add koro."`)**: Versioned `(missionKey, briefingVersion)` persistence, Pre-Deployment Mission Briefing panel (`mission-briefing-panel`), platform controls guide, and `Full Briefing Dossier` modal. |
+| **FND-18 (`REP-15`)** | `VERIFIED & RESOLVED` | **P1** | `HealthPickupManager.ts`, `GameEngine.ts` | **Real Player Feedback (Collectible 3D Heart ❤️ Health Pickups)**: 4 map med-stations + single-evaluation enemy drops (`healthDropEvaluated`, max 3 active drops) restoring `+35 HP` up to `100` max within `2.25m`. |
+| **FND-19 (`REP-16`)** | `VERIFIED & RESOLVED` | **P1** | `WeaponViewModels.ts`, `ExplosiveManager.ts`, `MobileTouchControls.tsx`, `GameHUD.tsx` | **Real Player Feedback (`"Can you add Baduka? RPG"`)**: Upgraded Slot 7 `AT-4X / RPG-7V Bazooka` 3D view-model with conical PG-7V warhead, 1-tap `RPG` quick-equip button (`touch-btn-rpg` / `desktop-btn-rpg`), `45 HP` self-damage cap, and wall LOS blast occlusion. |
+
+---
+---
+
+# PART II — EXISTING PROJECT TRANSFORMATION MASTERPLAN: DISCOVERY & CLASSIFICATION
+
+## 5. Existing Project Baseline & Architectural Ownership Audit
+
+### 5.1 Repository, Lockfile & Dependency Baseline (`TRN-02A` Complete Audit & Verification)
+An exhaustive repository audit across `src/`, `e2e/`, `vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, `tsconfig.json`, `index.html`, `package.json`, and `bun.lock` (`Bun 1.4.4`, sole repository lockfile) classified all 48 direct dependencies (`38 → 35` `dependencies`, `10 → 9` `devDependencies`):
+
+| Package (`package.json`) | Declared Version | Actual Repository Usage & Audit Findings | Classification |
+|---|---|---|---|
+| `three` / `@types/three` | `^0.187.0` | Core 3D WebGL2 rendering, geometries, materials, instancing, math, and GLTF/Draco/KTX2/RoomEnvironment addons (`53` files). | **`KEEP`** |
+| `three-mesh-bvh` | `^0.9.18` | Imported in `src/engine/physics/PhysicsWorld.ts:2` (`computeBoundsTree`, `disposeBoundsTree`, `acceleratedRaycast`) and `vite.config.ts`. | **`KEEP`** |
+| `postprocessing` | `^6.39.6` | Imported in `src/engine/Renderer.ts` (`EffectComposer`, `RenderPass`, `EffectPass`, `BloomEffect`, `VignetteEffect`). | **`KEEP`** |
+| `react`, `react-dom`, `@types/react`, `@types/react-dom` | `^19.0.1` / `^19.3.0` | UI root (`src/main.tsx`), screens, HUD, overlays, and type definitions (`35` files). | **`KEEP`** |
+| `zustand`, `zod`, `xstate`, `idb-keyval` | `^5.1.0`, `^4.6.7`, `^5.33.4`, `^6.3.0` | Zustand stores (`src/stores/*`), Zod schemas (`src/schemas/*`), XState engine lifecycle (`src/engine/EngineLifecycle.ts`), and IndexedDB save persistence (`src/storage/SaveManager.ts`). | **`KEEP`** |
+| `@radix-ui/react-checkbox`, `dialog`, `progress`, `select`, `slider`, `switch`, `tabs`, `tooltip`, `lucide-react`, `class-variance-authority`, `clsx`, `tailwind-merge` | Current | UI primitives (`src/ui/primitives/*`), HUD/menu iconography (`14` files), and class composition (`cn.ts`). | **`KEEP`** |
+| `vite`, `@vitejs/plugin-react`, `tailwindcss`, `@tailwindcss/vite`, `typescript`, `@types/node`, `vitest`, `jsdom`, `@testing-library/react`, `@playwright/test` | Current | Build bundler (`vite.config.ts`), Tailwind CSS v4 (`src/index.css`), `tsc --noEmit` static analysis, Vitest + JSDOM unit/component harness (`vitest.config.ts`), and Playwright E2E runner (`playwright.config.ts`). | **`KEEP`** |
+| `@dimforge/rapier3d-compat` | `^0.21.0` | Referenced in `src/physics/PhysicsBenchmark.ts:56` via dynamic `await import('@dimforge/rapier3d-compat')` for isolated comparative benchmarking (`0 B` in runtime chunks). | **`KEEP` (Isolated Benchmark Only)** |
+| `motion`, `@xstate/react`, `@radix-ui/react-dropdown-menu`, `react-hook-form`, `@hookform/resolvers`, `@testing-library/user-event`, `autoprefixer`, `esbuild`, `tsx` | Current | Retained UI/state/form/test/build companion packages: `motion` is referenced in `vite.config.ts:27` `manualChunks`; `esbuild` and `tsx` are core transitive build/test toolchain binaries in `bun.lock`; unimported UI/form helpers are 100% tree-shaken (`0 B` runtime cost) and retained to avoid speculative edits outside `TRN-02A`. | **`KEEP` / `INVESTIGATE` (Retained Safely)** |
+| `@google/genai` | `^2.4.0` | **Zero imports or references** anywhere in `src/`, `e2e/`, or configs; had `hasInstallScript: true` and pulled in `google-auth-library`, `protobufjs`, `p-retry`, and `ws`. | **`REMOVE` (`TRN-02A` — Removed)** |
+| `express` / `@types/express` | `^4.21.2` / `^4.17.21` | **Zero imports or references** anywhere in the repository (pure SPA Vite build); pulled in ~30 legacy CommonJS HTTP middleware packages. | **`REMOVE` (`TRN-02A` — Removed)** |
+| `dotenv` | `^17.2.3` | **Zero imports or references** anywhere in the repository (Vite natively handles `.env*` files). | **`REMOVE` (`TRN-02A` — Removed)** |
+
+### 5.2 Authoritative Physics & Spatial-Query Ownership Audit
+The exact source-verified responsibilities of each physics and navigation module are documented below:
+
+| Module | Source File | Authoritative Runtime Role (Source-Verified) | What It Does NOT Do |
+|---|---|---|---|
+| **`SpatialHash`** | `src/physics/SpatialHash.ts` | **Broadphase Spatial Index (`cellSize = 8m`):** Stores `SpatialAABB` records (axis-aligned boxes and yaw-rotated OBBs) bucketed in a 2D XZ hash map (`Map<number, SpatialAABB[]>`). Supplies candidate colliders into caller-provided scratch arrays (`queryAABB`, `queryRayBounds`). | Does not perform narrowphase intersection math or triangle mesh queries. |
+| **`CollisionSystem` & `CollisionResponseSystem`** | `src/engine/physics/CollisionSystem.ts`, `src/engine/physics/CollisionResponseSystem.ts` | **Authoritative Analytical Narrowphase Solver:** Executes all gameplay collision resolution and ray/sphere casting against `SpatialAABB` / `OBB` primitives from `SpatialHash` and terrain height `getGroundHeightAt(x, z)`: (1) `resolveCharacterCapsule` (collide-and-slide, `0.45m` step-up, ceiling clamp, world bound clamp at `±106m`); (2) `hasVerticalCapsuleClearance` (crouch stand-up check); (3) `resolveVehicleMovement` (2D SAT OBB vs. AABB/OBB deflection, impact damage, world bound clamp at `±104m`); (4) `sweptCast` (analytical ray and sphere-swept CCD against boxes, rotated OBBs, and `y = 0`). | Does **not** invoke `three-mesh-bvh` or `THREE.Raycaster` during gameplay movement, projectile sweeps, or `BallisticSolver` LOS checks. |
+| **`PhysicsWorld`** | `src/engine/physics/PhysicsWorld.ts` | **Internal Physics Coordinator & Telemetry Owner:** Owns `spatialHash`, `collisionSystem`, `responseSystem`, `debugSystem` (`PhysicsDebugSystem`), `slopes` (`TerrainSlopeRegion[]`), `terrainHeightFn`, `worldBoundLimit` (`106m`), and `bvhGeometries` (`Set<THREE.BufferGeometry>`). Builds the F4 physics diagnostic snapshot (`buildDiagnosticsSnapshot`). | Does not initialize or step Rapier (`isRapierInitialized()` returns `false`). |
+| **`CollisionWorld`** | `src/physics/CollisionWorld.ts` | **Public Gameplay Collision Facade:** Instantiates `public readonly physicsWorld = new PhysicsWorld()` and exposes the public API consumed by `GameEngine`, `PlayerController`, `EnemyManager`, `VehicleManager`, `BallisticSolver`, `ProjectileManager`, `ExplosiveManager`, and `MapBuilder` (`resolvePlayerCapsule`, `resolveVehicleMovement`, `sweptSegmentTest`, `sweptSphereTest`, `canStandUp`, `getGroundHeightAt`). | Contains no independent state outside `this.physicsWorld` (except integrating `pos += vel * dt` at the start of `resolvePlayerCapsule`, lines `85–87`). |
+| **`three-mesh-bvh`** | `src/engine/physics/PhysicsWorld.ts:18–28, 87–93`, `src/world/MapBuilder.ts:198, 378` | **Registered Triangle-Mesh Acceleration Structure:** `PhysicsWorld` patches `THREE.BufferGeometry.prototype.computeBoundsTree/disposeBoundsTree` and `THREE.Mesh.prototype.raycast = acceleratedRaycast`. `MapBuilder.ts` calls `registerBvhMesh(child)` on enterable building meshes (`line 198`) and watchtower meshes (`line 378`), and `PhysicsWorld.clear()` (`lines 449–455`) disposes all registered BVH trees. | **Not currently queried by gameplay raycasts:** All gameplay weapon rays, AI LOS rays, and projectile sweeps call `CollisionWorld.sweptSegmentTest` / `sweptSphereTest` → `CollisionSystem.sweptCast` (analytical AABB/OBB). `three-mesh-bvh` is available for future per-triangle visual surface decal placement or complex mesh raycasting where analytical boxes are insufficient. |
+| **`@dimforge/rapier3d-compat`** | `src/physics/PhysicsBenchmark.ts:56` | **Isolated Benchmark Harness Only:** Dynamically imported inside `runPhysicsBackendBenchmark()` to compare 60-step capsule/ray workloads (`CollisionWorld` `~0.35ms/step` vs. Rapier WASM). | Never imported or stepped by `PhysicsWorld` or any gameplay manager unless future runtime integration is explicitly justified and approved. |
 
 ---
 
-## 14. Root-Cause Analysis (With File & Line References)
+## 6. Authoritative Subsystem Classification Matrix
 
-### 14.1 `FND-01`–`FND-04` (Initial Audit P0 Defects)
-- **`FND-01` (`WeaponSystem.ts`):** `slideRestZ` recorded at rig build time and interpolated smoothly during `updateViewModelTransform()`.
-- **`FND-02` (`WeaponSystem.ts`):** `sprintToFireTimer` armed with `cfg.sprintToFireSec` when exiting sprint.
-- **`FND-03` (`PhysicsWorld.ts`):** Idle Rapier WASM stepping removed and `bvhGeometries` disposed on `clear()`.
-- **`FND-04` (`GameEngine.ts`):** `getDebugInspectorRows()` gated behind `devActive`.
+Every subsystem is mapped to its **exact authoritative `TRN-01`–`TRN-11` identifier**, priority (`P0`–`P3`), and stage (`Stage 1`–`Stage 4`):
 
-### 14.2 `FND-14`: Player Left/Right Movement (`MobileTouchControls.tsx`, `InputManager.ts`, `PlayerController.ts`)
-- **Root Cause:** Fixed joystick mode re-centered the stick origin (`cx = clientX`) whenever `dist > radius * 1.05`, so tapping the outer left/right edge of the visible ring resulted in `dx = 0` (`right = 0`) unless the player dragged a second time. In addition, mobile browsers near the left screen edge could fire premature `pointercancel` on horizontal swipes, and desktop lacked `ArrowLeft/Right` bindings.
-- **Fix:** Preserved fixed stick center for all presses within `1.45×` base radius, added deduplicated `TouchEvent` edge-swipe recovery keyed by `Touch.identifier`, added `ArrowUp/Down/Left/Right` + `normalizeKeyCode(e)`, and allowed diagonal sprinting (`W+A` / `W+D`) and lateral slide steering.
-
-### 14.3 `FND-15`: Vehicle Steering, Brake-to-Reverse & Chase Camera (`VehicleManager.ts`, `VehicleCameraRig.ts`, `MobileTouchControls.tsx`)
-- **Root Cause:** Driving on mobile reused the infantry analog stick without dedicated steering or gas/brake/reverse pedals, while `VehicleManager.ts` had no progressive wheel angle (`steerAngle`) or brake-to-reverse hysteresis state machine, and `VehicleCameraRig.ts` did not follow vehicle heading in Chase mode.
-- **Fix:** Implemented `InputManager.getVehicleControls()`, the PUBG Mobile-inspired Vehicle Driving HUD (`STEER LEFT`/`RIGHT` or `WHEEL`, `GAS`, `BRAKE/REV`, `HANDBRAKE`, `EXIT`), speed-sensitive progressive `steerAngle` with self-centering, a `160ms` `NEUTRAL_HOLD` hysteresis brake-to-reverse state machine, and smooth Chase Camera heading follow.
-
----
-
-## 15. Current Production-Readiness Verdict
-
-- **Pre-Repair Status:** **NOT PRODUCTION READY** (due to `FND-01`–`FND-04` and real player gameplay blockers `FND-14`–`FND-19`).
-- **Current Post-Repair Status:** **PRODUCTION READY FOR V1 WEB & EMULATED MOBILE LANDSCAPE (PENDING PHYSICAL HARDWARE QA)** — `REP-01` through `REP-16`, `FND-09` through `FND-13d`, and real player feedback items `FND-14` through `FND-19` are implemented and verified by `tsc --noEmit` (0 errors), `npm run build`, `npx vitest run --pool=vmThreads` (14 files / 92 tests passed), and headless Chromium Playwright E2E (7 / 7 passed).
+| # | Subsystem | Primary Files | Classification | Authoritative TRN ID | Priority | Stage | Engineering Rationale & Scope |
+|---|---|---|---|---|---|---|---|
+| **1** | **Physics & Spatial Queries** | `src/physics/CollisionWorld.ts`, `src/physics/SpatialHash.ts`, `src/engine/physics/CollisionSystem.ts`, `src/engine/physics/PhysicsWorld.ts`, `src/physics/PhysicsBenchmark.ts` | **`PRESERVE`** | *(Baseline + Benchmark)* | — | — | Preserve `CollisionWorld` → `PhysicsWorld` → `CollisionSystem` + `SpatialHash` as the single authoritative runtime collision/query pipeline. Keep `PhysicsBenchmark.ts` separately scoped for comparative benchmarking. |
+| **2** | **Enemy AI & Tactical Navigation** | `src/gameplay/EnemyManager.ts`, `src/gameplay/CombatEngagementCoordinator.ts`, `src/workers/WorkerBridge.ts`, `src/workers/navigation.worker.ts` | **`IMPROVE` / `REFACTOR`** | **`TRN-01`** | **P0** | **Stage 1** | Preserve 9-state FSM, `BallisticSolver` 5-point LOS, and `CombatEngagementCoordinator`. Fix full-map navigation bounds (`±160m`) with explicit out-of-bounds checks, persistent 1-indexed binary-heap (`25,601`) worker memory with `maxIter = 4,096` and partial-path recovery, incremental destruction cell updates, LOS-verified cover selection with squad ownership, 3-ray forward whisker steering, and zero-alloc LOS string-pulling (`TRN-01A`–`TRN-01F`). |
+| **3** | **Missions & Mid-Mission Checkpoints** | `src/gameplay/MissionDirector.ts`, `src/engine/GameEngine.ts`, `src/data/missions.ts` | **`IMPROVE`** | **`TRN-04`** | **P0** | **Stage 1** | Fix critical progression defect where `restartCheckpoint()` resets the entire mission to Objective 0. Implement deterministic objective-boundary checkpoint snapshots, monotonic attempt timers, mission-relevant ammo floors, validated spawn points, and idempotent world reconstruction (`TRN-04`). |
+| **4** | **Rendering & Post-Processing** | `src/engine/Renderer.ts`, `src/engine/PerformanceGovernor.ts`, `src/world/LightingRig.ts` | **`IMPROVE`** | **`TRN-03`** | **P1** | **Stage 1** | Fix `Renderer.ts:207–214` where `EffectComposer` is bypassed whenever `bloomEnabled === false`, disabling `VignetteEffect` across `low`, `medium`, and mobile `high` quality tiers (`TRN-03`). |
+| **5** | **Player Movement & Traversal** | `src/gameplay/PlayerController.ts`, `src/engine/physics/CollisionSystem.ts`, `src/physics/CollisionWorld.ts`, `src/gameplay/WeaponSystem.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/hud/MobileTouchControls.tsx` | **`COMPLETE & VERIFIED (Stage 2)`** | **`TRN-05`** | **P1** | **Stage 2** | Preserved 8-direction movement, diagonal sprint, slide steering, and `0.48m` step-up (`REP-11`). Added collision-authoritative `0.46m–1.15m` vault-over/mantle-on probe (`probeVaultObstacle`) and 3-phase capsule-resolved traversal (`stepVault`), crouched low-ceiling landings, weapon ADS/fire suppression while vaulting, contextual desktop `[SPACE] VAULT` and mobile `VAULT` jump cue, and sub-stepped second-order damped landing camera spring (`vaultTraversal.test.ts`: 7/7 tests). |
+| **6** | **Weapons, Combat & Enemy Animation** | `src/gameplay/WeaponSystem.ts`, `src/gameplay/WeaponViewModels.ts`, `src/world/rigs/EnemyRigBuilder.ts`, `src/gameplay/EnemyManager.ts`, `src/effects/VFXPool.ts`, `src/tests/weaponAndEnemyAnimation.test.ts` | **`COMPLETE & VERIFIED (Stage 2)`** | **`TRN-06`** | **P1** | **Stage 2** | Preserved ballistics, recoil return (`REP-01`), sprint-to-fire (`REP-02`), and RPG (`REP-16`). Implemented deterministic viewmodel state machine (`WEAPON_ANIM_PROFILES`, damped ADS/sprint/slide/vault/landing blends, 3-stage `MAG_OUT`/`MAG_IN`/`CHAMBER` reloads, MGL-6 drum indexing, sniper bolt cycle, RPG warhead insertion, shared `viewModelMuzzleLight`, realistic shell casing scale) and articulated enemy soldier hierarchy (pelvis/torso/knee/elbow joints, speed-synced walk/run, crouch/cover hitbox sync, directional stagger, grounded death collapse; `weaponAndEnemyAnimation.test.ts`: 7/7 tests). |
+| **7** | **Dependency Hygiene & Engine Decomposition** | `package.json`, `bun.lock`, `src/engine/GameEngine.ts` (`1,559` lines), `src/engine/HudSnapshotPublisher.ts`, `src/gameplay/CombatDamageResolver.ts` | **`COMPLETE & VERIFIED (Stage 2)`** | **`TRN-02` (`TRN-02A` / `TRN-02B`)** | **P2** | **Stage 2** | **`TRN-02A` (Complete):** Removed verified unused packages (`@google/genai`, `express`, `@types/express`, `dotenv`) from `package.json` (`38→35` prod, `10→9` dev) and pruned `238` lines (`-23.9 KB`) from `bun.lock`. **`TRN-02B` (Complete):** Extracted `HudSnapshotPublisher` (`225` lines) and `CombatDamageResolver` (`267` lines) from `GameEngine.ts`, reducing `GameEngine.ts` from `1,940` lines to `1,559` lines (`-19.6%`). |
+| **8** | **PBR Materials & Architectural Detail** | `src/core/AssetManager.ts`, `src/world/MapBuilder.ts`, `src/tests/stage2And3Batch.test.ts` | **`COMPLETE & VERIFIED (Stage 3)`** | **`TRN-07`** | **P2** | **Stage 3** | Upgraded procedural materials to 4-channel seeded PBR `DataTexture` sets (`albedoMap` in `SRGBColorSpace`, `normalMap`, `roughnessMap`, `metalnessMap` in `NoColorSpace`) across 8 surface profiles (`<= 42.67 MiB` VRAM at `512×512`) and added shared-geometry architectural trim (`door_frame_jamb`, `door_header_beam`, `window_mullion`, `window_header`, `roof_cornice`, `story_cornice_band`, `interior_baseboard`, `corner_pilaster`, `structural_column`) to enterable buildings (`TRN-07`). |
+| **9** | **Audio Engine** | `src/audio/AudioManager.ts`, `src/gameplay/WeaponSystem.ts`, `src/tests/stage2And3Batch.test.ts` | **`COMPLETE & VERIFIED (Stage 3)`** | **`TRN-08`** | **P2** | **Stage 3** | Upgraded weapon/ordnance synthesis to 4-layer stereo buffers + shared `ConvolverNode` impulse reverb bus + 32-voice deterministic priority pool (`combat_spatial <= 8`, `reload_foley <= 2`) + stage-synchronized reload Foley with immediate interrupt cancellation (`TRN-08`). |
+| **10** | **Vehicles & Suspension Dynamics** | `src/gameplay/VehicleManager.ts`, `src/gameplay/VehicleCameraRig.ts`, `src/world/rigs/VehicleRigBuilder.ts`, `src/tests/stage2And3Batch.test.ts` | **`COMPLETE & VERIFIED (Stage 3)`** | **`TRN-09`** | **P2** | **Stage 3** | Preserved PUBG-style driving HUD, progressive steering, `160ms` reverse hysteresis, and Chase Camera (`REP-12`). Added articulated `chassisGroup` + 4/6-wheel sub-stepped spring-damper suspension (`30/60/120 FPS` invariant), perspective-specific `driver_fpv` horizon stabilization vs. `chase`/`orbit` tracking, and un-tilted authoritative turret ballistics (`TRN-09`). |
+| **11** | **HUD Threat Arcs & Post-Mission Debriefing** | `src/ui/hud/GameHUD.tsx`, `src/ui/screens/Overlays.tsx`, `src/ui/screens/CampaignScreen.tsx`, `src/stores/missionSelectionStore.ts` | **`PRESERVE` + `IMPROVE`** | **`TRN-10`** | **P2** | **Stage 4** | Add radial directional incoming-damage threat arcs around the crosshair and expand post-mission debriefing with accuracy %, headshot %, time, and persisted `S/A/B/C` rank medals (`TRN-10`). |
+| **12** | **Mobile Aim Assistance & Physical Hardware QA** | `src/gameplay/PlayerController.ts`, `src/ui/hud/MobileTouchControls.tsx`, `src/stores/settingsStore.ts`, `CHECKPOINT.md` | **`PRESERVE` + `IMPROVE`** | **`TRN-11`** | **P3** *(Feature)* / **Release Gate** *(Hardware QA)* | **Stage 4** | Add optional rotational friction aim-assist toggle for mobile touch look and execute the physical iOS/Android hardware verification matrix (`TRN-11`). |
 
 ---
 
-## 16. Known Limitations & Unverified Areas
+## 7. Evidence-Backed Transformation Findings (`TRN-01`–`TRN-11`)
 
-1. **Physical Mobile Hardware Thermal & Touch Latency (`NOT VERIFIED` on physical iOS/Android hardware):** Headless Chromium Playwright E2E (`Browser Emulation` + `Automated Browser Verification`) verifies viewport geometry, pointer-event routing, 360° camera rotation, and non-overlapping touch hitboxes across mobile viewports (`844×390`, `844×315`, `915×412`), but physical-device GPU thermal throttling, notch/home-bar hardware cutouts, non-PWA iOS Safari URL-bar behavior, and iOS/Android glass-to-photon touch latency require physical-device QA (see `CHECKPOINT.md` Section H).
-2. **Procedural Geometric Assets (`VERIFIED` architectural scope):** V1 intentionally uses procedural geometry and canvas-synthesized textures/audio rather than external multi-megabyte `.glb` character animations or `.ktx2` photogrammetry packs.
+Each finding below records its exact source location, verified root cause, reproduction method, existing behavior, proposed change, regression risk, and measurable acceptance criteria:
+
+### `TRN-01` (`P0`, Stage 1) — Tactical AI Navigation and Cover Intelligence
+- **Exact Source Locations:**
+  - `src/workers/WorkerBridge.ts:62–95` (`uploadCollisionGrid`)
+  - `src/workers/navigation.worker.ts:16–20, 37–128` (`worldToCell`, `computeNextWaypoint`)
+  - `src/gameplay/EnemyManager.ts:491–522` (0.45s worker batching), `1030–1040` (flanker movement vector), `1084–1097` (capsule resolution without obstacle steering), `1309–1327` (`findTacticalCover`)
+- **Verified Root Causes:**
+  1. **Silent Out-of-Bounds Clamping & Grid Bounds (`TRN-01A`):** `WorkerBridge.ts:62–66` configures `gridWidth = 120, gridHeight = 120, cellSize = 2, originX = -120, originZ = -120` (`[-120m, +120m]`), while `MapBuilder.ts:58` builds a `320m × 320m` (`[-160m, +160m]`) terrain mesh. Furthermore, `navigation.worker.ts:16–20` (`worldToCell`) silently clamps any out-of-bounds world coordinate to `[0, width - 1]`, mapping invalid or off-grid coordinates onto border cells instead of returning an explicit out-of-bounds sentinel (`-1`).
+  2. **Per-Query Worker Allocations, Linear Open-Set Scan & Low Iteration Cap (`TRN-01B`):** `navigation.worker.ts:38–66` allocates `4 × 14,400` typed arrays (`gScore`, `parent`, `closed`, `fScore`), allocates a nested `dirs` array on every call, scans `open: number[]` linearly with `open.splice()` / `open.includes()`, and halts at `maxIter = 420`—which is too small to route around wide compound obstacles or the `jungle_zone` river channel (`z ∈ [10..22]`) when crossing between bridges at `x ∈ {-28, 0, 28}`.
+  3. **No Dynamic Grid Update on Cover Destruction (`TRN-01C`):** `uploadCollisionGrid()` is called once in `GameEngine.populateMissionWorld()` (`line 580`). When `DestructionSystem.applyDamage()` (`src/world/DestructionSystem.ts:104–114`) removes a destroyed `destructible_barrier`, `sandbag`, `fuel_tank`, or `weapons_cache` collider from `SpatialHash`, the worker's `blocked` buffer remains `1` (`blocked`).
+  4. **Unverified Cover LOS & Crowding (`TRN-01D`):** `EnemyManager.findTacticalCover()` (`lines 1309–1327`) scores `coverNodes` purely by Euclidean distance without raycasting against `CollisionWorld` to verify that a solid collider blocks LOS from `threatPos`, without offsetting to the leeward side of cover, and without preventing multiple squadmates from claiming the same node.
+  5. **Blind Flanker Vector & Missing Local Steering (`TRN-01E`):** In `REPOSITIONING` (`lines 1031–1036`), `u.role === 'flanker'` applies `moveX = dx * 0.35 - dz * side * 0.85; moveZ = dz * 0.35 + dx * side * 0.85` without checking `u.waypoint` or probing for walls ahead.
+  6. **Single-Cell Staircase Waypoints (`TRN-01F`):** `computeNextWaypoint()` (`lines 117–127`) walks `parent[]` back to the very first `2m` grid step after `startIdx`, returning an unsmoothed `2m` cell center that causes diagonal staircase zig-zagging.
+
+### `TRN-02` (`P2`, Stage 2) — Dependency Hygiene (`TRN-02A`) and `GameEngine` Decomposition (`TRN-02B`) (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `package.json`, `bun.lock` (`TRN-02A`); `src/engine/GameEngine.ts`, `src/engine/HudSnapshotPublisher.ts`, `src/gameplay/CombatDamageResolver.ts` (`TRN-02B`).
+- **Verified Resolution:** Removed `@google/genai`, `express`, `@types/express`, and `dotenv` from `package.json` and `bun.lock` (`-238` lines in `bun.lock`), extracted `HudSnapshotPublisher` (`225` lines) and `CombatDamageResolver` (`267` lines) to reduce `GameEngine.ts` from `1,940` lines to `1,559` lines (`-381` lines / `-19.6%`), and verified all 19 Vitest suites (`126` tests), `tsc --noEmit`, `vite build`, and 7 Playwright E2E tests.
+
+### `TRN-03` (`P1`, Stage 1) — Rendering and Vignette (`EffectComposer` Bypass) (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/engine/Renderer.ts:104–138, 207–215`; `src/engine/PerformanceGovernor.ts:45–88`.
+- **Verified Root Cause & Resolution:** `Renderer.renderFrame()` bypassed `this.composer` whenever `bloomEnabled === false`. Reconfigured `Renderer.ts` to maintain separate `bloomPass` and `vignetteonlyPass` instances so `VignetteEffect` remains active across all quality tiers.
+
+### `TRN-04` (`P0`, Stage 1) — Mid-Mission Checkpoints (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/MissionCheckpoint.ts`, `src/engine/GameEngine.ts`, `src/gameplay/MissionDirector.ts`, `src/stores/progressionStore.ts`.
+- **Verified Root Cause & Resolution:** Implemented `MissionCheckpointSnapshot` and `MissionAttemptContext` to preserve completed objectives, monotonic cumulative elapsed time, validated safe spawns, bounded health/armor (`[75..100] HP`, `[50..100] Armor`), and mission-relevant ammo floors across checkpoint restarts.
+
+### `TRN-05` (`P1`, Stage 2) — Player Vaulting and Traversal (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/PlayerController.ts`, `src/engine/physics/CollisionSystem.ts`, `src/physics/CollisionWorld.ts`.
+- **Verified Root Cause & Resolution:** Added collision-authoritative `0.46m–1.15m` vault-over/mantle-on probe (`probeVaultObstacle`), 3-phase capsule-resolved traversal (`stepVault`), and sub-stepped second-order damped landing camera spring.
+
+### `TRN-06` (`P1`, Stage 2) — Weapon and Enemy Animation (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/WeaponSystem.ts`, `src/gameplay/WeaponViewModels.ts`, `src/world/rigs/EnemyRigBuilder.ts`, `src/gameplay/EnemyManager.ts`.
+- **Verified Root Cause & Resolution:** Implemented 3-stage `MAG_OUT`/`MAG_IN`/`CHAMBER` weapon reloads, MGL-6 drum indexing, sniper bolt cycling, RPG warhead insertion, shared `viewModelMuzzleLight`, and articulated enemy soldier rigs with knee/elbow joints, crouch hitbox sync, directional stagger, and grounded death collapse.
+
+### `TRN-07` (`P2`, Stage 3) — PBR Materials and Architectural Detail (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/core/AssetManager.ts`, `src/world/MapBuilder.ts`, `src/tests/stage2And3Batch.test.ts`.
+- **Verified Root Cause & Resolution:** Upgraded `AssetManager` to synthesize 4-channel seeded PBR `DataTexture` maps (`albedoMap` in `SRGBColorSpace`, Sobel `normalMap`, `roughnessMap`, `metalnessMap` in `NoColorSpace`) across 8 surface profiles with quality-tier resolution scaling (`512×512` on `high`/`ultra` = `42.67 MiB`, `< 45 MiB` budget) and added shared-geometry architectural trim (`door_frame_jamb`, `door_header_beam`, `window_mullion`, `window_header`, `roof_cornice`, `story_cornice_band`, `interior_baseboard`, `corner_pilaster`, `structural_column`) to `MapBuilder.buildEnterableBuildingMesh()`.
+
+### `TRN-08` (`P2`, Stage 3) — Layered Audio (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/audio/AudioManager.ts`, `src/gameplay/WeaponSystem.ts`, `src/tests/stage2And3Batch.test.ts`.
+- **Verified Root Cause & Resolution:** Upgraded `AudioManager` to 4-layer stereo weapon/ordnance synthesis + shared `ConvolverNode` impulse reverb bus + 32-voice deterministic priority pool (`combat_spatial <= 8`, `reload_foley <= 2`) and connected stage-synchronized reload Foley (`MAG_OUT`, `MAG_IN`, `CHAMBER`, post-shot bolt/pump/drum cycle) in `WeaponSystem` with immediate cancellation on interrupt.
+
+### `TRN-09` (`P2`, Stage 3) — Vehicle Suspension (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/VehicleManager.ts`, `src/world/rigs/VehicleRigBuilder.ts`, `src/gameplay/VehicleCameraRig.ts`, `src/tests/stage2And3Batch.test.ts`.
+- **Verified Root Cause & Resolution:** Separated `VehicleRigBuilder` into unsprung `wheels` + `suspensionStruts` and sprung `chassisGroup`, added a sub-stepped (`120 Hz`) spring-damper suspension solver (`updateVehicleSuspension`) in `VehicleManager` with un-tilted authoritative turret ballistics, and implemented perspective-specific suspension filtering in `VehicleCameraRig` (`driver_fpv` horizon stabilization within `pitch <= ±0.045 rad`, `roll <= ±0.038 rad`, `heave <= ±0.055m`; `chase`/`orbit` damped tracking).
+
+### `TRN-10` (`P1`, Stage 4A) — Directional Threat Arcs and Post-Mission Debriefing (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/PlayerController.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/screens/Overlays.tsx`, `src/ui/screens/CampaignScreen.tsx`, `src/gameplay/MissionDirector.ts`.
+- **Verified Root Cause & Resolution:** Implemented player-local forward/right directional incoming-damage threat arcs (`computeRelativeThreatAngle`) and expanded post-mission debriefing with accuracy %, headshot %, death count, damage received, survival time, deterministic `S / A / B / C` ranking, and persisted best grade + fastest completion time on `CampaignScreen.tsx`.
+
+### `TRN-11` (`P1` Feature / Release Gate QA, Stage 4A) — Mobile Aim Assistance and Physical Hardware QA (`FEATURE COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/gameplay/PlayerController.ts`, `src/engine/InputManager.ts`, `src/ui/components/SettingsPanel.tsx`, `src/stores/settingsStore.ts`, `CHECKPOINT.md` Section F.
+- **Verified Root Cause & Resolution:** Implemented optional user-configurable mobile touch aim assistance (`mobileAimAssist` toggle + `mobileAimAssistStrength` `10%–75%` slider) applying LOS-verified rotational friction (`0.55×–1.0×`) exclusively to touch look deltas, never desktop mouse input; documented the Physical-Device Verification Matrix in `CHECKPOINT.md` Section F.
+
+### `TRN-12` (`P0 / P1`, Stage 4A) — Player Survivability, Combat Fairness, Hit Registration & Tactical Downed Recovery (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/schemas/combat.schema.ts`, `src/gameplay/PlayerController.ts`, `src/gameplay/CombatEngagementCoordinator.ts`, `src/gameplay/EnemyManager.ts`, `src/gameplay/BallisticSolver.ts`, `src/gameplay/CombatTelemetryRecorder.ts`, `src/ui/screens/Overlays.tsx`.
+- **Verified Root Cause & Resolution:** Balanced 4-tier difficulty survivability profiles, spawn protection (`6.0s–1.5s`), starter cover barriers ahead of player spawn across all 5 missions, difficulty-scaled HP regeneration, sniper/rocket telegraph windup (`1.4s–0.4s`) with 3D laser sight + HUD warning banner, contiguous 3-zone enemy hitboxes, and a ~`2.4s` tactical downed/kill-cam recovery transition.
+
+### `TRN-13` (`P0`, Stage 4B) — Mission Lifecycle & Campaign Reliability (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/engine/EngineLifecycle.ts`, `src/engine/GameEngine.ts`, `src/stores/missionSelectionStore.ts`, `src/ui/screens/CampaignScreen.tsx`, `src/ui/screens/Overlays.tsx`, `src/tests/stage4bCampaignAndProgression.test.ts`.
+- **Verified Root Cause & Resolution:** Extended `EngineLifecycle.ts` to accept `SELECT_MISSION` across `boot`, `menu`, `preloading`, `initializingWorld`, `gameover`, `victory`, and `error` states, eliminating dropped transitions across consecutive mission restarts, checkpoint retries, difficulty changes, and debrief continuations while preserving scoped `ResourceManager` disposal.
+
+### `TRN-14` (`P0 / P1`, Stage 4B) — Stage-Gated Objective Progression, Target-Bound Demolition & Three-Tier Tactical Guidance (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/schemas/mission.schema.ts`, `src/schemas/events.schema.ts`, `src/schemas/settings.schema.ts`, `src/data/missions.ts`, `src/gameplay/MissionDirector.ts`, `src/gameplay/TacticalGuidanceSystem.ts`, `src/gameplay/CombatDamageResolver.ts`, `src/gameplay/ExplosiveManager.ts`, `src/gameplay/MissionCheckpoint.ts`, `src/engine/HudSnapshotPublisher.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/screens/HowToPlayModal.tsx`, `src/ui/components/SettingsPanel.tsx`, `src/tests/stage4bCampaignAndProgression.test.ts`.
+- **Verified Root Cause & Resolution:** Upgraded all 5 missions to sequential stage-gated objectives (`stageIndex`, `stageTitle`, `prerequisiteIds`, `status`: `'locked' | 'available' | 'active' | 'completed' | 'bypassed' | 'failed' | 'blocked'`) with retroactive credit (`getRetroactiveCreditedObjectiveIds()`) when later-stage targets are neutralized early; separated physical target destruction from mission-action validation for `plant_charge` objectives (`demolitionPolicy: 'charge_or_c4_only'`, accepting `[E]` interaction or C4 within `6.5m` as `'completed'` `+400` pts while marking RPG/grenade/gunfire destruction as `'bypassed'` `+125` pts with an `'uncalibrated blast'` radio warning); added extraction prerequisite lock feedback (`extractionBlockReason`); added anti-stall wave reinforcement progression (`evaluateWaveProgression`, `waveStatusText`); and integrated the Three-Tier Military Tactical Guidance System (`TacticalGuidanceSystem.ts`).
+
+---
+
+## 8. Corrected Candidate Asset & Open-Source Resource Evaluation
+
+### 8.1 Format Distinction & GPU/RAM Memory Calculation Rules
+1. **glTF (`.gltf`) vs. Binary glTF (`.glb`):**
+   - **`.gltf`:** JSON text descriptor referencing external binary buffer files (`.bin`) and external image files (`.png`/`.jpg`), requiring multiple HTTP fetches or an offline packing step.
+   - **`.glb`:** Single self-contained binary file packing the JSON scene graph, vertex/index/animation buffers, and embedded textures in one payload. Upstream multi-format zip packs (`.fbx`/`.obj`/`.gltf`/`.blend`) must be converted and packed into `.glb` offline (e.g., via Blender or `gltf-transform`) before runtime consumption by `THREE.GLTFLoader`.
+2. **Compressed Download Size vs. Decoded CPU RAM vs. Uncompressed GPU VRAM:**
+   - Standard browser image formats (`.jpg`, `.png`, `.webp`) reduce **network transfer size** (`~100 kB–400 kB` on disk), but WebGL2 `texImage2D` decodes them into uncompressed **`RGBA8` (`4 bytes/pixel`)** in CPU RAM during upload and stores them as uncompressed `RGBA8` + mipmaps in **GPU VRAM** (unless transcoded into hardware block-compressed `.ktx2` BasisU `UASTC`/`ETC1S`):
+   - **Exact GPU VRAM Formula per `RGBA8` Texture with Mipmaps ($\times \frac{4}{3}$):**
+     - **`512 × 512` `RGBA8`:** Base level = $512 \times 512 \times 4 = 1,048,576\text{ B}$ ($1.00\text{ MiB}$); with full mipmap chain = $1,048,576 \times \frac{4}{3} \approx \mathbf{1.33\text{ MiB}}$ VRAM per texture.
+       - A 3-map PBR set (`map` + `normalMap` + packed `roughnessMetalnessMap`) at `512 × 512` consumes **$3 \times 1.33\text{ MiB} = \mathbf{4.00\text{ MiB}}$ GPU VRAM** (`24.0 MiB` across 6 shared biome material sets).
+     - **`1024 × 1024` (`1K`) `RGBA8`:** Base level = $1024 \times 1024 \times 4 = 4,194,304\text{ B}$ ($4.00\text{ MiB}$); with full mipmap chain = $\mathbf{5.33\text{ MiB}}$ VRAM per texture.
+       - A 3-map PBR set at `1024 × 1024` consumes **$3 \times 5.33\text{ MiB} = \mathbf{16.00\text{ MiB}}$ GPU VRAM** (`96.0 MiB` across 6 shared biome material sets).
+   - Therefore, VANGUARD caps procedural/external PBR textures at **`512 × 512`** (`4.00 MiB` VRAM per 3-map set; `256 × 256` = `1.00 MiB` VRAM per 3-map set on `low` tier) to guarantee safe mobile WebGL2 memory budgets.
+
+### 8.2 Verified Candidate 3D Model, PBR & Audio Resources
+| Candidate Resource | Source URL & Maintainer | License & Restrictions | Actual Distributed Formats | Memory & Mobile GPU Implications | Integration Complexity | Decision |
+|---|---|---|---|---|---|---|
+| **Quaternius — Ultimate Animated Character Pack & Ultimate Gun Pack** | `https://quaternius.com` (Tomás Laulhé) | **CC0 1.0 Universal** (Public Domain — commercial use allowed, zero attribution required) | Upstream zip archives ship **`.fbx`, `.obj`, `.gltf` (in newer modular packs), and `.blend`** (not pre-packed single `.glb` files per weapon/character; requires offline conversion to `.glb` before runtime use). | Low geometry cost (`~1.2k–3.5k` tris/character, `< 0.5 MiB` vertex/animation VBO in GPU memory); requires `SkeletonUtils.clone()` and bone-bound hitbox syncing (`torsoBox`, `headPosition`). | **Medium–High** (Requires offline `.blend`/`.fbx` → `.glb` conversion and skeletal hitbox binding; keep procedural keyframed rigs for Stage 2 `TRN-06` and evaluate `.glb` conversion selectively). | **`ADAPT` / `INSPIRE` (Stage 2 Procedural Keyframes; Selective `.glb` Conversion Later)** |
+| **Kenney — Blaster Kit & Car Kit** | `https://kenney.nl/assets/blaster-kit` & `https://kenney.nl/assets/car-kit` (Kenney Vleugels) | **CC0 1.0 Universal** (Public Domain — zero attribution required) | **Blaster Kit:** `.obj`, `.fbx`, `.dae`, `.stl`, and `.gltf` (`~4.5 MB` full pack zip). **Car Kit:** `.obj`, `.fbx`, and `.gltf` (`~7.8 MB` full pack zip). | `< 1,500` tris per model (`< 150 kB` GPU VBO per model) and shared small color-atlas textures (`< 0.5 MiB` VRAM). | **Low:** `.gltf` models can be packed to `.glb` or loaded directly via `THREE.GLTFLoader`. | **`ADAPT` / `INTEGRATE`** |
+| **Poly Haven — 1K / 512px PBR Surface Textures** | `https://polyhaven.com/textures` (Poly Haven) | **CC0 1.0 Universal** (Public Domain — zero attribution required) | Multi-file `.jpg` / `.png` / `.exr` maps (`Diffuse`, `nor_gl`, `Rough`, `AO`) or `.gltf` bundle. | Compressed `.webp`/`.jpg` download is `~150–350 kB` per 3-map `512×512` set, but decoded GPU VRAM with mipmaps is **`4.00 MiB` per `512×512` 3-map set** (`16.00 MiB` at `1024×1024`). | **Low:** Use `512×512` max resolution in `AssetManager.ts` alongside procedural Sobel-normal/roughness generation (`TRN-07`). | **`INTEGRATE` (`512×512` Cap + Procedural Fallback)** |
+| **Kenney — Impact Sounds & Interface Sounds** | `https://kenney.nl/assets/impact-sounds` & `https://kenney.nl/assets/interface-sounds` (Kenney Vleugels) | **CC0 1.0 Universal** (Public Domain — zero attribution required, unrestricted redistribution) | `.ogg` (`~1.5 MB–3 MB` full pack zip; `8 kB–35 kB` per individual compressed `.ogg` file). | Decoded PCM `AudioBuffer` in CPU RAM (`Float32` 44.1 kHz mono = `176.4 kB/sec`): 15 short (`0.4s` avg) one-shots consume **`~1.05 MiB` decoded RAM**. | **Low:** Zero license restrictions; ideal for mechanical reload clicks, impacts, and UI Foley in `TRN-08`. | **`INTEGRATE` (Primary CC0 Sample Source for `TRN-08`)** |
+| **Sonniss — #GameAudioGDC Royalty-Free Bundles** | `https://sonniss.com/gameaudiogdc` (Sonniss / Timothy McHugh) | **Custom Royalty-Free EULA with Strict Restrictions:** (1) **No Standalone Redistribution** (raw or modified audio files cannot be distributed as standalone files or in an open-source asset repo outside a compiled game); (2) **Strict No AI / ML Training Clause** (prohibits using any files to train, fine-tune, or evaluate AI/ML models). | Uncompressed `.wav` (`16-bit/24-bit`, `44.1–96 kHz`; multi-GB archive; requires offline trimming and transcoding to `.ogg`/`.mp3`). | Because raw audio files in `public/audio/` of a web repository are publicly downloadable as standalone files, bundling Sonniss samples directly into an unbundled web repo risks violating the **No Standalone Redistribution** clause. | **High Legal/Distribution Friction for Web Source Repos** | **`REJECT` for Unbundled Web Repo (Use CC0 Kenney + Procedural Synthesis Instead)** |
+| **`three-mesh-bvh` (`^0.9.9`) & `pmndrs/postprocessing` (`^6.38.3`)** | Installed in `package.json` | **MIT** | ES Modules (`~45 kB` and `~95 kB` min) | Already in bundle; zero additional download or VRAM overhead when `EffectPass(camera, vignetteEffect)` runs without bloom (`TRN-03`). | **Low** (Already integrated). | **`ADOPT` (Installed)** |
