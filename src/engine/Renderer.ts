@@ -18,6 +18,7 @@ export class EngineRenderer {
   public readonly viewModelScene: THREE.Scene;
   public readonly viewModelCamera: THREE.PerspectiveCamera;
   public readonly lightBudgetManager: TacticalLightBudgetManager;
+  public readonly isSoftwareGl: boolean;
 
   private composer: EffectComposer | null = null;
   private bloomEffect: BloomEffect | null = null;
@@ -48,14 +49,32 @@ export class EngineRenderer {
       powerPreference: 'high-performance',
       stencil: false,
     });
+    const gl = this.renderer.getContext();
+    let rendererString = '';
+    try {
+      const dbgExt = gl.getExtension('WEBGL_debug_renderer_info');
+      rendererString = dbgExt
+        ? String(gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) ?? '')
+        : String(gl.getParameter(gl.RENDERER) ?? '');
+    } catch {
+      rendererString = '';
+    }
+    this.isSoftwareGl = /swiftshader|llvmpipe|software|mesa offscreen|basic render driver/i.test(
+      rendererString
+    );
+
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = this.isSoftwareGl
+      ? THREE.BasicShadowMap
+      : THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
+    );
     this.renderer.setSize(this.width, this.height);
 
     this.renderer.domElement.style.display = 'block';
@@ -83,7 +102,9 @@ export class EngineRenderer {
     this.viewModelScene.add(vmRim);
 
     this.buildEnvironment();
-    this.buildPostProcessing();
+    if (!this.isSoftwareGl) {
+      this.buildPostProcessing();
+    }
     this.bindContextEvents();
   }
 
@@ -152,7 +173,9 @@ export class EngineRenderer {
       'webglcontextrestored',
       () => {
         this.buildEnvironment();
-        this.buildPostProcessing();
+        if (!this.isSoftwareGl) {
+          this.buildPostProcessing();
+        }
         this.resize();
         this.onContextRestoredCallback?.();
       },
@@ -166,15 +189,18 @@ export class EngineRenderer {
     bloomSetting: boolean,
     lights?: SceneLights | null
   ): void {
-    this.renderScale = profile.renderScale;
-    this.bloomEnabled = profile.bloomEnabled && bloomSetting;
+    this.renderScale = this.isSoftwareGl ? Math.min(profile.renderScale, 0.85) : profile.renderScale;
+    this.bloomEnabled = !this.isSoftwareGl && profile.bloomEnabled && bloomSetting;
     this.lightBudgetManager?.setQualityTier(profile.tier);
     const shadowsActive = shadowsSetting && profile.shadowMapSize >= 512;
     this.renderer.shadowMap.enabled = shadowsActive;
+    const effectiveShadowSize = this.isSoftwareGl
+      ? Math.min(512, profile.shadowMapSize)
+      : profile.shadowMapSize;
     if (lights?.sun) {
       lights.sun.castShadow = shadowsActive;
-      if (shadowsActive && profile.shadowMapSize >= 512 && lights.sun.shadow.mapSize.x !== profile.shadowMapSize) {
-        lights.sun.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+      if (shadowsActive && effectiveShadowSize >= 512 && lights.sun.shadow.mapSize.x !== effectiveShadowSize) {
+        lights.sun.shadow.mapSize.set(effectiveShadowSize, effectiveShadowSize);
         lights.sun.shadow.map?.dispose();
         lights.sun.shadow.map = null;
       }
@@ -230,7 +256,7 @@ export class EngineRenderer {
 
     const isCoarse =
       typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
-    const maxDpr = isCoarse ? 1.5 : 2.0;
+    const maxDpr = this.isSoftwareGl ? 1.0 : isCoarse ? 1.5 : 2.0;
     const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const effectiveDpr = Math.max(0.5, Number((baseDpr * this.renderScale).toFixed(2)));
     this.renderer.setPixelRatio(effectiveDpr);

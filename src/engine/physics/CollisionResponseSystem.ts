@@ -173,8 +173,12 @@ export class CollisionResponseSystem {
         }
 
         // Landing on top of a platform / roof / crate when descending onto its top surface
+        // Require the character's foot-base circle (not outer shoulder radius) to overlap the slab
+        // so characters whose center is over empty air cannot cantilever-hover on roof edges.
         const topPenetration = box.maxY - feetY;
-        if (vel.y <= 0.05 && topPenetration >= 0 && topPenetration <= 0.18 && this.contact2D.penetration > 0.04) {
+        const footSupportRadius = Math.max(0.14, radius * 0.48);
+        const minFootPen = Math.max(0.04, radius - footSupportRadius);
+        if (vel.y <= 0.05 && topPenetration >= 0 && topPenetration <= 0.18 && this.contact2D.penetration > minFootPen) {
           const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
             spatialHash,
             pos.x,
@@ -310,6 +314,7 @@ export class CollisionResponseSystem {
     // 3. Support standing on terrain, generalized oriented slopes, and headroom-verified elevated surfaces
     let supportSurfaceY = getTerrainHeightAt(pos.x, pos.z);
     let slopeSupported = false;
+    let activeSlope: OrientedSlopeRegion | null = null;
 
     for (let i = 0; i < slopes.length; i++) {
       const s = slopes[i];
@@ -330,23 +335,78 @@ export class CollisionResponseSystem {
         if (clearance.clear) {
           supportSurfaceY = this.slopeEvalScratch.topY;
           slopeSupported = true;
+          activeSlope = s;
         }
       }
     }
 
+    // 3.25 Slanted lateral side-rail containment on railed stairs/ramps so walking characters
+    // cannot clip or tunnel horizontally through side rails and hover off the side of a staircase
+    if (!activeSlope) {
+      for (let i = 0; i < slopes.length; i++) {
+        const s = slopes[i];
+        if (!s.hasSideRails || s.maxSlopeDeg > maxSlopeDeg) continue;
+        if (evaluateOrientedSlopeAt(s, startX, pos.y, startZ, radius, height, stepHeight, this.slopeEvalScratch)) {
+          if (this.slopeEvalScratch.supportsFeet && Math.abs(this.slopeEvalScratch.u) < s.halfLength - 0.16) {
+            activeSlope = s;
+            if (this.slopeEvalScratch.topY > supportSurfaceY) {
+              supportSurfaceY = this.slopeEvalScratch.topY;
+              slopeSupported = true;
+            }
+            break;
+          }
+        }
+      }
+    }
+    if (activeSlope && activeSlope.hasSideRails && pos.y < supportSurfaceY + 0.85) {
+      const relX = pos.x - activeSlope.centerX;
+      const relZ = pos.z - activeSlope.centerZ;
+      const u = relX * activeSlope.dirX + relZ * activeSlope.dirZ;
+      const v = -relX * activeSlope.dirZ + relZ * activeSlope.dirX;
+      // Leave entry and exit ends open for seamless landing transitions
+      if (Math.abs(u) < activeSlope.halfLength - 0.16) {
+        const maxSafeV = Math.max(0.12, activeSlope.halfWidth - radius * 0.78 - 0.06);
+        if (Math.abs(v) > maxSafeV) {
+          const latNx = -activeSlope.dirZ;
+          const latNz = activeSlope.dirX;
+          const clampedV = Math.sign(v) * maxSafeV;
+          const corr = clampedV - v;
+          pos.x += latNx * corr;
+          pos.z += latNz * corr;
+          // Cancel outward velocity normal to rail
+          const pushSign = Math.sign(corr);
+          const rnx = latNx * pushSign;
+          const rnz = latNz * pushSign;
+          const vn = vel.x * rnx + vel.z * rnz;
+          if (vn < 0) {
+            vel.x -= vn * rnx;
+            vel.z -= vn * rnz;
+          }
+          res.hitWall = true;
+          res.lastBlockerId = `${activeSlope.id}_rail`;
+          res.wallNormalX = rnx;
+          res.wallNormalY = 0;
+          res.wallNormalZ = rnz;
+        }
+      }
+    }
+
+    // 3.5 Elevated horizontal slab support: require foot-base overlap (radius * 0.48) rather than
+    // outer shoulder scrape so capsules cantilevered off platform edges fall cleanly under gravity
+    const footSupportRadius = Math.max(0.14, radius * 0.48);
     const boxStepTol = Math.max(0.28, Math.min(0.48, stepHeight));
     const supportCandidates = spatialHash.queryAABB(
-      pos.x - radius * 0.85,
-      pos.z - radius * 0.85,
-      pos.x + radius * 0.85,
-      pos.z + radius * 0.85,
+      pos.x - footSupportRadius,
+      pos.z - footSupportRadius,
+      pos.x + footSupportRadius,
+      pos.z + footSupportRadius,
       layerMask,
       this.queryScratch
     );
     for (let i = 0; i < supportCandidates.length; i++) {
       const box = supportCandidates[i];
       if (pos.y + boxStepTol >= box.maxY && box.maxY > supportSurfaceY) {
-        if (this.collisionSystem.testCircleBox2D(pos.x, pos.z, radius * 0.85, box, this.contact2D)) {
+        if (this.collisionSystem.testCircleBox2D(pos.x, pos.z, footSupportRadius, box, this.contact2D)) {
           const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
             spatialHash,
             pos.x,
@@ -364,7 +424,7 @@ export class CollisionResponseSystem {
       }
     }
 
-    const snapStickTolerance = slopeSupported && vel.y <= 0 && vel.y > -4.5 ? 0.24 : 0.04;
+    const snapStickTolerance = slopeSupported && vel.y <= 0 && vel.y > -5.5 ? 0.28 : 0.08;
     if (pos.y <= supportSurfaceY + snapStickTolerance && vel.y <= 0) {
       pos.y = supportSurfaceY;
       vel.y = 0;

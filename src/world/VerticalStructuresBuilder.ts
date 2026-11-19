@@ -208,6 +208,7 @@ export function buildSwitchbackStaircase(
       startY: baseY,
       endY: midY,
       thickness,
+      hasSideRails: true,
     })
   );
 
@@ -293,6 +294,7 @@ export function buildSwitchbackStaircase(
       startY: midY,
       endY: topY,
       thickness,
+      hasSideRails: true,
     })
   );
 
@@ -423,6 +425,7 @@ export function buildSingleFlightRamp(
     startY,
     endY,
     thickness,
+    hasSideRails: true,
   });
   collisionWorld.addSlope(slope);
 

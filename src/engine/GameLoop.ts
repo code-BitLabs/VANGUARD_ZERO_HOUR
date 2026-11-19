@@ -17,6 +17,8 @@ export class GameLoop {
   private running = false;
   private paused = false;
   private rafId = 0;
+  private paceTimeoutId = 0;
+  private softwareGlPacing = false;
   private lastTimeMs = 0;
   private lastRenderTickMs = 0;
   private fpsCap: 0 | 30 | 60 | 120 = 0;
@@ -28,6 +30,10 @@ export class GameLoop {
 
   setFpsCap(fpsCap: 0 | 30 | 60 | 120): void {
     this.fpsCap = fpsCap;
+  }
+
+  setSoftwareGlPacing(enabled: boolean): void {
+    this.softwareGlPacing = enabled;
   }
 
   start(): void {
@@ -45,6 +51,10 @@ export class GameLoop {
       cancelAnimationFrame(this.rafId);
       this.rafId = 0;
     }
+    if (this.paceTimeoutId) {
+      window.clearTimeout(this.paceTimeoutId);
+      this.paceTimeoutId = 0;
+    }
   }
 
   setPaused(paused: boolean): void {
@@ -55,13 +65,30 @@ export class GameLoop {
     }
   }
 
+  private scheduleNext(): void {
+    if (!this.running) return;
+    if (this.softwareGlPacing) {
+      this.paceTimeoutId = window.setTimeout(() => {
+        this.paceTimeoutId = 0;
+        if (this.running) {
+          this.rafId = requestAnimationFrame(this.tick);
+        }
+      }, 4);
+    } else {
+      this.rafId = requestAnimationFrame(this.tick);
+    }
+  }
+
   private tick = (nowMs: number): void => {
     if (!this.running) return;
-    this.rafId = requestAnimationFrame(this.tick);
+    if (!this.softwareGlPacing) {
+      this.rafId = requestAnimationFrame(this.tick);
+    }
 
     if (this.fpsCap > 0 && this.lastRenderTickMs > 0) {
       const minIntervalMs = 1000 / this.fpsCap - 1.2;
       if (nowMs - this.lastRenderTickMs < minIntervalMs) {
+        if (this.softwareGlPacing) this.scheduleNext();
         return;
       }
     }
@@ -102,5 +129,9 @@ export class GameLoop {
 
     const elapsedMs = performance.now() - frameStart;
     this.callbacks.onFrameMeasured(elapsedMs);
+
+    if (this.softwareGlPacing) {
+      this.scheduleNext();
+    }
   };
 }

@@ -184,7 +184,7 @@ export class HealthPickupManager {
     sourceEnemyId: string | null = null,
     healAmount = HEALTH_PICKUP_HEAL_AMOUNT
   ): HealthPickupItem {
-    const res = this.ensureSharedResources('mission:world');
+    const res = this.ensureSharedResources(scope);
     const group = this.buildHeartMeshGroup(res, scope);
     group.position.set(pos.x, pos.y, pos.z);
 

@@ -160,7 +160,9 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
     reader.readAsText(file);
   };
 
-  const warnCount = snapshot?.warnings.length ?? 0;
+  const warnCount =
+    snapshot?.warnings.filter((w) => w.severity === 'WARNING' || w.severity === 'CRITICAL')
+      .length ?? 0;
   const liveFps = snapshot?.performance.fps ?? diagnostics.fps;
   const liveFrameMs = snapshot?.performance.frameMs ?? diagnostics.frameMs;
   const activeAttackers = snapshot?.coordinator.currentGlobalAttackers ?? 0;

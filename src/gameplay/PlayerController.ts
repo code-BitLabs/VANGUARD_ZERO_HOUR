@@ -88,6 +88,7 @@ export class PlayerController {
   private lastLandImpulse = 0;
   private landCompressionOffset = 0;
   private landSpringVel = 0;
+  private eyeStepOffset = 0;
   private vaultPitchOffset = 0;
   private vaultRollOffset = 0;
 
@@ -226,6 +227,7 @@ export class PlayerController {
     this.yaw = yaw;
     this.pitch = 0;
     this.grounded = true;
+    this.eyeStepOffset = 0;
     this.health = this.maxHealth;
     this.armor = this.maxArmor;
     this.spawnProtectionRemainingSec = this.spawnGraceDurationSec;
@@ -950,6 +952,7 @@ export class PlayerController {
     // Gravity
     this.velocity.y -= 21.5 * dt;
 
+    const preStepY = this.position.y;
     const capsuleHeight = this.isSliding ? 0.95 : this.isCrouching ? 1.15 : 1.8;
     const res = collision.resolvePlayerCapsule(
       this.position,
@@ -965,6 +968,14 @@ export class PlayerController {
     );
     this.grounded = res.grounded;
     this.lastMoveResult = res;
+
+    // Smooth single-frame vertical stair/curb step-up snaps visually without altering physics height
+    if (res.steppedUp) {
+      const stepDy = this.position.y - preStepY;
+      if (stepDy > 0.015 && stepDy <= this.stepHeight + 0.08) {
+        this.eyeStepOffset = THREE.MathUtils.clamp(this.eyeStepOffset - stepDy, -0.52, 0.15);
+      }
+    }
 
     if (!wasGrounded && this.grounded) {
       const impactVy = Math.abs(preStepVy);
@@ -1020,9 +1031,14 @@ export class PlayerController {
       sx = 0;
     }
 
+    this.eyeStepOffset *= Math.exp(-18 * Math.max(0.001, Math.min(dt, 0.05)));
+    if (Math.abs(this.eyeStepOffset) < 0.0008) {
+      this.eyeStepOffset = 0;
+    }
+
     camera.position.set(
       this.position.x + sx,
-      this.position.y + targetEye + bobOffset + sy + this.landCompressionOffset,
+      this.position.y + targetEye + bobOffset + sy + this.landCompressionOffset + this.eyeStepOffset,
       this.position.z
     );
 

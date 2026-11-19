@@ -16,6 +16,13 @@ interface PooledParticle extends Poolable {
 
 interface PooledTracer extends Poolable {
   mesh: THREE.Mesh;
+  startX: number;
+  startY: number;
+  startZ: number;
+  endX: number;
+  endY: number;
+  endZ: number;
+  streakLen: number;
   life: number;
   maxLife: number;
 }
@@ -50,25 +57,51 @@ export class VFXPool {
     this.flashLight = new THREE.PointLight(0xffb347, 0, 24, 2);
     this.rootGroup.add(this.flashLight);
 
-    const sphereGeo = new THREE.IcosahedronGeometry(0.35, 1);
+    const sphereGeo = new THREE.IcosahedronGeometry(0.28, 1);
     resourceManager.registerGeometry(sphereGeo, 'shared', 'vfx_particle_geo');
 
-    const tracerGeo = new THREE.BoxGeometry(0.05, 0.05, 3.6);
+    // Slim 1.8cm ballistic tracer bolt scaled per-shot to 1.2m-4.2m streak length (never viewport-spanning)
+    const tracerGeo = new THREE.BoxGeometry(0.018, 0.018, 1.0);
     resourceManager.registerGeometry(tracerGeo, 'shared', 'vfx_tracer_geo');
 
     const tracerMat = new THREE.MeshBasicMaterial({
-      color: 0xfde68a,
+      color: 0xfef08a,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.78,
+      depthWrite: false,
     });
     resourceManager.registerMaterial(tracerMat, 'shared', 'vfx_tracer_mat');
 
-    const fireMat = new THREE.MeshBasicMaterial({ color: 0xff7b29, transparent: true, opacity: 0.9 });
-    const smokeMat = new THREE.MeshStandardMaterial({ color: 0x2d3238, roughness: 0.95, transparent: true, opacity: 0.72 });
-    const exhaustMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9, transparent: true, opacity: 0.55 });
+    const fireMat = new THREE.MeshBasicMaterial({
+      color: 0xff8c38,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+    });
+    const smokeMat = new THREE.MeshStandardMaterial({
+      color: 0x2d3238,
+      roughness: 0.96,
+      transparent: true,
+      opacity: 0.62,
+      depthWrite: false,
+    });
+    const exhaustMat = new THREE.MeshStandardMaterial({
+      color: 0x9ca3af,
+      roughness: 0.92,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+    });
     const sparkMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
     const brassMat = new THREE.MeshStandardMaterial({ color: 0xd4a038, metalness: 0.85, roughness: 0.25 });
-    const bloodMat = new THREE.MeshBasicMaterial({ color: 0x991b1b, transparent: true, opacity: 0.85 });
+    const bloodMat = new THREE.MeshStandardMaterial({
+      color: 0x7f1d1d,
+      roughness: 0.82,
+      metalness: 0.05,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    });
     resourceManager.registerMaterial(fireMat, 'shared', 'vfx_fire_mat');
     resourceManager.registerMaterial(smokeMat, 'shared', 'vfx_smoke_mat');
     resourceManager.registerMaterial(exhaustMat, 'shared', 'vfx_exhaust_mat');
@@ -79,6 +112,7 @@ export class VFXPool {
     this.particlePool = new ObjectPool<PooledParticle>(200, () => {
       const mesh = new THREE.Mesh(sphereGeo, sparkMat);
       mesh.visible = false;
+      mesh.scale.setScalar(0.01);
       this.rootGroup.add(mesh);
       return {
         active: false,
@@ -89,15 +123,18 @@ export class VFXPool {
         life: 0,
         maxLife: 0.5,
         gravity: 9.8,
-        scaleStart: 1,
-        scaleEnd: 0.1,
+        scaleStart: 0.15,
+        scaleEnd: 0.02,
         reset() {
           this.life = 0;
+          this.mesh.scale.setScalar(0.01);
+          this.mesh.rotation.set(0, 0, 0);
           this.mesh.visible = true;
         },
       };
     }, (item) => {
       item.mesh.visible = false;
+      item.mesh.scale.setScalar(0.01);
     });
 
     this.tracerPool = new ObjectPool<PooledTracer>(48, () => {
@@ -107,8 +144,15 @@ export class VFXPool {
       return {
         active: false,
         mesh,
+        startX: 0,
+        startY: 0,
+        startZ: 0,
+        endX: 0,
+        endY: 0,
+        endZ: 0,
+        streakLen: 1.5,
         life: 0,
-        maxLife: 0.12,
+        maxLife: 0.06,
         reset() {
           this.life = 0;
           this.mesh.visible = true;
@@ -130,14 +174,15 @@ export class VFXPool {
     );
 
     for (let i = 0; i < 2; i++) {
-      const shockMat = new THREE.MeshBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.85 });
-      const stemMat = new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.75 });
-      const capMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.82 });
+      const shockMat = new THREE.MeshBasicMaterial({ color: 0xfde68a, transparent: true, opacity: 0.85, depthWrite: false });
+      const stemMat = new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.72, depthWrite: false });
+      const capMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.78, depthWrite: false });
       const falloutMat = new THREE.MeshBasicMaterial({
         color: 0xf59e0b,
         transparent: true,
         opacity: 0.45,
         side: THREE.DoubleSide,
+        depthWrite: false,
       });
       [shockMat, stemMat, capMat, falloutMat].forEach((m) => resourceManager.registerMaterial(m, 'shared'));
 
@@ -170,15 +215,38 @@ export class VFXPool {
   }
 
   spawnTracer(sx: number, sy: number, sz: number, ex: number, ey: number, ez: number): void {
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const dz = ez - sz;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 1.2) return;
+
     const t = this.tracerPool.acquire();
-    const mx = (sx + ex) * 0.5;
-    const my = (sy + ey) * 0.5;
-    const mz = (sz + ez) * 0.5;
-    t.mesh.position.set(mx, my, mz);
+    const inv = 1 / dist;
+    // Offset initial spawn slightly forward from muzzle so near-camera tracers never project as screen-filling bars
+    const leadOffset = Math.min(dist * 0.28, 2.4);
+    const startX = sx + dx * inv * leadOffset;
+    const startY = sy + dy * inv * leadOffset;
+    const startZ = sz + dz * inv * leadOffset;
+    const travelDist = Math.max(0.5, dist - leadOffset);
+    const streakLen = Math.min(3.8, Math.max(0.95, travelDist * 0.16));
+
+    t.startX = startX;
+    t.startY = startY;
+    t.startZ = startZ;
+    t.endX = ex;
+    t.endY = ey;
+    t.endZ = ez;
+    t.streakLen = streakLen;
+    t.maxLife = Math.min(0.095, Math.max(0.032, travelDist / 260));
+
+    t.mesh.position.set(
+      startX + dx * inv * (streakLen * 0.5),
+      startY + dy * inv * (streakLen * 0.5),
+      startZ + dz * inv * (streakLen * 0.5)
+    );
     t.mesh.lookAt(ex, ey, ez);
-    const dist = Math.hypot(ex - sx, ey - sy, ez - sz);
-    t.mesh.scale.set(1, 1, Math.max(0.4, Math.min(18, dist / 3.6)));
-    t.maxLife = 0.08;
+    t.mesh.scale.set(1, 1, streakLen);
   }
 
   spawnMuzzleLight(x: number, y: number, z: number): void {
@@ -190,6 +258,7 @@ export class VFXPool {
   }
 
   spawnExhaustSmoke(x: number, y: number, z: number, scale = 1.0): void {
+    const clampedScale = Math.min(1.5, Math.max(0.25, scale));
     const { exhaustMat } = this.rootGroup.userData as { exhaustMat: THREE.Material };
     const p = this.particlePool.acquire();
     p.mesh.material = exhaustMat;
@@ -203,8 +272,9 @@ export class VFXPool {
     p.vz = (Math.random() - 0.5) * 1.1;
     p.gravity = -0.6;
     p.maxLife = 0.55 + Math.random() * 0.25;
-    p.scaleStart = 0.35 * scale;
-    p.scaleEnd = 1.35 * scale;
+    p.scaleStart = 0.28 * clampedScale;
+    p.scaleEnd = 0.95 * clampedScale;
+    p.mesh.scale.setScalar(p.scaleStart);
   }
 
   spawnImpact(x: number, y: number, z: number, kind: 'concrete' | 'metal' | 'blood' | 'dirt'): void {
@@ -224,13 +294,14 @@ export class VFXPool {
             ? sparkMat
             : smokeMat;
       p.mesh.position.set(x, y, z);
-      p.vx = (Math.random() - 0.5) * 7;
-      p.vy = 2 + Math.random() * 5;
-      p.vz = (Math.random() - 0.5) * 7;
-      p.gravity = 14;
-      p.maxLife = 0.25 + Math.random() * 0.2;
-      p.scaleStart = kind === 'metal' ? 0.22 : 0.35;
+      p.vx = (Math.random() - 0.5) * (kind === 'blood' ? 3.2 : 6.5);
+      p.vy = (kind === 'blood' ? 0.8 : 1.8) + Math.random() * (kind === 'blood' ? 2.2 : 4.5);
+      p.vz = (Math.random() - 0.5) * (kind === 'blood' ? 3.2 : 6.5);
+      p.gravity = kind === 'blood' ? 18 : 14;
+      p.maxLife = kind === 'blood' ? 0.16 + Math.random() * 0.12 : 0.22 + Math.random() * 0.18;
+      p.scaleStart = kind === 'blood' ? 0.14 : kind === 'metal' ? 0.16 : 0.24;
       p.scaleEnd = 0.02;
+      p.mesh.scale.setScalar(p.scaleStart);
     }
   }
 
@@ -246,13 +317,15 @@ export class VFXPool {
     p.maxLife = 0.45;
     p.scaleStart = 0.032;
     p.scaleEnd = 0.022;
+    p.mesh.scale.setScalar(p.scaleStart);
   }
 
   spawnExplosion(x: number, y: number, z: number, scale = 1.0): void {
+    const clampedScale = Math.min(2.2, Math.max(0.4, scale));
     this.flashLight.position.set(x, y + 1.5, z);
     this.flashLight.color.setHex(0xffb347);
-    this.flashLight.distance = 24 * Math.min(2.5, scale);
-    this.flashLight.intensity = 16 * Math.min(2.5, scale);
+    this.flashLight.distance = 24 * Math.min(2.5, clampedScale);
+    this.flashLight.intensity = 16 * Math.min(2.5, clampedScale);
     this.flashTimer = 0.22;
 
     const { fireMat, smokeMat, sparkMat } = this.rootGroup.userData as {
@@ -261,40 +334,42 @@ export class VFXPool {
       sparkMat: THREE.Material;
     };
 
-    const fireCount = Math.max(4, Math.round(12 * this.maxBudgetRatio));
+    const fireCount = Math.max(4, Math.round(11 * this.maxBudgetRatio));
     for (let i = 0; i < fireCount; i++) {
       const p = this.particlePool.acquire();
       p.mesh.material = i % 3 === 0 ? sparkMat : fireMat;
       p.mesh.position.set(
-        x + (Math.random() - 0.5) * 1.4,
-        y + Math.random() * 1.2,
-        z + (Math.random() - 0.5) * 1.4
+        x + (Math.random() - 0.5) * 1.1 * clampedScale,
+        y + 0.2 + Math.random() * 0.9 * clampedScale,
+        z + (Math.random() - 0.5) * 1.1 * clampedScale
       );
-      p.vx = (Math.random() - 0.5) * 13 * scale;
-      p.vy = (3 + Math.random() * 10) * scale;
-      p.vz = (Math.random() - 0.5) * 13 * scale;
-      p.gravity = 8;
-      p.maxLife = 0.4 + Math.random() * 0.35;
-      p.scaleStart = 1.8 * scale;
-      p.scaleEnd = 0.15;
+      p.vx = (Math.random() - 0.5) * 11 * clampedScale;
+      p.vy = (2.8 + Math.random() * 8.5) * clampedScale;
+      p.vz = (Math.random() - 0.5) * 11 * clampedScale;
+      p.gravity = 9.5;
+      p.maxLife = 0.26 + Math.random() * 0.24;
+      p.scaleStart = (i % 3 === 0 ? 0.34 : 0.85) * clampedScale;
+      p.scaleEnd = 0.08;
+      p.mesh.scale.setScalar(p.scaleStart);
     }
 
-    const smokeCount = Math.max(4, Math.round(10 * this.maxBudgetRatio));
+    const smokeCount = Math.max(4, Math.round(9 * this.maxBudgetRatio));
     for (let i = 0; i < smokeCount; i++) {
       const p = this.particlePool.acquire();
       p.mesh.material = smokeMat;
       p.mesh.position.set(
-        x + (Math.random() - 0.5) * 2.2,
-        y + 0.8 + Math.random() * 1.5,
-        z + (Math.random() - 0.5) * 2.2
+        x + (Math.random() - 0.5) * 1.6 * clampedScale,
+        y + 0.6 + Math.random() * 1.1 * clampedScale,
+        z + (Math.random() - 0.5) * 1.6 * clampedScale
       );
-      p.vx = (Math.random() - 0.5) * 4.5 * scale;
-      p.vy = (2.5 + Math.random() * 4.5) * scale;
-      p.vz = (Math.random() - 0.5) * 4.5 * scale;
-      p.gravity = -1.2;
-      p.maxLife = 1.1 + Math.random() * 0.7;
-      p.scaleStart = 1.4 * scale;
-      p.scaleEnd = 4.2 * scale;
+      p.vx = (Math.random() - 0.5) * 3.6 * clampedScale;
+      p.vy = (2.2 + Math.random() * 3.8) * clampedScale;
+      p.vz = (Math.random() - 0.5) * 3.6 * clampedScale;
+      p.gravity = -1.0;
+      p.maxLife = 0.95 + Math.random() * 0.65;
+      p.scaleStart = 0.72 * clampedScale;
+      p.scaleEnd = 2.05 * clampedScale;
+      p.mesh.scale.setScalar(p.scaleStart);
     }
   }
 
@@ -328,7 +403,7 @@ export class VFXPool {
     seq.falloutRing.visible = true;
 
     // Seed bounded pooled fire/smoke particles around epicenter
-    this.spawnExplosion(x, y + 1, z, 2.8);
+    this.spawnExplosion(x, y + 1, z, 2.2);
   }
 
   update(dt: number): void {
@@ -356,7 +431,14 @@ export class VFXPool {
       t.life += dt;
       if (t.life >= t.maxLife) {
         this.tracerPool.release(t);
+        return;
       }
+      const frac = Math.min(1, t.life / Math.max(1e-4, t.maxLife));
+      const cx = t.startX + (t.endX - t.startX) * frac;
+      const cy = t.startY + (t.endY - t.startY) * frac;
+      const cz = t.startZ + (t.endZ - t.startZ) * frac;
+      t.mesh.position.set(cx, cy, cz);
+      t.mesh.scale.set(1, 1, t.streakLen * (1 - frac * 0.35));
     });
 
     for (const seq of this.nukePool) {

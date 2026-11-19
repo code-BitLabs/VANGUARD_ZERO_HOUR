@@ -8,15 +8,24 @@ export class DiagnosticRulesEngine {
   private lastTriggered = new Map<string, number>();
   private activeWarnings: DiagnosticWarning[] = [];
 
+  private occurrenceCounts = new Map<string, number>();
+
   reset(): void {
     this.seq = 0;
     this.lastTriggered.clear();
+    this.occurrenceCounts.clear();
     this.activeWarnings = [];
   }
 
   evaluate(snapshot: CombatDebugSnapshot): DiagnosticWarning[] {
     const now = snapshot.metrics.elapsedSec;
     const recentEventIds = snapshot.recentEvents.slice(0, 6).map((e) => e.id);
+
+    // Prune resolved transient INFO/WARNING entries older than 18s (keep CRITICAL for 30s)
+    this.activeWarnings = this.activeWarnings.filter((w) => {
+      const ttl = w.severity === 'CRITICAL' ? 30.0 : w.severity === 'WARNING' ? 18.0 : 12.0;
+      return now - w.timestampSec <= ttl;
+    });
 
     const pushWarning = (
       ruleId: string,
@@ -34,19 +43,29 @@ export class DiagnosticRulesEngine {
       if (now - last < cooldownSec) return;
       this.lastTriggered.set(key, now);
 
+      const count = (this.occurrenceCounts.get(key) ?? 0) + 1;
+      this.occurrenceCounts.set(key, count);
+      const evidenceWithCount = count > 1 ? `${measuredEvidence} (x${count})` : measuredEvidence;
+
+      const existingIdx = this.activeWarnings.findIndex(
+        (w) => w.ruleId === ruleId && w.entityId === entityId
+      );
       const warning: DiagnosticWarning = {
-        id: `warn_${++this.seq}`,
+        id: existingIdx >= 0 ? this.activeWarnings[existingIdx].id : `warn_${++this.seq}`,
         ruleId,
         severity,
         timestampSec: Number(now.toFixed(2)),
         subsystem,
         entityId,
-        measuredEvidence,
+        measuredEvidence: evidenceWithCount,
         expectedBehavior,
         actualBehavior,
         suggestedInvestigation,
         eventIds: recentEventIds,
       };
+      if (existingIdx >= 0) {
+        this.activeWarnings.splice(existingIdx, 1);
+      }
       this.activeWarnings.unshift(warning);
       if (this.activeWarnings.length > 80) {
         this.activeWarnings.length = 80;

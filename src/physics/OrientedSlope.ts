@@ -21,6 +21,8 @@ export interface OrientedSlopeRegion {
   thickness: number;
   /** Slope pitch in degrees computed from run and rise */
   maxSlopeDeg: number;
+  /** When true, enforces slanted lateral side-rail containment while walking along the flight */
+  hasSideRails?: boolean;
 }
 
 export interface OrientedSlopeEvaluation {
@@ -46,6 +48,7 @@ export interface CreateOrientedSlopeParams {
   startY: number;
   endY: number;
   thickness?: number;
+  hasSideRails?: boolean;
 }
 
 export function createOrientedSlopeRegion(params: CreateOrientedSlopeParams): OrientedSlopeRegion {
@@ -71,6 +74,7 @@ export function createOrientedSlopeRegion(params: CreateOrientedSlopeParams): Or
     endY: params.endY,
     thickness: Math.max(0.18, params.thickness ?? 0.45),
     maxSlopeDeg,
+    hasSideRails: params.hasSideRails ?? false,
   };
 }
 
@@ -106,6 +110,7 @@ export function legacySlopeToOriented(
     endY: slope.endY,
     thickness: 0.45,
     maxSlopeDeg,
+    hasSideRails: false,
   };
 }
 
@@ -130,7 +135,8 @@ export function evaluateOrientedSlopeAt(
   const v = -relX * slope.dirZ + relZ * slope.dirX;
 
   const uLimit = slope.halfLength + 0.08;
-  const vLimit = slope.halfWidth + Math.min(0.14, radius * 0.25);
+  // Keep lateral tolerance tight so characters outside stair sides never get phantom mid-air support
+  const vLimit = slope.halfWidth + Math.min(0.04, radius * 0.1);
 
   if (Math.abs(u) > uLimit || Math.abs(v) > vLimit) {
     out.withinFootprint = false;

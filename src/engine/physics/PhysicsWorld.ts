@@ -238,7 +238,7 @@ export class PhysicsWorld {
     for (let i = 0; i < candidates.length; i++) {
       const box = candidates[i];
       if (box.maxY > bestY && box.maxY <= feetY + stepHeight + 0.35) {
-        if (this.collisionSystem.testCircleBox2D(x, z, 0.35, box, this._supportContact2D)) {
+        if (this.collisionSystem.testCircleBox2D(x, z, 0.18, box, this._supportContact2D)) {
           const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
             this.spatialHash,
             x,

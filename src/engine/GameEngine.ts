@@ -275,6 +275,7 @@ export class GameEngine {
       onFrameMeasured: this.onFrameMeasured,
     });
     this.loop.setFpsCap(settings.graphics.fpsCap);
+    this.loop.setSoftwareGlPacing(this.renderer.isSoftwareGl);
 
     this.bindReactiveSettings();
 
@@ -439,7 +440,7 @@ export class GameEngine {
 
   private setupMenuDiorama(): void {
     this.clearWorldState();
-    const scope: ResourceScope = 'mission:diorama';
+    const scope: ResourceScope = 'mission:0';
     this.activeScope = scope;
     const profile = this.governor.getProfile();
     const gSettings = settingsStore.getState().graphics;
@@ -1010,6 +1011,9 @@ export class GameEngine {
 
     this.resourceManager.unloadScope('mission:lights');
     this.resourceManager.unloadScope('mission:audio');
+    this.resourceManager.unloadScope('mission:0');
+    this.resourceManager.unloadScope('mission:diorama');
+    this.resourceManager.unloadScope('mission:world');
     if (this.activeScope) {
       this.resourceManager.unloadScope(this.activeScope);
       this.activeScope = null;
