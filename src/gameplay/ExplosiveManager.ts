@@ -208,8 +208,18 @@ export class ExplosiveManager {
     this.reset();
   }
 
-  resupplyC4(amount = 2): void {
-    this.c4Inventory = Math.min(6, this.c4Inventory + amount);
+  getC4Inventory(): number {
+    return this.c4Inventory;
+  }
+
+  setC4Inventory(count: number): void {
+    this.c4Inventory = Math.max(0, Math.min(6, Math.round(count)));
+  }
+
+  resupplyC4(amount = 2, maxCap = 6): number {
+    const before = this.c4Inventory;
+    this.c4Inventory = Math.min(maxCap, this.c4Inventory + Math.max(0, amount));
+    return Math.max(0, this.c4Inventory - before);
   }
 
   getSelectedBombId(): ConventionalBombId {

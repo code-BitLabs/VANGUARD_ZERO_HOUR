@@ -192,6 +192,82 @@ export class WeaponSystem {
     }
   }
 
+  /**
+   * Authoritative weapon-specific resupply with separate ballistic vs explosive ordnance caps.
+   * Never exceeds each weapon's upgraded maxReserve; supports dry-run capacity check.
+   */
+  resupplyWeapons(opts: {
+    ballisticReserveFraction: number;
+    explosiveRoundsPerLauncher: number;
+    onlyCheckCapacity?: boolean;
+  }): {
+    ballisticRoundsAdded: number;
+    explosiveRoundsAdded: number;
+    weaponsReplenished: number;
+    alreadyFull: boolean;
+  } {
+    let ballisticRoundsAdded = 0;
+    let explosiveRoundsAdded = 0;
+    let weaponsReplenished = 0;
+    const isExplosiveWeapon = (id: WeaponId): boolean =>
+      id === 'grenade_launcher' || id === 'rocket_launcher' || id === 'guided_missile';
+
+    for (const state of this.weapons.values()) {
+      const capLv = progressionStore.getState().getUpgradeLevel(state.config.id, 'capacity');
+      const maxReserve = Math.round(state.config.reserveAmmo * (1 + capLv * 0.12));
+      const deficit = Math.max(0, maxReserve - state.reserveAmmo);
+      if (deficit <= 0) continue;
+
+      if (isExplosiveWeapon(state.config.id)) {
+        const grantPerType =
+          state.config.id === 'grenade_launcher'
+            ? Math.max(1, opts.explosiveRoundsPerLauncher * 2)
+            : Math.max(1, opts.explosiveRoundsPerLauncher);
+        const added = Math.min(deficit, grantPerType);
+        if (added > 0) {
+          if (!opts.onlyCheckCapacity) {
+            state.reserveAmmo += added;
+          }
+          explosiveRoundsAdded += added;
+          weaponsReplenished++;
+        }
+      } else {
+        const fractionGrant = Math.ceil(maxReserve * Math.max(0.1, opts.ballisticReserveFraction));
+        const minGrant = Math.max(state.magSize, fractionGrant);
+        const added = Math.min(deficit, minGrant);
+        if (added > 0) {
+          if (!opts.onlyCheckCapacity) {
+            state.reserveAmmo += added;
+          }
+          ballisticRoundsAdded += added;
+          weaponsReplenished++;
+        }
+      }
+    }
+
+    return {
+      ballisticRoundsAdded,
+      explosiveRoundsAdded,
+      weaponsReplenished,
+      alreadyFull: ballisticRoundsAdded === 0 && explosiveRoundsAdded === 0,
+    };
+  }
+
+  getActiveWeaponId(): WeaponId {
+    return this.activeWeaponId;
+  }
+
+  hasAnyHeavyOrdnanceAmmo(): boolean {
+    const heavyIds: WeaponId[] = ['rocket_launcher', 'guided_missile', 'grenade_launcher'];
+    for (const id of heavyIds) {
+      const st = this.weapons.get(id);
+      if (st && st.ammoInMag + st.reserveAmmo > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   captureAmmoSnapshot(): {
     activeWeaponId: WeaponId;
     weaponAmmoState: Partial<Record<WeaponId, WeaponAmmoRecord>>;

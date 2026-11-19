@@ -28,9 +28,15 @@ import {
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
 import { PlayerController } from '@/src/gameplay/PlayerController';
 import { ProjectileManager } from '@/src/gameplay/ProjectileManager';
+import {
+  SustainmentContext,
+  SustainmentEconomyManager,
+  SustainmentVehicleTarget,
+} from '@/src/gameplay/SustainmentEconomyManager';
 import { VEHICLE_CAMERA_MODE_LABELS } from '@/src/gameplay/VehicleCameraRig';
-import { VehicleManager } from '@/src/gameplay/VehicleManager';
+import { VehicleEntity, VehicleManager } from '@/src/gameplay/VehicleManager';
 import { WeaponSystem } from '@/src/gameplay/WeaponSystem';
+import { buildSupplyCrate } from '@/src/world/builders/WorldPropsAndLandmarks';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { DIFFICULTY_COMBAT_PROFILES } from '@/src/schemas/combat.schema';
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
@@ -86,10 +92,13 @@ export class GameEngine {
   private readonly vehicles: VehicleManager;
   private readonly airCombat: AirCombatManager;
   private readonly healthPickups: HealthPickupManager;
+  private readonly sustainment = new SustainmentEconomyManager();
   private readonly hudPublisher = new HudSnapshotPublisher();
   private readonly combatDamage: CombatDamageResolver;
   private readonly cargoLiftManager = new CargoLiftManager(this.collisionWorld);
   private readonly _liftOccupantScratch: CargoLiftOccupantProxy[] = [];
+  private lastDuckedSubtitle: string | null = null;
+  private lastDuckedAlert: string | null = null;
 
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
@@ -148,7 +157,17 @@ export class GameEngine {
       this.lights
     );
 
-    this.audio = new AudioManager(this.resourceManager, audioSettings);
+    this.audio = new AudioManager(this.resourceManager, audioSettings, (prefs) => {
+      const cur = audioSettingsStore.getState();
+      if (
+        cur.musicTrackId !== prefs.musicTrackId ||
+        cur.musicShuffle !== prefs.musicShuffle ||
+        cur.musicRepeatMode !== prefs.musicRepeatMode ||
+        cur.musicEnabled !== prefs.musicEnabled
+      ) {
+        cur.updateAudio(prefs);
+      }
+    });
     this.input = new InputManager(
       this.resourceManager,
       settings.input,
@@ -255,10 +274,12 @@ export class GameEngine {
       explosives: this.explosives,
       destruction: this.destruction,
       healthPickups: this.healthPickups,
+      sustainment: this.sustainment,
       monitor: this.monitor,
       telemetry: this.telemetry,
       getMissionDirector: () => this.missionDirector,
       getActiveScope: () => this.activeScope,
+      getDifficulty: () => missionSelectionStore.getState().difficulty,
     });
     this.cargoLiftManager.onPortalStateChange((u) => {
       this.workerBridge?.updatePortalState(u.portalId, u.enabled, u.dynamicWaitCostSec, u.activeOccupants);
@@ -572,9 +593,12 @@ export class GameEngine {
       completedObjectiveIds: completedIds,
       bypassedObjectiveIds: bypassedIds,
       destroyedTargetIds,
+      sustainmentSnapshot: this.sustainment.captureSnapshot(),
       playerSpawn: anchor,
       healthAtCheckpoint: this.player.health,
       armorAtCheckpoint: this.player.armor,
+      grenadesAtCheckpoint: this.player.grenades,
+      c4AtCheckpoint: this.explosives.getC4Inventory(),
       activeWeaponId: ammoSnap.activeWeaponId,
       weaponAmmoState: ammoSnap.weaponAmmoState,
       scoreAtCheckpoint: this.missionDirector.score,
@@ -684,6 +708,21 @@ export class GameEngine {
     this.enemies.setCargoLiftManager(this.cargoLiftManager);
     this.enemies.setWorkerBridge(this.workerBridge);
 
+    this.sustainment.clear();
+    for (const sc of this.worldData.supplyCrates) {
+      this.sustainment.registerStation({
+        id: sc.id,
+        kind: sc.kind ?? 'ammo_crate',
+        position: sc.position,
+        maxCharges: sc.maxCharges ?? 2,
+        mesh: sc.mesh,
+        statusLightMesh: sc.statusLightMesh ?? null,
+      });
+    }
+    if (restoredCheckpoint?.sustainmentSnapshot) {
+      this.sustainment.restoreSnapshot(restoredCheckpoint.sustainmentSnapshot);
+    }
+
     this.telemetry.reset();
     this.telemetry.setMissionId(mission.id);
     this.monitor.reset();
@@ -693,10 +732,13 @@ export class GameEngine {
     this.coordinator.setDifficulty(difficulty);
     this.enemies.setDifficulty(difficulty);
     this.vehicles.setDifficulty(difficulty);
+    this.vehicles.setMapId(mission.mapId);
     this.airCombat.setDifficulty(difficulty);
     this.player.setDifficultyProfile(DIFFICULTY_COMBAT_PROFILES[difficulty]);
     this.downedActive = false;
     this.downedTimerSec = 0;
+    this.lastDuckedSubtitle = null;
+    this.lastDuckedAlert = null;
     gameSessionStore.getState().setDownedState(null);
 
     const completedObjectives = mission.objectives.filter((o) => completedSet.has(o.id));
@@ -758,7 +800,7 @@ export class GameEngine {
       }
     }
 
-    this.healthPickups.spawnMapMedStations(mission.mapId, this.collisionWorld, scope);
+    this.healthPickups.spawnMapMedStations(mission.mapId, this.collisionWorld, scope, difficulty);
 
     const startWeapon =
       preferredWeapon ?? ((mission.recommendedLoadout[0] as WeaponId) || 'assault_rifle');
@@ -791,6 +833,12 @@ export class GameEngine {
         this.player.maxArmor
       );
       this.player.applyCheckpointVitals(vitals.health, vitals.armor);
+      if (typeof restoredCheckpoint.grenadesAtCheckpoint === 'number') {
+        this.player.grenades = Math.max(1, Math.min(4, restoredCheckpoint.grenadesAtCheckpoint));
+      }
+      if (typeof restoredCheckpoint.c4AtCheckpoint === 'number') {
+        this.explosives.setC4Inventory(restoredCheckpoint.c4AtCheckpoint);
+      }
 
       this.weapons.resetLoadout(startWeapon);
       this.weapons.restoreCheckpointLoadout(
@@ -997,9 +1045,11 @@ export class GameEngine {
     this.enemies.setCargoLiftManager(null);
     this.enemies.setWorkerBridge(null);
     this.cargoLiftManager.clear();
+    this.vehicles.forceExitIfOccupied(this.player, this.collisionWorld);
     this.vehicles.clear();
     this.airCombat.clear();
     this.healthPickups.clear();
+    this.sustainment.clear();
     this.destruction.clear();
     this.collisionWorld.clear();
     this.chunkManager.clear(this.renderer.scene);
@@ -1124,25 +1174,67 @@ export class GameEngine {
     }
   };
 
+  private wrapVehicleForSustainment(veh: VehicleEntity | null): SustainmentVehicleTarget | null {
+    if (!veh) return null;
+    return {
+      id: veh.id,
+      alive: veh.alive,
+      hostile: veh.hostile,
+      displayName: veh.displayName,
+      health: veh.health,
+      maxHealth: veh.maxHealth,
+      speed: veh.speed,
+      position: veh.position,
+      turretAmmo: veh.turretAmmo,
+      maxTurretAmmo: veh.maxTurretAmmo,
+      lastDamagedAtSec: veh.lastDamagedAtSec,
+      repairAndRearm: (hullFraction, turretAmmoFraction) =>
+        this.vehicles.repairAndRearmVehicle(veh, hullFraction, turretAmmoFraction),
+    };
+  }
+
+  private buildSustainmentContext(): SustainmentContext {
+    const playerVeh = this.vehicles.getPlayerVehicle();
+    const nearbyFriendly = !playerVeh
+      ? this.vehicles.getNearestFriendlyVehicle(this.player.position, 7.5)
+      : null;
+    return {
+      player: this.player,
+      weapons: this.weapons,
+      explosives: this.explosives,
+      playerVehicle: this.wrapVehicleForSustainment(playerVeh),
+      nearbyFriendlyVehicle: this.wrapVehicleForSustainment(nearbyFriendly),
+      difficulty: missionSelectionStore.getState().difficulty,
+      nowSec: this.telemetry.getElapsedSec(),
+    };
+  }
+
   private tryContextualInteract(): boolean {
     if (!this.worldData || !this.missionDirector) return false;
-    // Check supply crates
-    for (const c of this.worldData.supplyCrates) {
-      if (!c.used && c.position.distanceTo(this.player.position) < 3.4) {
-        c.used = true;
-        c.mesh.visible = false;
-        const res = this.player.resupply();
-        if (res.healthRestored > 0) {
-          this.telemetry.recordHealthRegenerated(res.healthRestored);
-        }
-        if (res.armorRestored > 0) {
-          this.telemetry.recordArmorRestored(res.armorRestored);
-        }
-        this.telemetry.recordSupplyCrateUsed();
-        this.weapons.resupplyAll();
-        this.explosives.resupplyC4(2);
-        this.audio.play2D('reload', 6, 0.65);
-        this.missionDirector.showAlert('RESUPPLY CRATE COLLECTED (+AMMO / +ARMOR / +MEDS / +2 C4)', 2.8);
+    // Check authoritative tactical sustainment stations (ammo crates, med/armor stations, vehicle repair bays)
+    const sustainCtx = this.buildSustainmentContext();
+    const origin = sustainCtx.playerVehicle
+      ? sustainCtx.playerVehicle.position
+      : this.player.position;
+    const nearbyStation = this.sustainment.findNearestStation(
+      origin,
+      Boolean(sustainCtx.playerVehicle)
+    );
+    if (nearbyStation) {
+      const res = this.sustainment.beginInteraction(sustainCtx, nearbyStation.station.id);
+      if (res.ok) {
+        this.audio.play2D('ui_click', 5, 0.5);
+        return true;
+      }
+      // If inside a vehicle and already full/depleted at bay, allow [E] to exit vehicle unless actively blocked
+      if (
+        !sustainCtx.playerVehicle ||
+        res.code === 'vehicle_moving' ||
+        res.code === 'vehicle_under_fire' ||
+        res.code === 'cooldown'
+      ) {
+        this.audio.play2D('empty_click', 4, 0.45);
+        this.missionDirector.showAlert(res.message, 2.2);
         return true;
       }
     }
@@ -1188,6 +1280,7 @@ export class GameEngine {
   }
 
   private onFixedStep = (dt: number): void => {
+    this.audio.tick(dt);
     const screen = uiStore.getState().screen;
     if (screen !== 'playing' || !this.missionDirector || !this.activeMission) {
       // Gentle menu diorama orbit pan
@@ -1277,6 +1370,66 @@ export class GameEngine {
       (msg, dur) => this.missionDirector?.showSubtitle(msg, dur),
       (healedAmount) => this.telemetry.recordHealthPickupCollected(healedAmount)
     );
+
+    // Authoritative tactical sustainment economy channeling & emergency ordnance anti-softlock safeguard
+    const sustainCtx = this.buildSustainmentContext();
+    const sustainResult = this.sustainment.update(dt, sustainCtx);
+    if (sustainResult) {
+      if (sustainResult.ok && sustainResult.code === 'completed') {
+        if (sustainResult.hpAdded) this.telemetry.recordHealthRegenerated(sustainResult.hpAdded);
+        if (sustainResult.armorAdded) this.telemetry.recordArmorRestored(sustainResult.armorAdded);
+        this.telemetry.recordSupplyCrateUsed();
+        this.audio.play2D('reload', 6, 0.65);
+        this.missionDirector.showAlert(sustainResult.message, 2.8);
+      } else if (!sustainResult.ok) {
+        this.audio.play2D('empty_click', 4, 0.4);
+        this.missionDirector.showAlert(sustainResult.message, 2.2);
+      }
+    }
+
+    if (this.activeScope && this.player.alive) {
+      const objStatuses = this.missionDirector.getObjectiveStatuses();
+      const requiresHeavyOrdnance = objStatuses.some(
+        (o) =>
+          !o.completed &&
+          (o.type === 'air_defense' ||
+            o.type === 'convoy_intercept' ||
+            o.type === 'destroy_targets' ||
+            o.type === 'plant_charge')
+      );
+      if (
+        requiresHeavyOrdnance &&
+        !this.sustainment.hasAvailableAmmoStation() &&
+        !this.weapons.hasAnyHeavyOrdnanceAmmo() &&
+        this.explosives.getC4Inventory() === 0
+      ) {
+        const dropY = this.collisionWorld.getGroundHeightAt(
+          this.player.position.x + 2.4,
+          this.player.position.z + 2.4
+        );
+        const podMesh = buildSupplyCrate(this.assetManager, this.resourceManager, this.activeScope);
+        const pod = this.sustainment.tryDeployEmergencyOrdnancePod({
+          requiresHeavyOrdnance: true,
+          weapons: this.weapons,
+          explosives: this.explosives,
+          playerPos: this.player.position,
+          groundY: dropY,
+          mesh: podMesh,
+        });
+        if (pod) {
+          podMesh.position.copy(pod.position);
+          this.renderer.scene.add(podMesh);
+          this.resourceManager.register('object3d', this.activeScope, () => {
+            this.renderer.scene.remove(podMesh);
+          });
+          this.missionDirector.showSubtitle(
+            'COMMAND: Emergency Ordnance Pod air-dropped at your flank — resupply heavy launchers [E].',
+            4.0
+          );
+          this.audio.duckMusicForDialogue(3.6, 0.32);
+        }
+      }
+    }
 
     // Pooled projectiles (rockets, guided missiles, grenades, aerial bombs, TRIDENT-X)
     const tProj0 = performance.now();
@@ -1387,6 +1540,19 @@ export class GameEngine {
       }
     } else {
       const missionTick = this.missionDirector.update(dt, this.player.health, this.player.armor);
+      // Automatic subtle music ducking whenever fresh tactical radio dialogue or mission announcements appear
+      if (this.missionDirector.subtitleText && this.missionDirector.subtitleText !== this.lastDuckedSubtitle) {
+        this.lastDuckedSubtitle = this.missionDirector.subtitleText;
+        this.audio.duckMusicForDialogue(3.0, 0.34);
+      } else if (!this.missionDirector.subtitleText) {
+        this.lastDuckedSubtitle = null;
+      }
+      if (this.missionDirector.alertText && this.missionDirector.alertText !== this.lastDuckedAlert) {
+        this.lastDuckedAlert = this.missionDirector.alertText;
+        this.audio.duckMusicForDialogue(2.0, 0.42);
+      } else if (!this.missionDirector.alertText) {
+        this.lastDuckedAlert = null;
+      }
       if (missionTick.finished) {
         this.completeMission(missionTick.victory);
         return;
@@ -1676,6 +1842,9 @@ export class GameEngine {
   }
 
   private publishHudSnapshot = (): void => {
+    const sustainmentPrompt = this.activeMission
+      ? this.sustainment.getPromptForContext(this.buildSustainmentContext())
+      : null;
     this.hudPublisher.publish({
       player: this.player,
       weapons: this.weapons,
@@ -1689,6 +1858,7 @@ export class GameEngine {
       activeMission: this.activeMission,
       worldData: this.worldData,
       cargoLiftManager: this.cargoLiftManager,
+      sustainmentPrompt,
       camera: this.renderer.camera,
     });
   };

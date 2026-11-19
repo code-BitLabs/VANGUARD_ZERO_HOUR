@@ -27,6 +27,7 @@ import {
   MobileHudEditorModal,
   resetMobileControlSettingsToDefaults,
 } from '@/src/ui/components/MobileHudEditorModal';
+import { MusicPlayerPanel } from '@/src/ui/components/MusicPlayerPanel';
 import { Button } from '@/src/ui/primitives/Button';
 import { Select, Slider, Switch } from '@/src/ui/primitives/Controls';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/src/ui/primitives/Tabs';
@@ -395,6 +396,19 @@ export function SettingsPanel({
                 </div>
               </SettingRow>
 
+              <SettingRow label={`Radio & Dialogue (${Math.round(audio.dialogueVolume * 100)}%)`}>
+                <div className="w-52">
+                  <Slider
+                    aria-label="Dialogue Volume"
+                    value={audio.dialogueVolume}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onValueChange={(dialogueVolume) => audio.updateAudio({ dialogueVolume })}
+                  />
+                </div>
+              </SettingRow>
+
               <SettingRow label={`Tactical Score Music (${Math.round(audio.musicVolume * 100)}%)`}>
                 <div className="w-52">
                   <Slider
@@ -402,7 +416,7 @@ export function SettingsPanel({
                     value={audio.musicVolume}
                     min={0}
                     max={1}
-                    step={0.05}
+                    step={0.02}
                     onValueChange={(musicVolume) => audio.updateAudio({ musicVolume })}
                   />
                 </div>
@@ -420,6 +434,8 @@ export function SettingsPanel({
                   />
                 </div>
               </SettingRow>
+
+              <MusicPlayerPanel />
             </TabsContent>
 
             <TabsContent value="controls" className="space-y-4">

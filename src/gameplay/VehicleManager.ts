@@ -13,7 +13,7 @@ import {
   ENEMY_WEAPON_PROFILES,
   EnemyAwarenessState,
 } from '@/src/schemas/combat.schema';
-import { Difficulty } from '@/src/schemas/common.schema';
+import { Difficulty, MapId } from '@/src/schemas/common.schema';
 import { MiniMapBlip, VehicleCameraMode, VehicleDriveGear } from '@/src/schemas/events.schema';
 import { VehicleType } from '@/src/schemas/mission.schema';
 import { buildVehicleRig } from '@/src/world/rigs/VehicleRigBuilder';
@@ -22,6 +22,7 @@ import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
 import { CombatTelemetryRecorder, EnemyDebugInspectorRow } from './CombatTelemetryRecorder';
 import { PlayerController } from './PlayerController';
 import { CameraSpringDebugRay, VehicleCameraRig } from './VehicleCameraRig';
+import { getVehicleHandlingSpec, stepVehicleHandling } from './vehicle/VehicleHandlingProfile';
 import { resetSuspensionState, stepVehicleSuspension } from './vehicle/VehicleKinematics';
 import { HitscanTarget } from './WeaponSystem';
 
@@ -40,6 +41,9 @@ export interface VehicleEntity {
   occupiedByPlayer: boolean;
   health: number;
   maxHealth: number;
+  turretAmmo: number;
+  maxTurretAmmo: number;
+  lastDamagedAtSec: number;
   position: THREE.Vector3;
   centerPos: THREE.Vector3;
   yaw: number;
@@ -104,6 +108,8 @@ export class VehicleManager {
   private vehicles: VehicleEntity[] = [];
   private seq = 0;
   private difficulty: Difficulty = 'normal';
+  private mapId: MapId = 'warzone_city';
+  private simTimeSec = 0;
   private readonly cameraRig = new VehicleCameraRig();
   private readonly _muzzlePos = new THREE.Vector3();
   private readonly _turretDir = new THREE.Vector3();
@@ -155,6 +161,14 @@ export class VehicleManager {
 
   getCameraRig(): VehicleCameraRig {
     return this.cameraRig;
+  }
+
+  setMapId(mapId: MapId): void {
+    this.mapId = mapId;
+  }
+
+  getMapId(): MapId {
+    return this.mapId;
   }
 
   notifyManualLookInput(): void {
@@ -241,6 +255,7 @@ export class VehicleManager {
     const weaponProf = ENEMY_WEAPON_PROFILES[type === 'enemy_apc' ? 'enemy_autocannon' : 'enemy_lmg'];
     const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
 
+    const handlingSpec = getVehicleHandlingSpec(type);
     const entity: VehicleEntity = {
       id,
       squadId,
@@ -252,6 +267,9 @@ export class VehicleManager {
       occupiedByPlayer: false,
       health: maxHpMap[type],
       maxHealth: maxHpMap[type],
+      turretAmmo: handlingSpec.maxTurretAmmo,
+      maxTurretAmmo: handlingSpec.maxTurretAmmo,
+      lastDamagedAtSec: -999,
       position: new THREE.Vector3(pos.x, y, pos.z),
       centerPos: new THREE.Vector3(pos.x, y + 1.2, pos.z),
       yaw,
@@ -369,13 +387,60 @@ export class VehicleManager {
     return best;
   }
 
+  getNearestFriendlyVehicle(pos: THREE.Vector3, maxDist = 7.5): VehicleEntity | null {
+    let best: VehicleEntity | null = null;
+    let bestDist = maxDist;
+    for (const v of this.vehicles) {
+      if (!v.alive || v.hostile) continue;
+      const d = v.position.distanceTo(pos);
+      if (d < bestDist) {
+        bestDist = d;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  repairAndRearmVehicle(
+    veh: VehicleEntity,
+    hullFraction: number,
+    turretAmmoFraction: number
+  ): { hullAdded: number; turretAmmoAdded: number; alreadyFull: boolean } {
+    if (!veh.alive) {
+      return { hullAdded: 0, turretAmmoAdded: 0, alreadyFull: true };
+    }
+    const beforeHp = veh.health;
+    const beforeAmmo = veh.turretAmmo;
+    const hpGrant = Math.ceil(veh.maxHealth * Math.max(0.05, hullFraction));
+    const ammoGrant = Math.ceil(veh.maxTurretAmmo * Math.max(0.05, turretAmmoFraction));
+    veh.health = Math.min(veh.maxHealth, veh.health + hpGrant);
+    veh.turretAmmo = Math.min(veh.maxTurretAmmo, veh.turretAmmo + ammoGrant);
+    const hullAdded = Math.max(0, Math.round(veh.health - beforeHp));
+    const turretAmmoAdded = Math.max(0, Math.round(veh.turretAmmo - beforeAmmo));
+    return {
+      hullAdded,
+      turretAmmoAdded,
+      alreadyFull: hullAdded === 0 && turretAmmoAdded === 0,
+    };
+  }
+
+  forceExitIfOccupied(player: PlayerController, collision?: CollisionWorld): void {
+    const current = this.getPlayerVehicle();
+    if (current) {
+      this.ejectPlayerFromVehicle(current, player, collision);
+    } else {
+      player.setOccupiedVehicleShield(null, null);
+    }
+  }
+
   private ejectPlayerFromVehicle(
     veh: VehicleEntity,
     player: PlayerController,
     collision?: CollisionWorld
   ): void {
     veh.occupiedByPlayer = false;
-    veh.speed *= 0.25;
+    // Moving exit safety: damp speed progressively so vehicle never runs over the dismounting player
+    veh.speed = Math.sign(veh.speed) * Math.min(Math.abs(veh.speed) * 0.25, 2.4);
     veh.steerAngle = 0;
     veh.driveGear = 'NEUTRAL_HOLD';
     veh.reverseConfirmTimer = 0;
@@ -476,6 +541,7 @@ export class VehicleManager {
   ): boolean {
     if (!veh.alive) return false;
     veh.health -= damage;
+    veh.lastDamagedAtSec = this.telemetry?.getElapsedSec() ?? this.simTimeSec;
     if (veh.health <= 0) {
       const prevState = veh.state;
       const wasOccupied = veh.occupiedByPlayer;
@@ -654,7 +720,8 @@ export class VehicleManager {
     baseFov = 78,
     hasManualLookInput = false
   ): void {
-    const nowSec = this.telemetry?.getElapsedSec() ?? 0;
+    this.simTimeSec += dt;
+    const nowSec = this.telemetry?.getElapsedSec() ?? this.simTimeSec;
     const diffProf = DIFFICULTY_COMBAT_PROFILES[this.difficulty];
 
     for (const v of this.vehicles) {
@@ -669,92 +736,51 @@ export class VehicleManager {
         const ctrl = input.getVehicleControls();
         v.handbrakeActive = ctrl.handbrake;
 
-        // 1. Progressive, speed-sensitive steering with smooth self-centering
-        const speedRatio = Math.min(1, Math.abs(v.speed) / Math.max(1, v.maxSpeed));
-        const maxSteerAuthority = 1.0 - speedRatio * 0.26;
-        const targetSteer = ctrl.steer * maxSteerAuthority;
-        if (Math.abs(ctrl.steer) > 0.02) {
-          v.steerAngle = THREE.MathUtils.lerp(v.steerAngle, targetSteer, Math.min(1, dt * 8.0));
-        } else {
-          const returnRate = 6.8 + speedRatio * 4.2;
-          v.steerAngle = THREE.MathUtils.lerp(v.steerAngle, 0, Math.min(1, dt * returnRate));
-          if (Math.abs(v.steerAngle) < 0.005) v.steerAngle = 0;
-        }
+        // Sample terrain slope pitch along vehicle forward axis (-sin(yaw), -cos(yaw))
+        const fwdX = -Math.sin(v.yaw);
+        const fwdZ = -Math.cos(v.yaw);
+        const probeHalf = Math.max(1.2, halfL * 0.78);
+        const frontY = collision.getGroundHeightAt(
+          v.position.x + fwdX * probeHalf,
+          v.position.z + fwdZ * probeHalf
+        );
+        const rearY = collision.getGroundHeightAt(
+          v.position.x - fwdX * probeHalf,
+          v.position.z - fwdZ * probeHalf
+        );
+        const slopePitchRad = Math.atan2(frontY - rearY, probeHalf * 2);
 
-        // 2. Longitudinal Gas / Brake-to-Reverse State Machine with Hysteresis & 160ms Low-Speed Confirmation
-        const maxReverseSpeed = 11.5;
-        if (ctrl.handbrake) {
-          v.reverseConfirmTimer = 0;
-          if (Math.abs(v.speed) > 0.1) {
-            const decel = 34 * dt;
-            if (v.speed > 0) v.speed = Math.max(0, v.speed - decel);
-            else v.speed = Math.min(0, v.speed + decel);
-          } else {
-            v.speed = 0;
-          }
-          v.driveGear = Math.abs(v.speed) > VEHICLE_REVERSE_ENTER_SPEED ? 'BRAKING' : 'NEUTRAL_HOLD';
-        } else if (ctrl.gas > 0.04 && ctrl.brakeReverse <= 0.04) {
-          v.reverseConfirmTimer = 0;
-          if (v.speed < -0.15) {
-            // Braking out of reverse before accelerating forward
-            v.speed = Math.min(0, v.speed + 30 * ctrl.gas * dt);
-            v.driveGear = 'BRAKING';
-          } else {
-            v.speed = Math.min(v.maxSpeed, v.speed + 24 * ctrl.gas * dt);
-            if (v.speed > VEHICLE_REVERSE_EXIT_SPEED || ctrl.gas > 0.2) {
-              v.driveGear = 'FORWARD';
-            }
-          }
-        } else if (ctrl.brakeReverse > 0.04) {
-          if (v.speed > VEHICLE_REVERSE_ENTER_SPEED) {
-            // Moving forward above threshold: engage brakes first; never flip directly into reverse
-            v.speed = Math.max(0, v.speed - 28 * ctrl.brakeReverse * dt);
-            v.driveGear = 'BRAKING';
-            v.reverseConfirmTimer = 0;
-          } else if (v.driveGear !== 'REVERSE') {
-            // Vehicle has reached safe low speed (<= 0.45 m/s): hold neutral briefly to confirm reverse intent
-            v.speed = Math.min(0, v.speed);
-            v.driveGear = 'NEUTRAL_HOLD';
-            v.reverseConfirmTimer += dt;
-            if (v.reverseConfirmTimer >= VEHICLE_REVERSE_CONFIRM_SEC) {
-              v.driveGear = 'REVERSE';
-            }
-          }
+        const step = stepVehicleHandling({
+          type: v.type,
+          mapId: this.mapId,
+          dt,
+          gas: ctrl.gas,
+          brakeReverse: ctrl.brakeReverse,
+          steer: ctrl.steer,
+          handbrake: ctrl.handbrake,
+          speed: v.speed,
+          maxSpeed: v.maxSpeed,
+          steerAngle: v.steerAngle,
+          driveGear: v.driveGear,
+          reverseConfirmTimer: v.reverseConfirmTimer,
+          slopePitchRad,
+          reverseEnterSpeed: VEHICLE_REVERSE_ENTER_SPEED,
+          reverseExitSpeed: VEHICLE_REVERSE_EXIT_SPEED,
+          reverseConfirmSec: VEHICLE_REVERSE_CONFIRM_SEC,
+        });
 
-          if (v.driveGear === 'REVERSE') {
-            v.speed = Math.max(-maxReverseSpeed, v.speed - 16.5 * ctrl.brakeReverse * dt);
-          }
-        } else {
-          // Coasting with natural rolling resistance
-          v.reverseConfirmTimer = 0;
-          v.speed = THREE.MathUtils.lerp(v.speed, 0, Math.min(1, dt * 2.1));
-          if (Math.abs(v.speed) < 0.06) {
-            v.speed = 0;
-          }
-          if (v.speed > VEHICLE_REVERSE_EXIT_SPEED) {
-            v.driveGear = 'FORWARD';
-          } else if (v.speed < -VEHICLE_REVERSE_ENTER_SPEED) {
-            v.driveGear = 'REVERSE';
-          } else if (Math.abs(v.speed) <= VEHICLE_REVERSE_ENTER_SPEED) {
-            v.driveGear = 'NEUTRAL_HOLD';
-          }
-        }
-
-        // 3. Apply progressive yaw rotation from steerAngle when moving
-        const absSpeed = Math.abs(v.speed);
-        if (absSpeed > 0.04 && Math.abs(v.steerAngle) > 0.005) {
-          const steerDir = v.speed < -0.05 ? -1 : 1;
-          const handbrakeSlipBoost = ctrl.handbrake && absSpeed > 3.2 ? 1.38 : 1.0;
-          const turnAuthority = Math.min(1, absSpeed / 3.2 + 0.22);
-          v.yaw -= v.steerAngle * 2.2 * steerDir * handbrakeSlipBoost * turnAuthority * dt;
-        }
+        v.speed = step.speed;
+        v.steerAngle = step.steerAngle;
+        v.driveGear = step.driveGear;
+        v.reverseConfirmTimer = step.reverseConfirmTimer;
+        v.yaw += step.yawDeltaRad;
 
         // Visual front wheel steer & rolling wheel spin
         for (let wi = 0; wi < v.wheels.length; wi++) {
           const wheel = v.wheels[wi];
           wheel.rotation.x += v.speed * dt * 1.4;
           if (wi < 2) {
-            wheel.rotation.y = -v.steerAngle * 0.48;
+            wheel.rotation.y = -v.steerAngle * 0.52;
           }
         }
 
@@ -820,29 +846,35 @@ export class VehicleManager {
         this.cameraRig.updateCamera(dt, v, player, camera, collision, baseFov, hasManualLookInput);
 
         if (input.isActionHeld('fire') && v.turretFireCooldown <= 0) {
-          v.turretFireCooldown = 0.12;
-          camera.getWorldDirection(this._turretDir);
-          // Authoritative turret raycast origin is anchored to un-tilted vehicle root + turret mount
-          // so visual chassis suspension pitch/roll/heave never skews ballistic raycast origin or aim.
-          const isHeavy = v.type === 'armored_truck' || v.type === 'enemy_apc';
-          const turretBaseY = 0.9 + (isHeavy ? 1.35 : 1.05) + 0.6 + 0.12;
-          const cosP = Math.cos(gunPitch);
-          this._muzzlePos.set(
-            v.position.x - Math.sin(player.yaw) * cosP * 1.55,
-            v.position.y + turretBaseY + Math.sin(gunPitch) * 1.55,
-            v.position.z - Math.cos(player.yaw) * cosP * 1.55
-          );
-          this.audio.play2D('shot_lmg', 7, 0.55);
-          this.vfx.spawnMuzzleLight(this._muzzlePos.x, this._muzzlePos.y, this._muzzlePos.z);
-          this.vfx.spawnTracer(
-            this._muzzlePos.x,
-            this._muzzlePos.y,
-            this._muzzlePos.z,
-            this._muzzlePos.x + this._turretDir.x * 95,
-            this._muzzlePos.y + this._turretDir.y * 95,
-            this._muzzlePos.z + this._turretDir.z * 95
-          );
-          onTurretHitEnemyCheck(this._muzzlePos, this._turretDir);
+          if (v.turretAmmo <= 0) {
+            v.turretFireCooldown = 0.38;
+            this.audio.play2D('empty_click', 4, 0.5);
+          } else {
+            v.turretAmmo = Math.max(0, v.turretAmmo - 1);
+            v.turretFireCooldown = 0.12;
+            camera.getWorldDirection(this._turretDir);
+            // Authoritative turret raycast origin is anchored to un-tilted vehicle root + turret mount
+            // so visual chassis suspension pitch/roll/heave never skews ballistic raycast origin or aim.
+            const isHeavy = v.type === 'armored_truck' || v.type === 'enemy_apc';
+            const turretBaseY = 0.9 + (isHeavy ? 1.35 : 1.05) + 0.6 + 0.12;
+            const cosP = Math.cos(gunPitch);
+            this._muzzlePos.set(
+              v.position.x - Math.sin(player.yaw) * cosP * 1.55,
+              v.position.y + turretBaseY + Math.sin(gunPitch) * 1.55,
+              v.position.z - Math.cos(player.yaw) * cosP * 1.55
+            );
+            this.audio.play2D('shot_lmg', 7, 0.55);
+            this.vfx.spawnMuzzleLight(this._muzzlePos.x, this._muzzlePos.y, this._muzzlePos.z);
+            this.vfx.spawnTracer(
+              this._muzzlePos.x,
+              this._muzzlePos.y,
+              this._muzzlePos.z,
+              this._muzzlePos.x + this._turretDir.x * 95,
+              this._muzzlePos.y + this._turretDir.y * 95,
+              this._muzzlePos.z + this._turretDir.z * 95
+            );
+            onTurretHitEnemyCheck(this._muzzlePos, this._turretDir);
+          }
         }
       } else if (v.hostile) {
         if (v.initialGraceTimerSec > 0) {

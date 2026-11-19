@@ -33,6 +33,7 @@ export interface HudPublishContext {
   readonly activeMission: MissionConfig | null;
   readonly worldData: BuiltWorldData | null;
   readonly cargoLiftManager?: CargoLiftManager | null;
+  readonly sustainmentPrompt?: string | null;
   readonly camera?: THREE.PerspectiveCamera;
 }
 
@@ -80,19 +81,28 @@ export class HudSnapshotPublisher {
     nearestVehicle: VehicleEntity | null,
     worldData: BuiltWorldData | null,
     destruction: DestructionSystem,
-    liftPrompt: string | null = null
+    liftPrompt: string | null = null,
+    sustainmentPrompt?: string | null
   ): string | null {
     if (activeVehicle) {
+      if (sustainmentPrompt) {
+        return sustainmentPrompt;
+      }
       return `[E] Exit ${activeVehicle.displayName}`;
+    }
+    if (sustainmentPrompt) {
+      return sustainmentPrompt;
     }
     if (nearestVehicle) {
       return `[E] Drive ${nearestVehicle.displayName}`;
     }
     if (worldData) {
-      for (let i = 0; i < worldData.supplyCrates.length; i++) {
-        const c = worldData.supplyCrates[i];
-        if (!c.used && c.position.distanceTo(player.position) < 3.4) {
-          return '[E] Resupply Ammo & Armor';
+      if (sustainmentPrompt === undefined) {
+        for (let i = 0; i < worldData.supplyCrates.length; i++) {
+          const c = worldData.supplyCrates[i];
+          if (!c.used && c.position.distanceTo(player.position) < 3.4) {
+            return '[E] Resupply Ammo & Armor';
+          }
         }
       }
       const destructibles = destruction.getAll();
@@ -186,7 +196,8 @@ export class HudSnapshotPublisher {
       nearVeh,
       ctx.worldData,
       ctx.destruction,
-      liftCtx.prompt
+      liftCtx.prompt,
+      ctx.sustainmentPrompt ?? null
     );
 
     let nearDemolitionCache = false;
@@ -323,6 +334,8 @@ export class HudSnapshotPublisher {
       vehicleName: veh?.displayName ?? '',
       vehicleHealth: veh ? Math.round((veh.health / veh.maxHealth) * 100) : 100,
       vehicleMaxHealth: 100,
+      vehicleTurretAmmo: veh?.turretAmmo ?? 0,
+      vehicleMaxTurretAmmo: veh?.maxTurretAmmo ?? 0,
       vehicleSpeedKmh: veh ? Math.round(Math.abs(veh.speed) * 3.6) : 0,
       vehicleGear: veh?.driveGear ?? 'FORWARD',
       vehicleSteerDeg: veh ? Math.round(THREE.MathUtils.radToDeg(veh.steerAngle)) : 0,

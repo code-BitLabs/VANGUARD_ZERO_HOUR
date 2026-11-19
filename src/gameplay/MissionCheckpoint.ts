@@ -6,6 +6,7 @@ import {
   ObjectiveActionMetadata,
   ObjectiveType,
 } from '@/src/schemas/mission.schema';
+import { SustainmentEconomySnapshot } from './SustainmentEconomyManager';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 
 export interface MissionAttemptContext {
@@ -38,9 +39,12 @@ export interface MissionCheckpointSnapshot {
   completedObjectiveIds: string[];
   bypassedObjectiveIds?: string[];
   destroyedTargetIds?: string[];
+  sustainmentSnapshot?: SustainmentEconomySnapshot;
   playerSpawn: CheckpointSpawnPose;
   healthAtCheckpoint: number;
   armorAtCheckpoint: number;
+  grenadesAtCheckpoint?: number;
+  c4AtCheckpoint?: number;
   activeWeaponId: WeaponId;
   weaponAmmoState: Partial<Record<WeaponId, WeaponAmmoRecord>>;
   scoreAtCheckpoint: number;

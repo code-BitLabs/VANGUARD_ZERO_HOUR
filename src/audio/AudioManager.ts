@@ -1,6 +1,8 @@
 import { ResourceManager } from '@/src/core/ResourceManager';
-import { AudioSettings } from '@/src/schemas/settings.schema';
+import { AudioSettings, AudioSettingsSchema } from '@/src/schemas/settings.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
+import { MusicMood } from './MusicCatalog';
+import { MusicPlayerController } from './MusicPlayerController';
 
 export type SoundId =
   | 'shot_pistol'
@@ -133,9 +135,11 @@ function getCategoryConcurrencyLimit(category: VoiceCategory): number {
  * - 32-voice deterministic priority pool with category caps and distance attenuation
  */
 export class AudioManager {
+  private static activeInstance: AudioManager | null = null;
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
+  private dialogueGain: GainNode | null = null;
   private musicGain: GainNode | null = null;
   private ambienceGain: GainNode | null = null;
   private reverbNode: ConvolverNode | null = null;
@@ -148,14 +152,43 @@ export class AudioManager {
   private suspendedByLifecycle = false;
   private settings: AudioSettings;
   private listenerPos = { x: 0, y: 1.7, z: 0 };
+  private readonly musicController: MusicPlayerController;
 
   private activeLoopNodes: Array<{ stop: () => void }> = [];
 
   constructor(
     private readonly resourceManager: ResourceManager,
-    initialSettings: AudioSettings
+    initialSettings: Partial<AudioSettings>,
+    onMusicPreferenceChange?: (prefs: {
+      musicTrackId: string;
+      musicShuffle: boolean;
+      musicRepeatMode: 'all' | 'one' | 'off';
+      musicEnabled: boolean;
+    }) => void
   ) {
-    this.settings = initialSettings;
+    const parsed = AudioSettingsSchema.parse(initialSettings);
+    this.settings = parsed;
+    this.musicController = new MusicPlayerController({
+      initialTrackId: parsed.musicTrackId,
+      initialShuffle: parsed.musicShuffle,
+      initialRepeatMode: parsed.musicRepeatMode,
+      onPreferenceChange: onMusicPreferenceChange,
+    });
+    this.musicController.syncPreferences({
+      musicEnabled: parsed.musicEnabled,
+      musicTrackId: parsed.musicTrackId,
+      musicShuffle: parsed.musicShuffle,
+      musicRepeatMode: parsed.musicRepeatMode,
+    });
+    AudioManager.activeInstance = this;
+  }
+
+  public static getActiveInstance(): AudioManager | null {
+    return AudioManager.activeInstance;
+  }
+
+  public getMusicController(): MusicPlayerController {
+    return this.musicController;
   }
 
   public unlock(): void {
@@ -175,14 +208,17 @@ export class AudioManager {
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
       this.sfxGain = this.ctx.createGain();
+      this.dialogueGain = this.ctx.createGain();
       this.musicGain = this.ctx.createGain();
       this.ambienceGain = this.ctx.createGain();
 
       this.sfxGain.connect(this.masterGain);
+      this.dialogueGain.connect(this.masterGain);
       this.musicGain.connect(this.masterGain);
       this.ambienceGain.connect(this.masterGain);
       this.masterGain.connect(this.ctx.destination);
 
+      this.musicController.attachAudioContext(this.ctx, this.musicGain);
       this.setupSharedReverbBus();
       this.applySettings(this.settings);
       this.unlocked = true;
@@ -238,18 +274,38 @@ export class AudioManager {
     return ir;
   }
 
-  public applySettings(settings: AudioSettings): void {
-    this.settings = settings;
+  public applySettings(settings: Partial<AudioSettings>): void {
+    const parsed = AudioSettingsSchema.parse({ ...this.settings, ...settings });
+    this.settings = parsed;
+    this.musicController.syncPreferences({
+      musicEnabled: parsed.musicEnabled,
+      musicTrackId: parsed.musicTrackId,
+      musicShuffle: parsed.musicShuffle,
+      musicRepeatMode: parsed.musicRepeatMode,
+    });
     if (!this.ctx || !this.masterGain || !this.sfxGain || !this.musicGain || !this.ambienceGain) {
       return;
     }
 
     const now = this.ctx.currentTime;
-    const master = this.suspendedByLifecycle || settings.muted ? 0 : settings.masterVolume;
-    this.masterGain.gain.setTargetAtTime(master, now, 0.02);
-    this.sfxGain.gain.setTargetAtTime(settings.sfxVolume, now, 0.02);
-    this.musicGain.gain.setTargetAtTime(settings.musicVolume, now, 0.02);
-    this.ambienceGain.gain.setTargetAtTime(settings.ambienceVolume, now, 0.02);
+    const master = this.suspendedByLifecycle || parsed.muted ? 0 : parsed.masterVolume;
+    // Scale music bus slightly (0.58 headroom factor) so even high slider positions never drown out gunfire or callouts
+    const effectiveMusic = parsed.musicEnabled ? parsed.musicVolume * 0.58 : 0;
+    this.masterGain.gain.setTargetAtTime(master, now, 0.03);
+    this.sfxGain.gain.setTargetAtTime(parsed.sfxVolume, now, 0.02);
+    if (this.dialogueGain) {
+      this.dialogueGain.gain.setTargetAtTime(parsed.dialogueVolume ?? 0.9, now, 0.02);
+    }
+    this.musicGain.gain.setTargetAtTime(effectiveMusic, now, 0.04);
+    this.ambienceGain.gain.setTargetAtTime(parsed.ambienceVolume, now, 0.03);
+  }
+
+  public duckMusicForDialogue(durationSec = 2.6, duckLevel = 0.32): void {
+    this.musicController.duckForDialogue(durationSec, duckLevel);
+  }
+
+  public tick(dt: number): void {
+    this.musicController.tick(dt);
   }
 
   public isSuspendedByLifecycle(): boolean {
@@ -875,21 +931,28 @@ export class AudioManager {
     }
   }
 
-  public startMissionAmbienceAndMusic(): void {
+  public startMissionAmbienceAndMusic(mood?: MusicMood): void {
     this.stopMissionLoops();
-    if (!this.ctx || !this.ambienceGain || !this.musicGain) return;
+    // Multi-track background music system (single-source guarantee, zero duplication on restart)
+    if (this.settings.musicEnabled) {
+      void this.musicController.startForMission(mood, false);
+    }
 
-    const sr = this.ctx.sampleRate || 22050;
-    const len = Math.floor(sr * 2.0);
+    if (!this.ctx || !this.ambienceGain) return;
+
+    // Subtle battlefield atmospheric wind/rumble bed on ambienceGain (completely independent of music tracks)
+    const sr = Math.min(22050, this.ctx.sampleRate || 22050);
+    const len = Math.floor(sr * 2.5);
     const buf = this.ctx.createBuffer(1, len, sr);
     const data = buf.getChannelData(0);
+    let seed = 0x243f6a88;
+    let lp = 0;
     for (let i = 0; i < len; i++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const white = (seed / 0xffffffff) * 2 - 1;
+      lp += (white - lp) * 0.04;
       const t = i / sr;
-      data[i] =
-        (Math.sin(2 * Math.PI * 55 * t) * 0.45 +
-          Math.sin(2 * Math.PI * 82.41 * t) * 0.35 +
-          Math.sin(2 * Math.PI * 110 * t) * 0.2) *
-        0.25;
+      data[i] = (lp * 0.55 + Math.sin(2 * Math.PI * 48 * t) * 0.14) * 0.16;
     }
 
     const src = this.ctx.createBufferSource();
@@ -898,14 +961,14 @@ export class AudioManager {
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 180;
+    filter.frequency.value = 160;
 
     const subGain = this.ctx.createGain();
-    subGain.gain.value = 0.18;
+    subGain.gain.value = 0.22;
 
     src.connect(filter);
     filter.connect(subGain);
-    subGain.connect(this.musicGain);
+    subGain.connect(this.ambienceGain);
 
     src.start(0);
 
@@ -924,7 +987,7 @@ export class AudioManager {
     };
 
     this.activeLoopNodes.push({ stop: stopFn });
-    this.resourceManager.register('audioNode', 'mission:audio', stopFn, 'mission_music_drone');
+    this.resourceManager.register('audioNode', 'mission:audio', stopFn, 'mission_ambience_bed');
   }
 
   public stopMissionLoops(): void {
@@ -932,11 +995,13 @@ export class AudioManager {
       n.stop();
     }
     this.activeLoopNodes = [];
+    this.musicController.stop();
     this.resourceManager.unloadScope('mission:audio');
   }
 
   public suspend(): void {
     this.suspendedByLifecycle = true;
+    this.musicController.suspendForLifecycle();
     this.applySettings(this.settings);
     if (this.ctx) {
       void this.ctx.suspend().catch(() => {});
@@ -949,10 +1014,15 @@ export class AudioManager {
     if (this.ctx) {
       void this.ctx.resume().catch(() => {});
     }
+    void this.musicController.resumeFromLifecycle();
   }
 
   public dispose(): void {
     this.stopMissionLoops();
+    this.musicController.dispose();
+    if (AudioManager.activeInstance === this) {
+      AudioManager.activeInstance = null;
+    }
     for (const v of this.voices) {
       v.stop();
     }
@@ -961,6 +1031,7 @@ export class AudioManager {
     try {
       this.reverbNode?.disconnect();
       this.reverbReturnGain?.disconnect();
+      this.dialogueGain?.disconnect();
     } catch {
       // ignore
     }
@@ -968,6 +1039,7 @@ export class AudioManager {
     this.reverbReturnGain = null;
     this.masterGain = null;
     this.sfxGain = null;
+    this.dialogueGain = null;
     this.musicGain = null;
     this.ambienceGain = null;
     if (this.ctx) {

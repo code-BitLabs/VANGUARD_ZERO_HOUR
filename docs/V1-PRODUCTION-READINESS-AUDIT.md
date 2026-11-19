@@ -62,11 +62,11 @@ During the V1 production-readiness audit, completion audit, and real player feed
 
 | Gate | Command | Result | Status |
 |---|---|---|---|
-| **Unit & Integration Suite (`Vitest`)** | `npx vitest run` | **24 test files passed, 175 tests passed (`0` failed)** | `VERIFIED (Stage 5B Complete)` |
-| **TypeScript Static Analysis** | `npx tsc --noEmit` (`lint_applet`) | **0 errors** | `VERIFIED (Stage 5B Complete)` |
-| **Production Bundle (`Vite 8.3.8`)** | `npm run build` (`compile_applet`) | **Clean build** (`35` prod deps, `9` devDeps; `vendor-audio` and Rapier WASM runtime chunks absent from `dist/assets/`) | `VERIFIED (Stage 5B Complete)` |
-| **Playwright Multi-Viewport E2E** | `npx playwright test e2e/responsive-and-gameplay.spec.ts` | **8 / 8 passed** (`1920×1080`, `1366×768`, `1024×768`, `844×390`, `915×412`, `390×844` portrait gate, Stage 5B context-adaptive HUD & non-pausing `[TAB]` overview) (`0` errors) | `VERIFIED (Headless Chromium)` |
-| **Physical Mobile Hardware QA** | Manual device matrix (`CHECKPOINT.md` Section F) | Requires physical iOS Safari / Android Chrome / In-App WebView devices | `NOT VERIFIED (Container Limit)` |
+| **Unit & Integration Suite (`Vitest`)** | `npx vitest run` | **25 test files passed, 181 tests passed (`0` failed)** | `VERIFIED (Stage 5C Complete)` |
+| **TypeScript Static Analysis** | `npx tsc --noEmit` (`lint_applet`) | **0 errors** | `VERIFIED (Stage 5C Complete)` |
+| **Production Bundle (`Vite 8.3.8`)** | `npm run build` (`compile_applet`) | **Clean build (`1.70s`, `2,014` modules)** (`35` prod deps, `9` devDeps; `vendor-audio` and Rapier WASM runtime chunks absent from `dist/assets/`) | `VERIFIED (Stage 5C Complete)` |
+| **Playwright Multi-Viewport E2E + Live Visual Audit** | `CI=true npx playwright test e2e/responsive-and-gameplay.spec.ts` + CDP live screenshots | **8 / 8 passed** (`1920×1080`, `1366×768`, `1024×768`, `844×390`, `915×412`, `390×844` portrait gate, non-pausing `[TAB]` overview) + visually inspected live M1 `1280×720` & `844×390` renders (`0 WARN`, `0` console errors, `0` overlaps) | `VERIFIED (Headless Chromium / SwiftShader)` |
+| **Physical Mobile Hardware QA** | Manual device matrix (`CHECKPOINT.md` Section F) | Requires physical iOS Safari / Android Chrome / In-App WebView devices & discrete consumer GPUs | `NOT VERIFIED (Container Limit)` |
 
 ---
 
@@ -230,6 +230,14 @@ Each finding below records its exact source location, verified root cause, repro
 ### `TRN-17` (`P1`, Stage 5A) — 3D Vertical Combat, Anatomical Parapet Cover & Campaign Missions 1–5 Integration (`COMPLETE & VERIFIED`)
 - **Exact Source Locations:** `src/gameplay/EnemyManager.ts`, `src/gameplay/MissionCheckpoint.ts`, `src/data/missions.ts`, `src/engine/HudSnapshotPublisher.ts`, `src/engine/GameEngine.ts`, `src/ui/hud/GameHUD.tsx`, `src/tests/stage5MultiLayerNavAndCombat.test.ts`.
 - **Verified Root Cause & Resolution:** Added 3D chest/crouch-head/stand-head `sweptSegmentTest` rooftop parapet cover validation, elevated enemy waves across Missions 1–5, HUD objective elevation badges (`▲+XM`/`▼XM`) + `hud-lift-status`, multi-floor safe checkpoint spawning, desktop/mobile HUD overlap fixes (`GameHUD.tsx`), and verified `0` `ResourceManager` disposal leaks across all 5 missions.
+
+### `TRN-18`–`TRN-22` (`P0 / P1`, Stage 5B) — AAA Visual Experience, Operator IK, Atmospheric Rendering, Adaptive HUD & Production Asset Pipeline (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/world/VisualBible.ts`, `src/world/StructureReconciliationRegistry.ts`, `src/gameplay/OperatorArmRig.ts`, `src/gameplay/FirstPersonAnimationGraph.ts`, `src/world/LightingRig.ts`, `src/engine/RenderingBenchmarkSlice.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/hud/WeaponSilhouette.tsx`, `src/assets/AssetPipeline.ts`, `src/tests/stage5bVisualAndAssetPipeline.test.ts`.
+- **Verified Root Cause & Resolution:** Delivered 5-mission art direction with reconciled `+9.0m` watchtower height parity, 2-bone Operator Arm IK + interruptible animation graph, GLSL Rayleigh/Mie atmospheric sky dome, context-adaptive desktop/mobile HUD with non-pausing `[TAB]` overview, and a 5-layer typed Asset Pipeline (`32` canonical assets validated by `AssetQualityGate`).
+
+### `TRN-23`–`TRN-29` (`P0 / P1`, Stage 5C) — Deep Physics/AI Locomotion Stabilization, Screenshot Defect Elimination (`SC-01`–`SC-10`), God-File Modularization & Leak Hardening (`COMPLETE & VERIFIED`)
+- **Exact Source Locations:** `src/physics/OrientedSlope.ts`, `src/engine/physics/CollisionResponseSystem.ts`, `src/engine/physics/PhysicsWorld.ts`, `src/gameplay/ai/{EnemyLocomotionSolver,EnemyAnimationSync,EnemyTelemetryMapper,AiStressArena}.ts`, `src/gameplay/EnemyManager.ts`, `src/gameplay/vehicle/VehicleKinematics.ts`, `src/gameplay/VehicleManager.ts`, `src/world/builders/WorldPropsAndLandmarks.ts`, `src/world/MapBuilder.ts`, `src/ui/hud/{TacticalMiniMap,TacticalOverlays}.tsx`, `src/ui/hud/GameHUD.tsx`, `src/effects/VFXPool.ts`, `src/gameplay/HealthPickupManager.ts`, `src/gameplay/diagnostics/DiagnosticRulesEngine.ts`, `src/engine/{GameEngine,Renderer,GameLoop}.ts`, `src/gameplay/PlayerController.ts`, `src/tests/stage5cPhysicsAiAndIntegrity.test.ts`.
+- **Verified Root Cause & Resolution:** Eliminated all 10 screenshot-confirmed defects (`SC-01`–`SC-10`), decomposed 4 god-files (`EnemyManager`, `MapBuilder`, `GameHUD`, `VehicleManager`), hardened foot-base ledge support & anti-tunneling staircase side-rails, proved 10/10 AI locomotion stress invariants, eliminated all 321-resource diorama/pickup leaks (`0` mission resources remaining across all 6 scopes), deduplicated/TTL-expired diagnostics (`0 WARN` live), and added SwiftShader/software-GL pacing. Full 14-section report in `docs/STAGE-5C-ENGINEERING-REPORT.md`.
 
 ---
 

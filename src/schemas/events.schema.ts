@@ -197,6 +197,8 @@ export const HudSnapshotSchema = z.object({
   vehicleName: z.string(),
   vehicleHealth: z.number().min(0).max(100),
   vehicleMaxHealth: z.number().positive(),
+  vehicleTurretAmmo: z.number().int().min(0).default(0),
+  vehicleMaxTurretAmmo: z.number().int().min(0).default(0),
   vehicleSpeedKmh: z.number().nonnegative(),
   vehicleGear: VehicleDriveGearSchema.default('NEUTRAL_HOLD'),
   vehicleSteerDeg: z.number().default(0),

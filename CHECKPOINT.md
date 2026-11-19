@@ -7,7 +7,7 @@
 ---
 
 ## B. Current Project State, Provenance & Recovery Baseline
-- **Phase:** **Stage 1 (`TRN-01`, `TRN-03`, `TRN-04`), Stage 2 (`TRN-05`, `TRN-06`, `TRN-02A`, `TRN-02B`), Stage 3 (`TRN-07`, `TRN-08`, `TRN-09`), Stage 4A (`TRN-12`, `TRN-10`, `TRN-11`), Stage 4B (`TRN-13`, `TRN-14`), Stage 5A (`TRN-15`, `TRN-16`, `TRN-17`), and Stage 5B (`TRN-18`, `TRN-19`, `TRN-20`, `TRN-21`, `TRN-22` — AAA Visual Experience, Hybrid Asset Pipeline, Articulated First-Person Rig & Animation Graph, Atmospheric Rendering & Context-Adaptive Tactical HUD) Complete & Verified**
+- **Phase:** **Stage 1 (`TRN-01`, `TRN-03`, `TRN-04`), Stage 2 (`TRN-05`, `TRN-06`, `TRN-02A`, `TRN-02B`), Stage 3 (`TRN-07`, `TRN-08`, `TRN-09`), Stage 4A (`TRN-12`, `TRN-10`, `TRN-11`), Stage 4B (`TRN-13`, `TRN-14`), Stage 5A (`TRN-15`, `TRN-16`, `TRN-17`), Stage 5B (`TRN-18`–`TRN-22`), and Stage 5C (`TRN-23`–`TRN-29` — Deep Physics/AI Locomotion Stabilization, Screenshot Defect Elimination `SC-01`–`SC-10`, God-File Modularization & Software-GL/Leak Hardening) Complete & Verified**
 - **Repository Provenance:** Workspace `/app/applet` has no persistent `.git` directory inside `/app/applet`; an external git worktree tracker (`/var/tmp/vanguard.git`) and the read-only recovery baseline (`/var/tmp/vanguard-v1-recovery-baseline`) track all changes without fabricating historical commits.
 - **Verified Project Recovery Baseline (`/var/tmp/vanguard-v1-recovery-baseline`):**
   - **Protected Archive:** `/var/tmp/vanguard-v1-recovery-baseline/vanguard-v1-baseline.tar.gz` (`chmod 0444` — local accidental-modification protection, not tamper-proof immutability)
@@ -36,12 +36,19 @@
   - `TRN-20`: Implemented GLSL Rayleigh/Mie atmospheric `skyDome` (`LightingRig.ts` with `camera.far >= 520` across all tiers), `TacticalLightBudgetManager` + WebGL2/WebGPU vertical slice evaluator (`RenderingBenchmarkSlice.ts`), and 60/90/120 Hz display refresh budget calibration (`PerformanceGovernor.ts`), plus Chromium pointer-lock cursor-warp spike guarding (`InputManager.ts`) and Frame 0 camera alignment (`GameEngine.ts`).
   - `TRN-21`: Rebuilt `GameHUD.tsx` as a context-adaptive tactical HUD with clean zero-overlap top-bar spacing (desktop & mobile `844×390`), `WeaponSilhouette.tsx` vector silhouettes, non-pausing `[TAB]` Tactical Overview Drawer (`uiStore.ts`), LOS/stale/elevation radar intelligence (`EnemyManager.ts`), and preserved `[N] TRIDENT-X` + zero `backdrop-filter` over the active 3D viewport.
   - `TRN-22`: Built `AssetPipeline.ts` 5-layer production domain model (`32` canonical asset definitions, provenance/license tracking, content-addressed hashing, build-time compression strategy selection, and `AssetQualityGate.validateCatalog()`).
-- **Tests (`Vitest`):** 24 test files, 175 tests passing (`npx vitest run`, including 20 Stage 5B tests in `src/tests/stage5bVisualAndAssetPipeline.test.ts`)
+- **Stage 5C Deep Stabilization, Screenshot Defect Elimination (`SC-01`–`SC-10`) & God-File Decomposition (`TRN-23`–`TRN-29` Verified):**
+  - `TRN-23` (`SC-02`, `SC-03`): Tightened elevated slab foot-base support radius (`max(0.14, radius * 0.48)` in `CollisionResponseSystem.ts` and `0.18m` in `PhysicsWorld.getSupportHeightAt`), added anti-tunneling slanted lateral side-rail containment on railed stairs/ramps (`OrientedSlope.ts`, `CollisionResponseSystem.ts`, `VerticalStructuresBuilder.ts`), and eliminated edge-cantilever hovering.
+  - `TRN-24` (`SC-02`, `SC-03`, `SC-07`): Extracted `EnemyLocomotionSolver.ts` (`21.5 m/s²` continuous gravity for stationary & moving units, 3-ray chest whiskers, 3D elevation-gated separation `|dy| <= 1.65m`, deterministic stuck recovery), `EnemyAnimationSync.ts` (`computeGroundedHipY` deep tactical crouch with `0.000m` boot sink, real-displacement walk phase, raycast-occluded sniper laser), `EnemyTelemetryMapper.ts` (real `grounded ? 'GROUNDED' : 'AIRBORNE'` telemetry), and built the 10-scenario deterministic `AiStressArena.ts` (10/10 passing).
+  - `TRN-25` & `TRN-28` (`SC-10`): Added smooth stair step-up camera damping (`eyeStepOffset`, exponential `18/s` decay in `PlayerController.ts`), audited reload interruption on vehicle entry/death/switch (`WeaponSystem.ts`), removed `backdrop-blur-[2px]` from `TacticalOverlays.tsx` so zero `backdrop-filter` exists over the active WebGL canvas.
+  - `TRN-26` (`SC-09`): Decomposed 4 largest god-files: `EnemyManager.ts` (`2,465 → 1,961` LOC via `EnemyAnimationSync.ts`, `EnemyLocomotionSolver.ts`, `EnemyTelemetryMapper.ts`), `MapBuilder.ts` (`2,179 → 1,227` LOC via `WorldPropsAndLandmarks.ts`), `GameHUD.tsx` (`1,463 → 1,229` LOC via `TacticalMiniMap.tsx` + `TacticalOverlays.tsx`), and `VehicleManager.ts` (`1,443 → 1,259` LOC via `VehicleKinematics.ts`).
+  - `TRN-27` (`SC-04`, `SC-05`): Fixed `VFXPool.ts` recycled particle scale resets (eliminating giant translucent red spheres), replaced 64.8m static yellow tracer beams with slim `1.8cm` traveling streaks (`<= 3.8m`), and replaced the floating green M1 rectangle with a grounded steel box-truss highway portal (`WorldPropsAndLandmarks.ts`).
+  - `TRN-29` (`SC-01`, `SC-06`, `SC-08`): Fixed menu diorama & `HealthPickupManager` scope leaks (`mission:0` + active scope cleanup in `GameEngine.ts`, `0` remaining mission resources across all 6 scopes), deduplicated & TTL-expired warnings in `DiagnosticRulesEngine.ts` (live HUD verified `0 WARN` / green `DIAG`), and added `isSoftwareGl` software-WebGL detection + `4ms` frame yield (`Renderer.ts`, `GameLoop.ts`).
+- **Tests (`Vitest`):** 25 test files, 181 tests passing (`npx vitest run`, including 6 Stage 5C integration/stress tests in `src/tests/stage5cPhysicsAiAndIntegrity.test.ts`)
 - **Typecheck (`tsc --noEmit`):** 0 errors
-- **Build (`Vite 8.3.8`):** Clean production build (`npm run build`)
-- **Playwright E2E:** 8 / 8 tests passed in headless Chromium (`chrome-headless-shell`, SwiftShader WebGL) across Desktop (`1920×1080`, `1366×768`), Tablet (`1024×768`), and Mobile Landscape/Portrait (`844×390`, `915×412`, `390×844`) (`0` page/console errors), including Stage 5B context-adaptive HUD, gold weapon silhouette, mobile top-bar zero-overlap, and non-pausing `[TAB]` tactical overview.
+- **Build (`Vite 8.3.8`):** Clean production build (`npm run build` in `1.70s`, `2,014` modules transformed)
+- **Playwright E2E:** 8 / 8 tests passed in headless Chromium (`chrome-headless-shell`, SwiftShader WebGL) across Desktop (`1920×1080`, `1366×768`), Tablet (`1024×768`), and Mobile Landscape/Portrait (`844×390`, `915×412`, `390×844`) (`0` page/console errors), plus visually inspected live CDP screenshots of Mission 1 Desktop (`1280×720`) and Mobile Landscape (`844×390`) confirming `0 WARN`, zero `RESOURCE_LEAK_SUSPECTED`, grounded box-truss highway gantry, zero HUD overlaps, and zero `backdrop-filter` over the active WebGL canvas.
 - **Measured Benchmarks & Budgets:**
-  - `TRN-01` (`src/tests/tacticalNavigation.test.ts`): Open `160×160` A* = `0.1692 ms/query`, Jungle River Bridge Detour (`919` expansions) = `0.9274 ms/query`, Sealed Unreachable Partial Recovery = `2.2291 ms/query`, 15-Enemy `EnemyManager.update()` = `1.3071 ms/tick` (full parallel Vitest run; `0.9665 ms/tick` isolated).
+  - `TRN-01` (`src/tests/tacticalNavigation.test.ts`): Open `160×160` A* = `0.0689 ms/query`, Jungle River Bridge Detour (`919` expansions) = `0.3786 ms/query`, Sealed Unreachable Partial Recovery = `2.3758 ms/query`, 15-Enemy `EnemyManager.update()` = `0.9370 ms/tick` (full parallel Vitest run).
   - `TRN-06` (`src/tests/weaponAndEnemyAnimation.test.ts`): `WeaponSystem.update()` = `0.0111 ms/tick`; articulated `EnemyManager` kinematics = `0.0562 ms/tick` (`5` units), `0.1425 ms/tick` (`15` units), `0.9162 ms/tick` (`30` units).
   - `TRN-07` (`src/tests/stage2And3Batch.test.ts`): 8 procedural PBR surface profiles × 4 channels (`albedoMap` in `SRGBColorSpace`, `normalMap`, `roughnessMap`, `metalnessMap` in `NoColorSpace`); GPU VRAM footprint = `42.67 MiB` on `high`/`ultra` (`512×512`), `10.67 MiB` on `medium` (`256×256`), `2.67 MiB` on `low` (`128×128`), strictly below the `45 MiB` budget; shared architectural building trim geometries disposed cleanly on mission reset.
   - `TRN-08` (`src/tests/stage2And3Batch.test.ts`): 4-layer stereo weapon/ordnance synthesis + shared `ConvolverNode` impulse reverb bus + 32-voice priority pool (`combat_spatial <= 8`, `reload_foley <= 2`) + stage-synchronized reload Foley with immediate interrupt cancellation.
@@ -106,17 +113,25 @@
 | **`TRN-20`** | **Atmospheric GLSL SkyDome, `TacticalLightBudgetManager` & 60/90/120 Hz Refresh Calibration** | **P1** | **Stage 5B** | `IMPROVE` | `src/world/LightingRig.ts`, `src/engine/RenderingBenchmarkSlice.ts`, `src/engine/Renderer.ts`, `src/engine/PerformanceGovernor.ts`, `src/engine/InputManager.ts`, `src/engine/GameEngine.ts`, `src/tests/stage5bVisualAndAssetPipeline.test.ts` | **COMPLETE & VERIFIED** (`camera.far >= 520` + pointer-lock warp & Frame 0 fixes) |
 | **`TRN-21`** | **Context-Adaptive Tactical HUD, `[TAB]` Tactical Overview & Radar Intelligence** | **P0** | **Stage 5B** | `IMPROVE` / `REFACTOR` | `src/ui/hud/GameHUD.tsx`, `src/ui/hud/WeaponSilhouette.tsx`, `src/engine/HudSnapshotPublisher.ts`, `src/gameplay/EnemyManager.ts`, `src/stores/uiStore.ts`, `e2e/responsive-and-gameplay.spec.ts` | **COMPLETE & VERIFIED** (Playwright Tests 7 & 8 + Mobile/Desktop zero-overlap) |
 | **`TRN-22`** | **Production Asset Pipeline, 5-Layer Domain Model & `AssetQualityGate`** | **P0** | **Stage 5B** | `IMPROVE` | `src/assets/AssetPipeline.ts`, `src/core/AssetManager.ts`, `src/tests/stage5bVisualAndAssetPipeline.test.ts` | **COMPLETE & VERIFIED** (`32` canonical assets validated cleanly) |
+| **`TRN-23`** | **Physics, Foot-Base Support, Anti-Tunneling Stair Side-Rails & Slope Descent (`SC-02`, `SC-03`)** | **P0** | **Stage 5C** | `IMPROVE` | `src/physics/OrientedSlope.ts`, `src/engine/physics/CollisionResponseSystem.ts`, `src/engine/physics/PhysicsWorld.ts`, `src/world/VerticalStructuresBuilder.ts`, `src/tests/stage5cPhysicsAiAndIntegrity.test.ts` | **COMPLETE & VERIFIED** (`0` rail escapes, zero roof-edge cantilevering) |
+| **`TRN-24`** | **AI Locomotion Gravity, 3D Separation, Animation Sync, Occluded Laser & 10-Scenario Stress Arena (`SC-02`, `SC-03`, `SC-07`)** | **P0** | **Stage 5C** | `IMPROVE` / `REFACTOR` | `src/gameplay/ai/EnemyLocomotionSolver.ts`, `src/gameplay/ai/EnemyAnimationSync.ts`, `src/gameplay/ai/EnemyTelemetryMapper.ts`, `src/gameplay/ai/AiStressArena.ts`, `src/gameplay/EnemyManager.ts` | **COMPLETE & VERIFIED** (`10/10` stress arena invariants passed) |
+| **`TRN-25`** | **Whole-Game Gameplay State Integrity (Weapons, Reload Cancellation, Vehicles, Lifts, Checkpoints)** | **P1** | **Stage 5C** | `IMPROVE` | `src/gameplay/WeaponSystem.ts`, `src/gameplay/VehicleManager.ts`, `src/gameplay/vehicle/VehicleKinematics.ts`, `src/gameplay/CargoLiftManager.ts` | **COMPLETE & VERIFIED** (`181/181` Vitest regression pass) |
+| **`TRN-26`** | **God-File Elimination & LLD Modularization (`SC-09`)** | **P1** | **Stage 5C** | `REFACTOR` | `src/gameplay/EnemyManager.ts`, `src/world/MapBuilder.ts`, `src/world/builders/WorldPropsAndLandmarks.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/hud/TacticalMiniMap.tsx`, `src/ui/hud/TacticalOverlays.tsx`, `src/gameplay/VehicleManager.ts`, `src/gameplay/vehicle/VehicleKinematics.ts` | **COMPLETE & VERIFIED** (`4` god-files decomposed cleanly) |
+| **`TRN-27`** | **Visual, VFX Pool & World Landmark Integrity (`SC-04`, `SC-05`)** | **P0** | **Stage 5C** | `IMPROVE` | `src/effects/VFXPool.ts`, `src/world/builders/WorldPropsAndLandmarks.ts`, `src/tests/stage5cPhysicsAiAndIntegrity.test.ts` | **COMPLETE & VERIFIED** (Verified via live M1 screenshots) |
+| **`TRN-28`** | **HUD, Camera Stair-Step Damping, Audio & Zero Backdrop-Filter Audit (`SC-10`)** | **P1** | **Stage 5C** | `IMPROVE` | `src/gameplay/PlayerController.ts`, `src/ui/hud/GameHUD.tsx`, `src/ui/hud/TacticalOverlays.tsx` | **COMPLETE & VERIFIED** (`hasBackdropOverCanvas: false` verified live) |
+| **`TRN-29`** | **Memory/Resource Leak Elimination, Diagnostic Deduplication & Software-GL Pacing (`SC-01`, `SC-06`, `SC-08`)** | **P0** | **Stage 5C** | `IMPROVE` | `src/engine/GameEngine.ts`, `src/gameplay/HealthPickupManager.ts`, `src/gameplay/diagnostics/DiagnosticRulesEngine.ts`, `src/engine/Renderer.ts`, `src/engine/GameLoop.ts`, `src/ui/debug/CombatDebugOverlay.tsx` | **COMPLETE & VERIFIED** (`0` mission leaks across all 6 scopes, live `0 WARN`) |
 
 ---
 
 ## E. Verification Layers & Scope Distinction
 
 1. **Automated Unit & Integration Tests (Verified):**
-   - `npx vitest run` → **24 test files passed, 175 tests passed (0 failed)**.
+   - `npx vitest run` → **25 test files passed, 181 tests passed (0 failed)**.
    - `npx tsc --noEmit` → **0 errors**.
-   - `npm run build` (`compile_applet`) + `lint_applet` → **clean production bundle**.
-2. **Automated Browser Verification & Browser Emulation (Verified in Headless Chromium):**
+   - `npm run build` (`compile_applet`) + `lint_applet` → **clean production bundle (`1.70s`, `2,014` modules)**.
+2. **Automated Browser Verification & Visual Inspection (Verified in Headless Chromium):**
    - `npx playwright test e2e/responsive-and-gameplay.spec.ts` → **8 / 8 passed** using SwiftShader WebGL in `chrome-headless-shell`.
+   - Live Mission 1 CDP screenshots captured and visually verified at Desktop (`1280×720`) and Mobile Landscape (`844×390`) confirming `0 WARN`, zero `RESOURCE_LEAK_SUSPECTED`, grounded box-truss highway gantry, zero HUD overlaps, and `0` console/page errors.
 3. **Physical Hardware Verification (NOT Verified in Container):**
    - No physical iOS or Android devices are attached in this container environment. Glass-to-photon touch latency, sustained thermal GPU throttling, real OS-level safe-area notches, non-PWA iOS Safari URL-bar dynamics, and audio-focus phone interruptions require physical device QA using the matrix below.
 
@@ -157,7 +172,13 @@ Execute on physical **iOS Safari (iPhone 13/14/15/16)**, **Android Chrome (Pixel
 
 ---
 
-## I. Last Updated
-- **Timestamp:** 2026-11-18T13:05:00Z
-- **Author:** Stage 5B (`TRN-18`–`TRN-22` AAA Visual Experience, Hybrid Asset Pipeline, Operator/Weapon/Faction/Vehicle Rigs, Atmospheric Rendering & Context-Adaptive HUD + Post-Verification Hardening) Completed & Verified
+## I. Stage 5C Stabilization, Screenshot Defect Elimination & Modularization (`TRN-23`–`TRN-29`)
+
+Full 14-section technical report published in `docs/STAGE-5C-ENGINEERING-REPORT.md`. All 10 screenshot-identified defects (`SC-01`–`SC-10`) were eliminated and verified across `181/181` Vitest tests, `8/8` Playwright E2E tests, and visually inspected live Desktop (`1280×720`) and Mobile Landscape (`844×390`) renders (`0 WARN`, `0` console errors, `0` mission resource leaks).
+
+---
+
+## J. Last Updated
+- **Timestamp:** 2026-11-19T01:58:00Z
+- **Author:** Stage 5C (`TRN-23`–`TRN-29` Physics/AI Locomotion Stabilization, `SC-01`–`SC-10` Screenshot Defect Elimination, God-File Modularization & Software-GL/Leak Hardening) Completed & Verified
 

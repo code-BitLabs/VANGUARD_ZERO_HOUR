@@ -274,6 +274,29 @@ export class PlayerController {
     this.spawnProtectionRemainingSec = this.spawnGraceDurationSec;
   }
 
+  restoreHealthAndArmor(hpDelta: number, armorDelta: number): { hpAdded: number; armorAdded: number } {
+    if (!this.alive) return { hpAdded: 0, armorAdded: 0 };
+    const beforeHp = this.health;
+    const beforeArmor = this.armor;
+    if (hpDelta > 0) {
+      this.health = Math.min(this.maxHealth, this.health + hpDelta);
+    }
+    if (armorDelta > 0) {
+      this.armor = Math.min(this.maxArmor, this.armor + armorDelta);
+    }
+    return {
+      hpAdded: Math.max(0, Math.round(this.health - beforeHp)),
+      armorAdded: Math.max(0, Math.round(this.armor - beforeArmor)),
+    };
+  }
+
+  resupplyGrenades(count: number, maxCap = 4): number {
+    if (!this.alive || count <= 0) return 0;
+    const before = this.grenades;
+    this.grenades = Math.min(maxCap, this.grenades + count);
+    return Math.max(0, this.grenades - before);
+  }
+
   addRecoilKick(pitchKick: number, yawKick: number): void {
     const stanceScale = this.isCrouching ? 0.78 : 1.0;
     this.recoilPitchOffset = Math.min(0.28, this.recoilPitchOffset + pitchKick * stanceScale);

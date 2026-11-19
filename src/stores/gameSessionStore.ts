@@ -114,6 +114,8 @@ const DEFAULT_HUD: HudSnapshot = {
   vehicleName: '',
   vehicleHealth: 100,
   vehicleMaxHealth: 100,
+  vehicleTurretAmmo: 0,
+  vehicleMaxTurretAmmo: 0,
   vehicleSpeedKmh: 0,
   vehicleGear: 'NEUTRAL_HOLD',
   vehicleSteerDeg: 0,

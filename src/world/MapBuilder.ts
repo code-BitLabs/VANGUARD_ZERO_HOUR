@@ -19,6 +19,7 @@ import {
 import { WorldChunkManager } from './WorldChunkManager';
 import { getMissionVisualProfile } from './VisualBible';
 import { globalStructureReconciliation } from './StructureReconciliationRegistry';
+import { SustainmentStationKind } from '@/src/gameplay/SustainmentEconomyManager';
 import {
   buildCompositeBridge,
   buildConcreteBarrier,
@@ -27,18 +28,28 @@ import {
   buildExtractionBeacon,
   buildFuelTank,
   buildInstancedJungleTrees,
+  buildMedArmorStation,
   buildMissionEnvironmentalStorytelling,
   buildMovingGantry,
   buildPerimeterRidges,
   buildRadarRelay,
   buildSupplyCrate,
+  buildVehicleServiceBay,
   buildWeaponsCache,
 } from './builders/WorldPropsAndLandmarks';
 
 export interface BuiltWorldData {
   coverNodes: THREE.Vector3[];
   roadWaypoints: THREE.Vector3[];
-  supplyCrates: Array<{ id: string; position: THREE.Vector3; used: boolean; mesh: THREE.Group }>;
+  supplyCrates: Array<{
+    id: string;
+    kind?: SustainmentStationKind;
+    maxCharges?: number;
+    position: THREE.Vector3;
+    used: boolean;
+    mesh: THREE.Group;
+    statusLightMesh?: THREE.Mesh | null;
+  }>;
   animatedProps: Array<{ update: (elapsed: number) => void }>;
   extractionBeacon: THREE.Group | null;
   elevatedSurfaces: ElevatedNavSurfaceDescriptor[];
@@ -495,26 +506,43 @@ export function buildWorldMap(
     return y;
   };
 
-  const placeSupplyCrateAt = (id: string, kx: number, ky: number, kz: number) => {
-    const crate = buildSupplyCrate(assetManager, resourceManager, scope);
-    crate.position.set(kx, ky, kz);
-    chunkManager.registerObject(crate, kx, kz, scene);
-    collisionWorld.addStaticBox({
-      id,
-      minX: kx - 0.78,
-      minY: ky,
-      minZ: kz - 0.54,
-      maxX: kx + 0.78,
-      maxY: ky + 0.92,
-      maxZ: kz + 0.54,
-      layer: COLLISION_LAYER.COVER,
-      tag: 'supply_crate',
-    });
+  const placeSupplyCrateAt = (
+    id: string,
+    kx: number,
+    ky: number,
+    kz: number,
+    kind: SustainmentStationKind = 'ammo_crate',
+    maxCharges = 2
+  ) => {
+    const mesh =
+      kind === 'med_armor_station'
+        ? buildMedArmorStation(assetManager, resourceManager, scope)
+        : kind === 'vehicle_service_bay'
+          ? buildVehicleServiceBay(assetManager, resourceManager, scope)
+          : buildSupplyCrate(assetManager, resourceManager, scope);
+    mesh.position.set(kx, ky, kz);
+    chunkManager.registerObject(mesh, kx, kz, scene);
+    if (kind !== 'vehicle_service_bay') {
+      collisionWorld.addStaticBox({
+        id,
+        minX: kx - 0.78,
+        minY: ky,
+        minZ: kz - 0.54,
+        maxX: kx + 0.78,
+        maxY: ky + (kind === 'med_armor_station' ? 1.48 : 0.92),
+        maxZ: kz + 0.54,
+        layer: COLLISION_LAYER.COVER,
+        tag: 'supply_crate',
+      });
+    }
     supplyCrates.push({
       id,
+      kind,
+      maxCharges,
       position: new THREE.Vector3(kx, ky, kz),
       used: false,
-      mesh: crate,
+      mesh,
+      statusLightMesh: (mesh.userData.statusLightMesh as THREE.Mesh | undefined) ?? null,
     });
   };
 
@@ -1175,15 +1203,91 @@ export function buildWorldMap(
     });
   });
 
-  // Resupply Ammo & Armor Crates (Interact [E]) — registered with physical colliders
-  const crateCoords: Array<[number, number]> = [
-    [-6, 46],
-    [12, 2],
-    [-12, -30],
-  ];
-  crateCoords.forEach(([kx, kz], i) => {
+  // Mission-tailored Tactical Sustainment Stations (Ammo Crates, Med/Armor Stations, Vehicle Repair Bays)
+  const ammoCrateCoords: Array<[number, number, number]> =
+    missionId === 2
+      ? [
+          [-8, 52, 2],
+          [14, 6, 2],
+          [-14, -32, 2],
+        ]
+      : missionId === 3
+        ? [
+            [-6, 36, 3],
+            [12, 2, 3],
+            [-12, -26, 2],
+          ]
+        : missionId === 4
+          ? [
+              [-6, 48, 2],
+              [10, -4, 2],
+              [-14, -30, 2],
+            ]
+          : missionId === 5
+            ? [
+                [-8, 50, 2],
+                [14, 12, 2],
+                [-12, -28, 3],
+              ]
+            : [
+                [-6, 46, 2],
+                [12, 2, 2],
+                [-12, -30, 2],
+              ];
+  ammoCrateCoords.forEach(([kx, kz, charges], i) => {
     const ky = Math.max(0, heightFn(kx, kz));
-    placeSupplyCrateAt(`supply_${i}`, kx, ky, kz);
+    placeSupplyCrateAt(`supply_${i}`, kx, ky, kz, 'ammo_crate', charges);
+  });
+
+  const medArmorCoords: Array<[number, number]> =
+    missionId === 2
+      ? [
+          [11, 40],
+          [-12, -16],
+        ]
+      : missionId === 3
+        ? [
+            [10, 26],
+            [-14, -14],
+          ]
+        : missionId === 4
+          ? [
+              [8, 34],
+              [-10, -18],
+            ]
+          : missionId === 5
+            ? [
+                [10, 32],
+                [-14, -12],
+                [12, -46],
+              ]
+            : [
+                [10, 34],
+                [-12, -12],
+              ];
+  medArmorCoords.forEach(([mx, mz], i) => {
+    const my = Math.max(0, heightFn(mx, mz));
+    placeSupplyCrateAt(`med_station_${i}`, mx, my, mz, 'med_armor_station', 2);
+  });
+
+  // Vehicle Repair & Rearm Bays along driveable highway corridors on vehicle-active missions
+  const vehicleBayCoords: Array<[number, number]> =
+    missionId === 2
+      ? [
+          [-9, 32],
+          [9, -18],
+        ]
+      : missionId === 5
+        ? [
+            [-10, 34],
+            [9, -34],
+          ]
+        : missionId === 1 || missionId === 3
+          ? [[-9, 24]]
+          : [[-9, 36]];
+  vehicleBayCoords.forEach(([vx, vz], i) => {
+    const vy = Math.max(0, heightFn(vx, vz));
+    placeSupplyCrateAt(`vehicle_bay_${i}`, vx, vy, vz, 'vehicle_service_bay', 2);
   });
 
   // Natural mountain/perimeter ridge ring around 116m radius so outdoor maps feel expansive

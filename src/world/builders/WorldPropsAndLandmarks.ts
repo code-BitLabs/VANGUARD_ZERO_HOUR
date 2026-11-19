@@ -735,11 +735,8 @@ export function buildSupplyCrate(assets: AssetManager, res: ResourceManager, sco
     roughness: 0.65,
     metalness: 0.25,
   });
-  const glow = assets.getSharedMaterial('supply_cyan', {
-    color: 0x06b6d4,
-    emissive: 0x06b6d4,
-    emissiveIntensity: 0.8,
-  });
+  const glow = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+  res.registerMaterial(glow, scope);
   const bodyGeo = new THREE.BoxGeometry(1.5, 0.9, 1.0);
   res.registerGeometry(bodyGeo, scope);
   const body = new THREE.Mesh(bodyGeo, olive);
@@ -752,6 +749,131 @@ export function buildSupplyCrate(assets: AssetManager, res: ResourceManager, sco
   const strip = new THREE.Mesh(stripGeo, glow);
   strip.position.y = 0.72;
   g.add(strip);
+  g.userData.statusLightMesh = strip;
+  return g;
+}
+
+export function buildMedArmorStation(
+  assets: AssetManager,
+  res: ResourceManager,
+  scope: ResourceScope
+): THREE.Group {
+  const g = new THREE.Group();
+  const cabinetMat = assets.getSharedMaterial('med_station_cabinet', {
+    color: 0xdbe4ee,
+    roughness: 0.45,
+    metalness: 0.28,
+  });
+  const trimMat = assets.getSharedMaterial('med_station_trim', {
+    color: 0x1e293b,
+    roughness: 0.55,
+    metalness: 0.45,
+  });
+  const crossMat = assets.getSharedMaterial('med_station_cross', {
+    color: 0xdc2626,
+    emissive: 0x991b1b,
+    emissiveIntensity: 0.35,
+    roughness: 0.35,
+  });
+  const lightMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  res.registerMaterial(lightMat, scope);
+
+  const baseGeo = new THREE.BoxGeometry(1.35, 1.38, 0.82);
+  res.registerGeometry(baseGeo, scope);
+  const base = new THREE.Mesh(baseGeo, cabinetMat);
+  base.position.y = 0.69;
+  base.castShadow = true;
+  g.add(base);
+
+  const capGeo = new THREE.BoxGeometry(1.42, 0.14, 0.88);
+  res.registerGeometry(capGeo, scope);
+  const cap = new THREE.Mesh(capGeo, trimMat);
+  cap.position.y = 1.42;
+  g.add(cap);
+
+  const crossHGeo = new THREE.BoxGeometry(0.42, 0.12, 0.04);
+  const crossVGeo = new THREE.BoxGeometry(0.12, 0.42, 0.04);
+  res.registerGeometry(crossHGeo, scope);
+  res.registerGeometry(crossVGeo, scope);
+  for (const zSign of [-1, 1]) {
+    const ch = new THREE.Mesh(crossHGeo, crossMat);
+    ch.position.set(0, 0.84, zSign * 0.42);
+    const cv = new THREE.Mesh(crossVGeo, crossMat);
+    cv.position.set(0, 0.84, zSign * 0.42);
+    g.add(ch, cv);
+  }
+
+  const lightGeo = new THREE.BoxGeometry(1.24, 0.1, 0.86);
+  res.registerGeometry(lightGeo, scope);
+  const lightBar = new THREE.Mesh(lightGeo, lightMat);
+  lightBar.position.y = 1.24;
+  g.add(lightBar);
+  g.userData.statusLightMesh = lightBar;
+  return g;
+}
+
+export function buildVehicleServiceBay(
+  assets: AssetManager,
+  res: ResourceManager,
+  scope: ResourceScope
+): THREE.Group {
+  const g = new THREE.Group();
+  const steelMat = assets.getSharedMaterial('service_bay_steel', {
+    pattern: 'metal_plate',
+    color: 0x334155,
+    roughness: 0.52,
+    metalness: 0.72,
+  });
+  const hazardMat = assets.getSharedMaterial('service_bay_hazard', {
+    pattern: 'warning_stripe',
+    roughness: 0.6,
+    metalness: 0.25,
+  });
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+  res.registerMaterial(beaconMat, scope);
+
+  // Drive-on steel pad (flush with road so vehicles drive freely onto it)
+  const padGeo = new THREE.BoxGeometry(5.6, 0.08, 7.2);
+  res.registerGeometry(padGeo, scope);
+  const pad = new THREE.Mesh(padGeo, steelMat);
+  pad.position.y = 0.04;
+  pad.receiveShadow = true;
+  pad.userData.skipBvh = true;
+  g.add(pad);
+
+  // Side repair bollards & overhead tool gantry (clearance 4.2m so APC/truck pass safely)
+  const postGeo = new THREE.BoxGeometry(0.32, 4.2, 0.32);
+  const railGeo = new THREE.BoxGeometry(5.8, 0.34, 0.42);
+  const kerbGeo = new THREE.BoxGeometry(0.28, 0.22, 6.8);
+  res.registerGeometry(postGeo, scope);
+  res.registerGeometry(railGeo, scope);
+  res.registerGeometry(kerbGeo, scope);
+
+  for (const xSign of [-1, 1]) {
+    const post = new THREE.Mesh(postGeo, steelMat);
+    post.position.set(xSign * 2.75, 2.1, 0);
+    post.castShadow = true;
+    post.userData.skipBvh = true;
+    g.add(post);
+
+    const kerb = new THREE.Mesh(kerbGeo, hazardMat);
+    kerb.position.set(xSign * 2.75, 0.11, 0);
+    kerb.userData.skipBvh = true;
+    g.add(kerb);
+  }
+
+  const overhead = new THREE.Mesh(railGeo, steelMat);
+  overhead.position.set(0, 4.25, 0);
+  overhead.userData.skipBvh = true;
+  g.add(overhead);
+
+  const beaconGeo = new THREE.BoxGeometry(3.4, 0.16, 0.48);
+  res.registerGeometry(beaconGeo, scope);
+  const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+  beacon.position.set(0, 4.02, 0);
+  beacon.userData.skipBvh = true;
+  g.add(beacon);
+  g.userData.statusLightMesh = beacon;
   return g;
 }
 

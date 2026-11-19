@@ -1129,11 +1129,26 @@ export function GameHUD({
                           ? 'BRK'
                           : 'FWD'}
                   </span>
-                  <span className="text-2xl font-bold text-amber-400">{hud.vehicleSpeedKmh} KM/H</span>
-                  <span className="text-xs text-zinc-400">HULL {hud.vehicleHealth}%</span>
+                  <span className="text-2xl font-bold text-amber-400 tabular-nums">{hud.vehicleSpeedKmh} KM/H</span>
+                  <span
+                    className={`text-xs tabular-nums ${
+                      hud.vehicleHealth <= 35 ? 'text-red-400 font-semibold' : 'text-zinc-400'
+                    }`}
+                  >
+                    HULL {hud.vehicleHealth}%
+                  </span>
+                  {hud.vehicleMaxTurretAmmo > 0 && (
+                    <span
+                      className={`text-xs tabular-nums ${
+                        hud.vehicleTurretAmmo <= 20 ? 'text-amber-300 font-semibold' : 'text-zinc-300'
+                      }`}
+                    >
+                      TURRET {hud.vehicleTurretAmmo}/{hud.vehicleMaxTurretAmmo}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-1 font-mono text-[10px] text-zinc-400">
-                  [W/S] GAS/REV · [A/D] STEER · [SPACE] DRIFT · [E] EXIT
+                  [W/S] GAS/REV · [A/D] STEER · [SPACE] DRIFT · [E] SERVICE/EXIT
                 </div>
               </>
             ) : (

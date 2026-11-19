@@ -3,8 +3,9 @@ import { AudioManager } from '@/src/audio/AudioManager';
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
-import { MapId } from '@/src/schemas/common.schema';
+import { Difficulty, MapId } from '@/src/schemas/common.schema';
 import { PlayerController } from './PlayerController';
+import { getDifficultyRecoveryProfile } from './SustainmentEconomyManager';
 
 export interface HealthPickupItem {
   id: string;
@@ -13,6 +14,7 @@ export interface HealthPickupItem {
   position: THREE.Vector3;
   baseY: number;
   healAmount: number;
+  armorAmount: number;
   collected: boolean;
   phase: number;
   meshGroup: THREE.Group;
@@ -162,8 +164,14 @@ export class HealthPickupManager {
     return group;
   }
 
-  spawnMapMedStations(mapId: MapId, collision: CollisionWorld, scope: ResourceScope): void {
+  spawnMapMedStations(
+    mapId: MapId,
+    collision: CollisionWorld,
+    scope: ResourceScope,
+    difficulty: Difficulty = 'normal'
+  ): void {
     const coords = MAP_MED_STATION_COORDS[mapId] ?? MAP_MED_STATION_COORDS.warzone_city;
+    const prof = getDifficultyRecoveryProfile(difficulty);
     for (let i = 0; i < coords.length; i++) {
       const c = coords[i];
       const y = collision.getGroundHeightAt(c.x, c.z);
@@ -172,7 +180,8 @@ export class HealthPickupManager {
         'station',
         scope,
         null,
-        HEALTH_PICKUP_HEAL_AMOUNT
+        prof.pickupHp,
+        prof.pickupArmor
       );
     }
   }
@@ -182,7 +191,8 @@ export class HealthPickupManager {
     source: 'station' | 'drop' | 'map_station',
     scope: ResourceScope,
     sourceEnemyId: string | null = null,
-    healAmount = HEALTH_PICKUP_HEAL_AMOUNT
+    healAmount = HEALTH_PICKUP_HEAL_AMOUNT,
+    armorAmount = 0
   ): HealthPickupItem {
     const res = this.ensureSharedResources(scope);
     const group = this.buildHeartMeshGroup(res, scope);
@@ -195,6 +205,7 @@ export class HealthPickupManager {
       position: new THREE.Vector3(pos.x, pos.y, pos.z),
       baseY: pos.y,
       healAmount,
+      armorAmount,
       collected: false,
       phase: (this.seq * 1.1) % (Math.PI * 2),
       meshGroup: group,
@@ -212,7 +223,8 @@ export class HealthPickupManager {
     playerHealth: number,
     playerMaxHealth: number,
     scope: ResourceScope,
-    deterministicRoll?: number
+    deterministicRoll?: number,
+    difficulty: Difficulty = 'normal'
   ): boolean {
     if (enemy.healthDropEvaluated || this.evaluatedEnemyIds.has(enemy.id)) {
       return false;
@@ -237,12 +249,14 @@ export class HealthPickupManager {
       return false;
     }
 
+    const prof = getDifficultyRecoveryProfile(difficulty);
     this.spawnPickup(
       { x: enemy.position.x, y: enemy.position.y, z: enemy.position.z },
       'drop',
       scope,
       enemy.id,
-      HEALTH_PICKUP_HEAL_AMOUNT
+      prof.pickupHp,
+      prof.pickupArmor
     );
     return true;
   }
@@ -280,17 +294,21 @@ export class HealthPickupManager {
       const horizDistSq = dx * dx + dz * dz;
 
       if (horizDistSq <= radiusSq && dy <= 2.4) {
-        if (player.health < player.maxHealth - 0.01) {
-          const healed = player.heal(p.healAmount);
-          const actualHealed = Math.max(1, Math.round(healed));
+        const needsHp = player.health < player.maxHealth - 0.01;
+        const needsArmor = p.armorAmount > 0 && player.armor < player.maxArmor * 0.85;
+        if (needsHp || needsArmor) {
+          const healed = needsHp ? player.heal(p.healAmount) : 0;
+          const armorRec = p.armorAmount > 0 ? player.restoreHealthAndArmor(0, p.armorAmount).armorAdded : 0;
+          const actualHealed = needsHp ? Math.max(1, Math.round(healed)) : 0;
           p.collected = true;
           p.meshGroup.visible = false;
           this.scene.remove(p.meshGroup);
           this.vfx.spawnImpact(p.position.x, p.position.y + 0.9, p.position.z, 'metal');
           this.audio.play2D('ui_click', 6, 0.65);
           onPickupCollected?.(actualHealed);
+          const armTag = armorRec > 0 ? ` · +${armorRec} ARM` : '';
           onAlert?.(
-            `HEART MEDKIT COLLECTED: +${actualHealed} HP (${Math.round(player.health)}/${player.maxHealth})`,
+            `FIELD MEDKIT COLLECTED: ${actualHealed > 0 ? `+${actualHealed} HP` : ''}${armTag} (${Math.round(player.health)}/${player.maxHealth} HP)`,
             2.4
           );
         } else {

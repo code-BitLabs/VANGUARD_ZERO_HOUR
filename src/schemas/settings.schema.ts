@@ -60,12 +60,20 @@ export const GraphicsSettingsSchema = z.object({
 });
 export type GraphicsSettings = z.infer<typeof GraphicsSettingsSchema>;
 
+export const MusicRepeatModeSchema = z.enum(['all', 'one', 'off']);
+export type MusicRepeatModeSetting = z.infer<typeof MusicRepeatModeSchema>;
+
 export const AudioSettingsSchema = z.object({
   masterVolume: z.number().min(0).max(1).default(0.8),
-  musicVolume: z.number().min(0).max(1).default(0.5),
+  musicVolume: z.number().min(0).max(1).default(0.24),
   sfxVolume: z.number().min(0).max(1).default(0.85),
-  ambienceVolume: z.number().min(0).max(1).default(0.6),
+  dialogueVolume: z.number().min(0).max(1).default(0.9),
+  ambienceVolume: z.number().min(0).max(1).default(0.55),
   muted: z.boolean().default(false),
+  musicEnabled: z.boolean().default(true),
+  musicTrackId: z.string().default('zero_hour_overture'),
+  musicShuffle: z.boolean().default(false),
+  musicRepeatMode: MusicRepeatModeSchema.default('all'),
 });
 export type AudioSettings = z.infer<typeof AudioSettingsSchema>;
 

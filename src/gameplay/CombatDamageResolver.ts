@@ -15,8 +15,10 @@ import { EnemyManager, EnemyUnit } from './EnemyManager';
 import { ExplosiveCallbacks, ExplosiveManager } from './ExplosiveManager';
 import { HealthPickupManager } from './HealthPickupManager';
 import { MissionDirector } from './MissionDirector';
+import { Difficulty } from '@/src/schemas/common.schema';
 import { PlayerController } from './PlayerController';
 import { ExplosionEvent } from './ProjectileManager';
+import { SustainmentEconomyManager } from './SustainmentEconomyManager';
 import { VehicleEntity, VehicleManager } from './VehicleManager';
 import { HitscanTarget, WeaponSystem } from './WeaponSystem';
 
@@ -32,10 +34,12 @@ export interface CombatDamageDependencies {
   readonly explosives: ExplosiveManager;
   readonly destruction: DestructionSystem;
   readonly healthPickups: HealthPickupManager;
+  readonly sustainment?: SustainmentEconomyManager;
   readonly monitor: PerformanceMonitor;
   readonly telemetry?: CombatTelemetryRecorder;
   readonly getMissionDirector: () => MissionDirector | null;
   readonly getActiveScope: () => ResourceScope | null;
+  readonly getDifficulty?: () => Difficulty;
 }
 
 /**
@@ -79,7 +83,9 @@ export class CombatDamageResolver {
             unit,
             this.deps.player.health,
             this.deps.player.maxHealth,
-            scope
+            scope,
+            undefined,
+            this.deps.getDifficulty?.() ?? 'normal'
           );
         }
         gameSessionStore.getState().pushKillFeed({
@@ -174,6 +180,18 @@ export class CombatDamageResolver {
       settings.accessibility.reducedMotion,
       this.cachedExplosiveCallbacks
     );
+    if (this.deps.sustainment && ev.damage > 0 && ev.radius > 0) {
+      const destroyedStations = this.deps.sustainment.damageStationsInRadius(
+        new THREE.Vector3(ev.x, ev.y, ev.z),
+        ev.radius,
+        ev.damage
+      );
+      if (destroyedStations.length > 0) {
+        this.deps
+          .getMissionDirector()
+          ?.showSubtitle('TACTICAL: A field supply station was destroyed by blast damage.', 3.2);
+      }
+    }
     this.deps.monitor.recordPhase('explosions', performance.now() - t0);
   };
 
@@ -221,7 +239,9 @@ export class CombatDamageResolver {
           unit,
           this.deps.player.health,
           this.deps.player.maxHealth,
-          scope
+          scope,
+          undefined,
+          this.deps.getDifficulty?.() ?? 'normal'
         );
       }
       gameSessionStore.getState().pushKillFeed({
