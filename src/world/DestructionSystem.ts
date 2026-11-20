@@ -17,7 +17,9 @@ export type DestructibleKind =
   | 'weapons_cache'
   | 'glass_panel'
   | 'sandbag'
-  | 'destructible_barrier';
+  | 'destructible_barrier'
+  | 'searchlight_tower'
+  | 'wooden_crate';
 export type DestructionState = 'INTACT' | 'DAMAGED' | 'DESTROYED';
 
 export interface DestructibleEntity {
@@ -112,6 +114,22 @@ export class DestructionSystem {
         this.onColliderRegionChanged?.(ent.collider);
         ent.meshGroup.visible = false;
         this.vfx.spawnImpact(ent.position.x, ent.position.y + 1, ent.position.z, 'concrete');
+      } else if (ent.kind === 'wooden_crate') {
+        this.removeSyncedCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
+        ent.meshGroup.visible = false;
+        this.vfx.spawnImpact(ent.position.x, ent.position.y + 0.7, ent.position.z, 'dirt');
+        this.audio.playSpatial('explosion', ent.position.x, ent.position.y, ent.position.z, 5, 0.35);
+      } else if (ent.kind === 'searchlight_tower') {
+        this.removeSyncedCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
+        const beam = ent.meshGroup.getObjectByName('searchlight_beam');
+        if (beam) beam.visible = false;
+        const head = ent.meshGroup.getObjectByName('searchlight_head');
+        if (head) head.visible = false;
+        ent.meshGroup.scale.set(1.0, 0.42, 1.0);
+        this.vfx.spawnExplosion(ent.position.x, ent.position.y + 5.2, ent.position.z, 1.15);
+        this.audio.playSpatial('explosion', ent.position.x, ent.position.y + 5.0, ent.position.z, 8, 0.8);
       } else if (ent.kind === 'sandbag') {
         this.removeSyncedCollider(ent.collider);
         this.onColliderRegionChanged?.(ent.collider);
@@ -168,8 +186,14 @@ export class DestructionSystem {
     this.removeSyncedCollider(ent.collider);
     this.onColliderRegionChanged?.(ent.collider);
 
-    if (ent.kind === 'glass_panel' || ent.kind === 'destructible_barrier') {
+    if (ent.kind === 'glass_panel' || ent.kind === 'destructible_barrier' || ent.kind === 'wooden_crate') {
       ent.meshGroup.visible = false;
+    } else if (ent.kind === 'searchlight_tower') {
+      const beam = ent.meshGroup.getObjectByName('searchlight_beam');
+      if (beam) beam.visible = false;
+      const head = ent.meshGroup.getObjectByName('searchlight_head');
+      if (head) head.visible = false;
+      ent.meshGroup.scale.set(1.0, 0.42, 1.0);
     } else if (ent.kind === 'sandbag') {
       ent.meshGroup.scale.y = 0.25;
     } else {

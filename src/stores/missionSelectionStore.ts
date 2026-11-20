@@ -1,5 +1,6 @@
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
+import { ReplayMode, ReplayModeSchema } from '@/src/schemas/campaign.schema';
 import { Difficulty, DifficultySchema } from '@/src/schemas/common.schema';
 
 const CAMPAIGN_PREF_KEY = 'vanguard_zero_hour_campaign_pref_v1';
@@ -7,6 +8,7 @@ const CAMPAIGN_PREF_KEY = 'vanguard_zero_hour_campaign_pref_v1';
 interface PersistedCampaignPref {
   selectedMissionId: number;
   difficulty: Difficulty;
+  replayMode: ReplayMode;
   hasSeenCampaignBriefing: boolean;
   seenMissionBriefings: Record<string, string>;
   hasSeenVehicleControlHint: boolean;
@@ -20,6 +22,7 @@ function loadPersistedPref(): PersistedCampaignPref {
       return {
         selectedMissionId: 1,
         difficulty: 'normal',
+        replayMode: 'canonical',
         hasSeenCampaignBriefing: false,
         seenMissionBriefings: {},
         hasSeenVehicleControlHint: false,
@@ -34,6 +37,7 @@ function loadPersistedPref(): PersistedCampaignPref {
         ? Math.floor(parsed.selectedMissionId)
         : 1;
     const diffRes = DifficultySchema.safeParse(parsed.difficulty);
+    const replayRes = ReplayModeSchema.safeParse(parsed.replayMode);
     const seenMap: Record<string, string> = {};
     if (parsed.seenMissionBriefings && typeof parsed.seenMissionBriefings === 'object') {
       for (const [k, v] of Object.entries(parsed.seenMissionBriefings)) {
@@ -53,6 +57,7 @@ function loadPersistedPref(): PersistedCampaignPref {
     return {
       selectedMissionId: missionId,
       difficulty: diffRes.success ? diffRes.data : 'normal',
+      replayMode: replayRes.success ? replayRes.data : 'canonical',
       hasSeenCampaignBriefing: Boolean(parsed.hasSeenCampaignBriefing),
       seenMissionBriefings: seenMap,
       hasSeenVehicleControlHint: Boolean(parsed.hasSeenVehicleControlHint),
@@ -62,6 +67,7 @@ function loadPersistedPref(): PersistedCampaignPref {
     return {
       selectedMissionId: 1,
       difficulty: 'normal',
+      replayMode: 'canonical',
       hasSeenCampaignBriefing: false,
       seenMissionBriefings: {},
       hasSeenVehicleControlHint: false,
@@ -81,12 +87,14 @@ function savePersistedPref(pref: PersistedCampaignPref): void {
 export interface MissionSelectionState {
   selectedMissionId: number;
   difficulty: Difficulty;
+  replayMode: ReplayMode;
   hasSeenCampaignBriefing: boolean;
   seenMissionBriefings: Record<string, string>;
   hasSeenVehicleControlHint: boolean;
   dismissedHintIds: Record<string, boolean>;
   setSelectedMission: (id: number) => void;
   setDifficulty: (difficulty: Difficulty) => void;
+  setReplayMode: (mode: ReplayMode) => void;
   markCampaignBriefingSeen: () => void;
   hasSeenMissionBriefing: (missionKey: string, briefingVersion: string) => boolean;
   markMissionBriefingSeen: (missionKey: string, briefingVersion: string) => void;
@@ -102,6 +110,7 @@ function persistFromState(state: MissionSelectionState): void {
   savePersistedPref({
     selectedMissionId: state.selectedMissionId,
     difficulty: state.difficulty,
+    replayMode: state.replayMode,
     hasSeenCampaignBriefing: state.hasSeenCampaignBriefing,
     seenMissionBriefings: state.seenMissionBriefings,
     hasSeenVehicleControlHint: state.hasSeenVehicleControlHint,
@@ -112,6 +121,7 @@ function persistFromState(state: MissionSelectionState): void {
 export const missionSelectionStore = createStore<MissionSelectionState>()((set, get) => ({
   selectedMissionId: initial.selectedMissionId,
   difficulty: initial.difficulty,
+  replayMode: initial.replayMode,
   hasSeenCampaignBriefing: initial.hasSeenCampaignBriefing,
   seenMissionBriefings: initial.seenMissionBriefings,
   hasSeenVehicleControlHint: initial.hasSeenVehicleControlHint,
@@ -122,6 +132,10 @@ export const missionSelectionStore = createStore<MissionSelectionState>()((set, 
   },
   setDifficulty: (difficulty) => {
     set({ difficulty });
+    persistFromState(get());
+  },
+  setReplayMode: (replayMode) => {
+    set({ replayMode });
     persistFromState(get());
   },
   markCampaignBriefingSeen: () => {

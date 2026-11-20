@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
-import { Award, BookOpen, Play, RotateCcw, Settings, ShieldAlert, XCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Award, BookOpen, GitBranch, MonitorCheck, Play, RotateCcw, Settings, ShieldAlert, Users, XCircle } from 'lucide-react';
+import { TACTICAL_CHALLENGES } from '@/src/data/challenges';
 import { ACHIEVEMENT_DEFINITIONS, getRankForXp } from '@/src/data/ranks';
 import { getMissionById } from '@/src/data/missions';
+import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
@@ -9,6 +11,7 @@ import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
+import { HardwareQaModal } from './HardwareQaModal';
 
 export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
   const progress = useGameSessionStore((s) => s.loadProgress);
@@ -74,13 +77,16 @@ export function PauseOverlay({
   onRestartCheckpoint,
   onRestartMission,
   onAbort,
+  gpuRenderer,
 }: {
   onResume: () => void;
   onRestartCheckpoint: () => void;
   onRestartMission?: () => void;
   onAbort: () => void;
+  gpuRenderer?: string;
 }) {
   const hud = useGameSessionStore((s) => s.hud);
+  const [qaOpen, setQaOpen] = useState(false);
   const activeObj = hud.objectives.find((o) => !o.completed && o.status === 'active') ?? hud.objectives[0];
 
   return (
@@ -142,12 +148,20 @@ export function PauseOverlay({
             >
               <Settings className="w-4 h-4" /> Settings
             </Button>
+            <Button
+              className="w-full min-h-[44px]"
+              variant="outline"
+              onClick={() => setQaOpen(true)}
+            >
+              <MonitorCheck className="w-4 h-4" /> Hardware QA
+            </Button>
             <Button className="w-full min-h-[44px]" variant="danger" onClick={onAbort}>
               Abort to HQ
             </Button>
           </div>
         </CardContent>
       </Card>
+      <HardwareQaModal open={qaOpen} onClose={() => setQaOpen(false)} gpuRenderer={gpuRenderer} />
     </div>
   );
 }
@@ -158,17 +172,22 @@ export function DebriefScreen({
   onChangeDifficulty,
   onNextMission,
   onReturnMenu,
+  gpuRenderer,
 }: {
   onRestartCheckpoint?: () => void;
   onRetry: () => void;
   onChangeDifficulty?: (difficulty: 'easy' | 'normal' | 'hard' | 'extreme') => void;
   onNextMission: (nextId: number) => void;
   onReturnMenu: () => void;
+  gpuRenderer?: string;
 }) {
   const debrief = useGameSessionStore((s) => s.debrief);
   const save = useProgressionStore((s) => s.save);
+  const commitStagedCampaignRebase = useProgressionStore((s) => s.commitStagedCampaignRebase);
   const selectedDifficulty = useMissionSelectionStore((s) => s.difficulty);
   const setDifficulty = useMissionSelectionStore((s) => s.setDifficulty);
+  const [rebaseHandled, setRebaseHandled] = useState<'committed' | 'kept' | null>(null);
+  const [qaOpen, setQaOpen] = useState(false);
   if (!debrief) return null;
 
   const mission = getMissionById(debrief.missionId);
@@ -298,12 +317,74 @@ export function DebriefScreen({
                 <Award className="w-4 h-4 text-amber-400" />
                 {rank.current.insignia} {rank.current.title}
               </span>
-              <span className="text-amber-400">
-                +{debrief.xpEarned} XP • +{debrief.requisitionEarned} REQ
+              <span className="text-amber-400 tabular-nums">
+                +{debrief.xpEarned + (debrief.challengeXpBonus ?? 0)} XP • +
+                {debrief.requisitionEarned +
+                  (debrief.challengeReqBonus ?? 0) +
+                  (debrief.modifierReqBonus ?? 0)}{' '}
+                REQ
               </span>
             </div>
+            {(debrief.modifierReqBonus || debrief.optionalObjectivesCompleted) ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-400 tabular-nums">
+                {debrief.optionalObjectivesCompleted ? (
+                  <span className="text-cyan-300">
+                    OPTIONAL OBJECTIVES: {debrief.optionalObjectivesCompleted} COMPLETED
+                  </span>
+                ) : null}
+                {debrief.modifierReqBonus ? (
+                  <span className="text-amber-300">
+                    MODIFIER BONUS: +{debrief.modifierReqBonus} REQ
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <ProgressBar value={rank.progressPct} className="h-2" />
           </div>
+
+          {((debrief.newChallenges && debrief.newChallenges.length > 0) ||
+            (debrief.masteryTierUps && debrief.masteryTierUps.length > 0)) && (
+            <div
+              data-testid="debrief-stage6-rewards"
+              className="bg-cyan-950/25 border border-cyan-500/40 p-2.5 rounded-sm space-y-1.5"
+            >
+              {debrief.newChallenges && debrief.newChallenges.length > 0 && (
+                <div>
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-cyan-300 mb-1">
+                    Tactical Challenges Completed (+{debrief.challengeXpBonus ?? 0} XP / +
+                    {debrief.challengeReqBonus ?? 0} REQ)
+                  </div>
+                  <div className="space-y-1">
+                    {debrief.newChallenges.map((cid) => {
+                      const ch = TACTICAL_CHALLENGES.find((c) => c.id === cid);
+                      return (
+                        <div key={cid} className="text-xs font-mono text-zinc-100">
+                          ✓ {ch?.title ?? cid}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {debrief.masteryTierUps && debrief.masteryTierUps.length > 0 && (
+                <div className="pt-1 border-t border-cyan-500/25">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-amber-300 mb-1">
+                    Weapon Mastery Promotions
+                  </div>
+                  <div className="space-y-0.5 text-xs font-mono text-zinc-100">
+                    {debrief.masteryTierUps.map((m, i) => {
+                      const w = WEAPON_BY_ID[m.weaponId as keyof typeof WEAPON_BY_ID];
+                      return (
+                        <div key={`${m.weaponId}-${i}`}>
+                          {w?.shortName ?? m.weaponId} → {m.tier}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {debrief.newAchievements.length > 0 && (
             <div className="bg-amber-500/10 border border-amber-500/40 p-2.5 rounded-sm">
@@ -326,26 +407,131 @@ export function DebriefScreen({
             </div>
           )}
 
-          <div className="flex flex-wrap justify-end gap-2.5 pt-2 border-t border-zinc-800">
-            <Button variant="outline" className="min-h-[44px]" onClick={onReturnMenu}>
-              Campaign HQ
-            </Button>
-            {!debrief.victory && debrief.canRestartCheckpoint && onRestartCheckpoint && (
-              <Button className="min-h-[44px]" onClick={onRestartCheckpoint}>
-                <RotateCcw className="w-4 h-4" /> Restart Checkpoint
-              </Button>
+          {/* Stage 7 TRN-37 Fireteam After-Action Report */}
+          {debrief.squadReports && debrief.squadReports.length > 0 && (
+            <div
+              data-testid="debrief-squad-report"
+              className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2"
+            >
+              <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-cyan-400">
+                <span className="flex items-center gap-1.5 font-bold">
+                  <Users className="w-3.5 h-3.5" /> Fireteam Performance
+                </span>
+                <span className="text-zinc-400">
+                  MODE: {(debrief.replayMode ?? 'canonical').replace('_', ' ').toUpperCase()}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[10.5px]">
+                {debrief.squadReports.map((rep) => (
+                  <div
+                    key={rep.operatorId}
+                    className="bg-[#141920] border border-zinc-800 px-2.5 py-1.5 rounded-xs space-y-0.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-zinc-100">{rep.callsign}</span>
+                      <span
+                        className={
+                          rep.becameMia
+                            ? 'text-red-400 font-bold'
+                            : rep.severeInjury
+                              ? 'text-amber-400'
+                              : 'text-emerald-400'
+                        }
+                      >
+                        {rep.becameMia ? 'MIA' : rep.severeInjury ? 'INJURED' : 'READY'}
+                      </span>
+                    </div>
+                    <div className="text-[9.5px] text-zinc-400 tabular-nums">
+                      {rep.kills} KILLS · {rep.revivesPerformed} REV · {rep.timesDowned} DOWNED
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Stage 7 TRN-39 Staged Campaign Replay Rebase Preview & Confirmation */}
+          {debrief.victory &&
+            debrief.replayMode === 'campaign_replay' &&
+            debrief.stagedRebaseDiff?.hasCanonicalDifference &&
+            debrief.pendingRebaseDrafts &&
+            debrief.pendingRebaseDrafts.length > 0 && (
+              <div
+                data-testid="debrief-campaign-rebase-panel"
+                className="bg-amber-950/25 border border-amber-500/70 p-3 rounded-sm space-y-2"
+              >
+                <div className="font-mono text-[10px] uppercase tracking-wider text-amber-300 font-bold flex items-center gap-1.5">
+                  <GitBranch className="w-3.5 h-3.5" /> Campaign Timeline Divergence Detected
+                </div>
+                <p className="text-xs text-zinc-200 leading-snug">
+                  This Campaign Replay produced new strategic outcomes affecting{' '}
+                  {debrief.stagedRebaseDiff.affectedDownstreamMissions.length > 0
+                    ? `Operations ${debrief.stagedRebaseDiff.affectedDownstreamMissions.map((m) => `0${m}`).join(', ')}`
+                    : 'the campaign ledger'}
+                  .
+                </p>
+                {rebaseHandled === null ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      data-testid="confirm-campaign-rebase-btn"
+                      onClick={() => {
+                        commitStagedCampaignRebase(debrief.missionId, debrief.pendingRebaseDrafts ?? []);
+                        setRebaseHandled('committed');
+                      }}
+                    >
+                      Commit &amp; Rebase Timeline
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRebaseHandled('kept')}
+                    >
+                      Keep Original Canonical Timeline
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="font-mono text-[10px] text-emerald-400">
+                    {rebaseHandled === 'committed'
+                      ? 'Canonical campaign ledger rebased with new operation outcomes.'
+                      : 'Original canonical campaign timeline preserved.'}
+                  </div>
+                )}
+              </div>
             )}
-            <Button variant="secondary" className="min-h-[44px]" onClick={onRetry}>
-              <RotateCcw className="w-4 h-4" /> Replay Mission
+
+          <div className="flex flex-wrap justify-between items-center gap-2.5 pt-2 border-t border-zinc-800">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-[40px]"
+              onClick={() => setQaOpen(true)}
+            >
+              <MonitorCheck className="w-4 h-4 text-cyan-400" /> Hardware QA Report
             </Button>
-            {debrief.victory && hasNext && (
-              <Button className="min-h-[44px]" onClick={() => onNextMission(debrief.missionId + 1)}>
-                <Play className="w-4 h-4 fill-current" /> Next Operation
+            <div className="flex flex-wrap justify-end gap-2.5">
+              <Button variant="outline" className="min-h-[44px]" onClick={onReturnMenu}>
+                Campaign HQ
               </Button>
-            )}
+              {!debrief.victory && debrief.canRestartCheckpoint && onRestartCheckpoint && (
+                <Button className="min-h-[44px]" onClick={onRestartCheckpoint}>
+                  <RotateCcw className="w-4 h-4" /> Restart Checkpoint
+                </Button>
+              )}
+              <Button variant="secondary" className="min-h-[44px]" onClick={onRetry}>
+                <RotateCcw className="w-4 h-4" /> Replay Mission
+              </Button>
+              {debrief.victory && hasNext && (
+                <Button className="min-h-[44px]" onClick={() => onNextMission(debrief.missionId + 1)}>
+                  <Play className="w-4 h-4 fill-current" /> Next Operation
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
+      <HardwareQaModal open={qaOpen} onClose={() => setQaOpen(false)} gpuRenderer={gpuRenderer} />
     </div>
   );
 }

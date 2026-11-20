@@ -25,6 +25,7 @@ import { CameraSpringDebugRay, VehicleCameraRig } from './VehicleCameraRig';
 import { getVehicleHandlingSpec, stepVehicleHandling } from './vehicle/VehicleHandlingProfile';
 import { resetSuspensionState, stepVehicleSuspension } from './vehicle/VehicleKinematics';
 import { HitscanTarget } from './WeaponSystem';
+import type { SquadVehicleSeatView } from './squad/FriendlySquadManager';
 
 export const VEHICLE_REVERSE_ENTER_SPEED = 0.45;
 export const VEHICLE_REVERSE_EXIT_SPEED = 0.85;
@@ -102,6 +103,8 @@ export interface VehicleEntity {
   driverSeatLocal: THREE.Vector3;
   turretOpticLocal: THREE.Vector3;
   fpvHiddenMeshes: THREE.Object3D[];
+  passengerOccupantIds: string[];
+  maxPassengerSeats: number;
 }
 
 export class VehicleManager {
@@ -181,6 +184,49 @@ export class VehicleManager {
 
   getVehicles(): readonly VehicleEntity[] {
     return this.vehicles;
+  }
+
+  /**
+   * TRN-37: Exposes friendly vehicle passenger seat occupancy views to FriendlySquadManager
+   * with atomic seat reservation and safe lateral egress points.
+   */
+  getFriendlySeatViews(): SquadVehicleSeatView[] {
+    const out: SquadVehicleSeatView[] = [];
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (v.hostile) continue;
+      out.push({
+        id: v.id,
+        alive: v.alive,
+        hostile: v.hostile,
+        position: v.position,
+        yaw: v.yaw,
+        healthRatio: v.maxHealth > 0 ? v.health / v.maxHealth : 0,
+        maxPassengerSeats: v.maxPassengerSeats,
+        occupantIds: v.passengerOccupantIds,
+        tryBoardSeat: (operatorId: string) => {
+          if (!v.alive || v.hostile) return false;
+          if (v.passengerOccupantIds.includes(operatorId)) return true;
+          if (v.passengerOccupantIds.length >= v.maxPassengerSeats) return false;
+          v.passengerOccupantIds.push(operatorId);
+          return true;
+        },
+        releaseSeat: (operatorId: string) => {
+          const idx = v.passengerOccupantIds.indexOf(operatorId);
+          if (idx >= 0) {
+            v.passengerOccupantIds.splice(idx, 1);
+          }
+          const sideSign = idx % 2 === 0 ? 1 : -1;
+          const exitDist = v.halfWidth + 1.5;
+          return {
+            x: v.position.x + Math.cos(v.yaw) * exitDist * sideSign,
+            y: v.position.y,
+            z: v.position.z - Math.sin(v.yaw) * exitDist * sideSign,
+          };
+        },
+      });
+    }
+    return out;
   }
 
   spawnVehicle(
@@ -328,6 +374,8 @@ export class VehicleManager {
       driverSeatLocal: rig.driverSeatLocal,
       turretOpticLocal: rig.turretOpticLocal,
       fpvHiddenMeshes: rig.fpvHiddenMeshes,
+      passengerOccupantIds: [],
+      maxPassengerSeats: hostile ? 0 : isHeavy ? 3 : 2,
     };
     this.vehicles.push(entity);
     return entity;

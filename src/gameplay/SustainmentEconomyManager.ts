@@ -101,6 +101,7 @@ export interface SustainmentContext {
   nearbyFriendlyVehicle: SustainmentVehicleTarget | null;
   difficulty: Difficulty;
   nowSec: number;
+  ammoGrantScale?: number;
 }
 
 export type SustainmentOutcomeCode =
@@ -790,9 +791,10 @@ export class SustainmentEconomyManager {
     const prof = getDifficultyRecoveryProfile(ctx.difficulty);
 
     if (station.kind === 'ammo_crate') {
+      const grantScale = Math.max(0.35, Math.min(1.5, ctx.ammoGrantScale ?? 1.0));
       const wepRes = ctx.weapons.resupplyWeapons({
-        ballisticReserveFraction: prof.ammoBallisticFraction,
-        explosiveRoundsPerLauncher: prof.ammoExplosiveRounds,
+        ballisticReserveFraction: prof.ammoBallisticFraction * grantScale,
+        explosiveRoundsPerLauncher: Math.max(1, Math.round(prof.ammoExplosiveRounds * grantScale)),
         onlyCheckCapacity: false,
       });
       const grenadesAdded = ctx.player.resupplyGrenades(

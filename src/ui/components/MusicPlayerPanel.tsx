@@ -41,6 +41,8 @@ function buildFallbackSnapshot(
     durationSec: track.durationSec,
     shuffle,
     repeatMode,
+    adaptiveEnabled: true,
+    userTrackLocked: false,
     duckLevel: 1,
     activeSourceCount: 0,
     errorTrackIds: [],
@@ -159,6 +161,16 @@ export const MusicPlayerPanel: React.FC = () => {
       ctrl.setRepeatMode(nextMode);
     }
     audioSettings.updateAudio({ musicRepeatMode: nextMode });
+  };
+
+  const handleToggleAdaptive = () => {
+    const ctrl = AudioManager.getActiveInstance()?.getMusicController();
+    if (!ctrl) return;
+    if (snap.adaptiveEnabled && snap.userTrackLocked) {
+      ctrl.setAdaptiveEnabled(true);
+    } else {
+      ctrl.setAdaptiveEnabled(!snap.adaptiveEnabled);
+    }
   };
 
   const statusText = snap.isLoading
@@ -285,23 +297,45 @@ export const MusicPlayerPanel: React.FC = () => {
         />
       </div>
 
-      {/* Compact integrated music volume strip */}
-      <div className="flex items-center justify-between gap-4 border-t border-zinc-800/70 pt-2.5">
+      {/* Compact integrated music volume & adaptive score strip */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800/70 pt-2.5">
         <div className="flex items-center gap-2 text-xs text-zinc-300">
           <Volume2 className="h-3.5 w-3.5 text-zinc-400" />
           <span className="tabular-nums">
             Music Level ({Math.round(audioSettings.musicVolume * 100)}%)
           </span>
         </div>
-        <div className="w-44">
-          <Slider
-            aria-label="Player Music Volume"
-            value={audioSettings.musicVolume}
-            min={0}
-            max={1}
-            step={0.02}
-            onValueChange={(musicVolume) => audioSettings.updateAudio({ musicVolume })}
-          />
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            data-testid="music-adaptive-toggle"
+            aria-pressed={snap.adaptiveEnabled && !snap.userTrackLocked}
+            onClick={handleToggleAdaptive}
+            className={`whitespace-nowrap shrink-0 rounded border px-2 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer ${
+              snap.adaptiveEnabled && !snap.userTrackLocked
+                ? 'border-cyan-500/60 bg-cyan-500/15 text-cyan-300'
+                : snap.adaptiveEnabled && snap.userTrackLocked
+                  ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
+                  : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+            }`}
+            title="Allow background score to shift smoothly with combat intensity"
+          >
+            {snap.adaptiveEnabled
+              ? snap.userTrackLocked
+                ? 'Adaptive: User Locked'
+                : 'Adaptive: Auto'
+              : 'Adaptive: Manual'}
+          </button>
+          <div className="w-36 sm:w-44">
+            <Slider
+              aria-label="Player Music Volume"
+              value={audioSettings.musicVolume}
+              min={0}
+              max={1}
+              step={0.02}
+              onValueChange={(musicVolume) => audioSettings.updateAudio({ musicVolume })}
+            />
+          </div>
         </div>
       </div>
 

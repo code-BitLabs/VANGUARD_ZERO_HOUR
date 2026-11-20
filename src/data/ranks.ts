@@ -40,4 +40,8 @@ export const ACHIEVEMENT_DEFINITIONS = [
   { id: 'convoy_buster', title: 'Road Fury', description: 'Destroy the armored convoy in Operation Red Dust.' },
   { id: 's_rank_elite', title: 'Vanguard Elite', description: 'Earn an S-Rank rating on any campaign mission.' },
   { id: 'veteran_cleared', title: 'Zero Hour Complete', description: 'Complete all 5 operations in the campaign.' },
+  { id: 'tactical_specialist', title: 'Tactical Specialist', description: 'Complete an optional tactical objective during an operation.' },
+  { id: 'challenge_master', title: 'Field Commendation', description: 'Complete 3 or more mission tactical challenges.' },
+  { id: 'iron_vanguard', title: 'Iron Vanguard', description: 'Finish any operation with a Replay Modifier enabled.' },
+  { id: 'weapon_master', title: 'Master Armorer', description: 'Reach Silver Mastery (25+ kills) with any primary weapon.' },
 ] as const;

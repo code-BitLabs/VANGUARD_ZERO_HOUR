@@ -185,6 +185,12 @@ export class PlayerController {
 
   constructor(private readonly audio: AudioManager) {}
 
+  private incomingDamageScale = 1.0;
+
+  setIncomingDamageScale(scale: number): void {
+    this.incomingDamageScale = Math.max(0.5, Math.min(2.5, scale));
+  }
+
   setDifficultyProfile(profile: DifficultyCombatProfile): void {
     this.maxHealth = profile.playerMaxHealth;
     this.maxArmor = profile.playerMaxArmor;
@@ -411,6 +417,7 @@ export class PlayerController {
       this.lastHealthLost = 0;
       return;
     }
+    amount = amount * this.incomingDamageScale;
 
     // Directional damage indicator angle in player-local forward/right basis
     const relAngle = this.computeRelativeThreatAngle(sourceX, sourceZ);

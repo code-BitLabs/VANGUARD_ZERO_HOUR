@@ -93,6 +93,17 @@ export function buildMissionEnvironmentalStorytelling(
     addLandmarkBox(4.8, 1.35, 0.22, 4.6, 8.4, 12.26, hazardMat);
     addLandmarkBox(5.0, 0.14, 0.28, 4.6, 9.12, 12.26, steelMat);
     addLandmarkBox(5.0, 0.14, 0.28, 4.6, 7.68, 12.26, steelMat);
+
+    // M1 Urban Storytelling: Burned Transport Hull & Field Checkpoint Bunker at East Boulevard Shoulder
+    const charredHullMat = assets.getSharedMaterial('m1_wreck_charred', {
+      color: 0x262b30,
+      roughness: 0.88,
+      metalness: 0.35,
+    });
+    addLandmarkBox(2.4, 1.15, 5.2, 15.5, 0.65, 22, charredHullMat, 0.05, -0.32, 0.08);
+    addLandmarkBox(2.1, 0.75, 2.2, 15.2, 1.45, 21.4, charredHullMat, 0.05, -0.32, 0.08);
+    addLandmarkBox(3.8, 0.9, 1.1, -15.5, 0.45, 18, concreteMat, 0, 0.28, 0);
+    addLandmarkBox(0.35, 3.2, 0.35, -17.2, 1.6, 17.5, steelMat);
   } else if (missionId === 2 || mapId === 'desert_base') {
     // M2 OP. RED DUST: Twin Pressurized LNG Horton-Spheres + Overhead Refinery Pipeline Bridge
     const sphereGeo = new THREE.SphereGeometry(5.8, 18, 14);
@@ -128,6 +139,15 @@ export function buildMissionEnvironmentalStorytelling(
       pipe.position.set(0, 7.6, -18 + pzOff);
       grp.add(pipe);
     }
+    // M2 Desert Convoy Wreckage & Sandbag Checkpoints along Highway 14 Shoulder
+    const desertRustMat = assets.getSharedMaterial('m2_convoy_rust', {
+      color: 0x5c3a28,
+      roughness: 0.86,
+      metalness: 0.32,
+    });
+    addLandmarkBox(2.5, 1.3, 5.8, -15.5, 0.7, 26, desertRustMat, 0.04, 0.42, -0.09);
+    addLandmarkBox(2.3, 0.9, 2.4, -14.8, 1.55, 27.2, desertRustMat, 0.04, 0.42, -0.09);
+    addLandmarkBox(4.4, 1.1, 1.2, 15.5, 0.55, -8, concreteMat, 0, -0.22, 0);
   }
 
   if (missionId === 3) {
@@ -209,6 +229,18 @@ export function buildMissionEnvironmentalStorytelling(
       addLandmarkBox(0.45, 5.8, 0.45, 4.1, 2.9, bz, steelMat);
       addLandmarkBox(8.8, 0.42, 0.45, 0, 5.6, bz, steelMat);
     }
+    // M4 Jungle Bridgehead Camo Field Post & Radio Mast on North Bank
+    const camoTarpMat = assets.getSharedMaterial('m4_camo_tarp', {
+      color: 0x36452e,
+      roughness: 0.92,
+      metalness: 0.05,
+    });
+    addLandmarkBox(0.22, 2.8, 0.22, -9.5, 1.4, 4.5, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -5.5, 1.4, 4.5, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -9.5, 1.4, 1.2, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -5.5, 1.4, 1.2, steelMat);
+    addLandmarkBox(4.6, 0.16, 3.8, -7.5, 2.82, 2.85, camoTarpMat, 0.05, 0, 0);
+    addLandmarkBox(0.14, 7.2, 0.14, -9.8, 3.6, 1.0, steelMat);
   }
 
   if (missionId === 5 || mapId === 'industrial_complex') {
@@ -249,6 +281,16 @@ export function buildMissionEnvironmentalStorytelling(
       lava.userData.skipBvh = true;
       lava.position.set(vx, 1.82, -2);
       grp.add(lava);
+
+      // High-visibility hazard stanchions framing each molten slag hazard perimeter
+      for (const [bxOff, bzOff] of [
+        [-3.4, -3.4],
+        [3.4, -3.4],
+        [-3.4, 3.4],
+        [3.4, 3.4],
+      ] as const) {
+        addLandmarkBox(0.32, 1.35, 0.32, vx + bxOff, 0.68, -2 + bzOff, hazardMat);
+      }
     }
 
     animatedProps.push({
@@ -725,6 +767,155 @@ export function buildWeaponsCache(assets: AssetManager, res: ResourceManager, sc
   const beacon = new THREE.Mesh(beaconGeo, amber);
   beacon.position.y = 1.9;
   g.add(beacon);
+  return g;
+}
+
+export function buildSearchlightTower(
+  assets: AssetManager,
+  res: ResourceManager,
+  scope: ResourceScope
+): THREE.Group {
+  const g = new THREE.Group();
+  const steelMat = assets.getSharedMaterial('searchlight_steel', {
+    pattern: 'metal_plate',
+    color: 0x334155,
+    roughness: 0.48,
+    metalness: 0.76,
+  });
+  const hazardMat = assets.getSharedMaterial('searchlight_hazard', {
+    pattern: 'warning_stripe',
+    roughness: 0.62,
+    metalness: 0.25,
+  });
+  const lensMat = assets.getSharedMaterial('searchlight_lens', {
+    color: 0xe0f2fe,
+    emissive: 0x38bdf8,
+    emissiveIntensity: 1.6,
+    roughness: 0.15,
+    metalness: 0.2,
+  });
+
+  // Grounded concrete footing + 4-leg steel lattice mast (9.5m tall)
+  const baseGeo = new THREE.BoxGeometry(2.4, 0.7, 2.4);
+  const legGeo = new THREE.BoxGeometry(0.24, 9.2, 0.24);
+  const crossGeo = new THREE.BoxGeometry(1.75, 0.18, 0.18);
+  const platGeo = new THREE.BoxGeometry(2.2, 0.22, 2.2);
+  res.registerGeometry(baseGeo, scope);
+  res.registerGeometry(legGeo, scope);
+  res.registerGeometry(crossGeo, scope);
+  res.registerGeometry(platGeo, scope);
+
+  const base = new THREE.Mesh(baseGeo, hazardMat);
+  base.position.y = 0.35;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  g.add(base);
+
+  for (const [lx, lz] of [
+    [-0.8, -0.8],
+    [0.8, -0.8],
+    [-0.8, 0.8],
+    [0.8, 0.8],
+  ] as const) {
+    const leg = new THREE.Mesh(legGeo, steelMat);
+    leg.position.set(lx, 4.9, lz);
+    leg.castShadow = true;
+    g.add(leg);
+  }
+  for (const cy of [2.6, 5.4, 8.0]) {
+    const c1 = new THREE.Mesh(crossGeo, steelMat);
+    c1.position.set(0, cy, 0.8);
+    const c2 = new THREE.Mesh(crossGeo, steelMat);
+    c2.position.set(0, cy, -0.8);
+    g.add(c1, c2);
+  }
+  const plat = new THREE.Mesh(platGeo, steelMat);
+  plat.position.y = 9.4;
+  g.add(plat);
+
+  // Rotating Searchlight Head & Volumetric Beam Cone
+  const head = new THREE.Group();
+  head.name = 'searchlight_head';
+  head.position.set(0, 9.9, 0);
+
+  const housingGeo = new THREE.CylinderGeometry(0.58, 0.52, 1.15, 12);
+  housingGeo.rotateX(Math.PI / 2);
+  const lensGeo = new THREE.CircleGeometry(0.54, 12);
+  res.registerGeometry(housingGeo, scope);
+  res.registerGeometry(lensGeo, scope);
+
+  const housing = new THREE.Mesh(housingGeo, steelMat);
+  housing.rotation.x = 0.32;
+  head.add(housing);
+
+  const lens = new THREE.Mesh(lensGeo, lensMat);
+  lens.position.set(0, -0.18, 0.59);
+  lens.rotation.x = 0.32;
+  head.add(lens);
+
+  // Volumetric cone extending forward (+Z) and downward toward plaza floor
+  const beamGeo = new THREE.ConeGeometry(5.6, 30, 16, 1, true);
+  beamGeo.translate(0, -15, 0);
+  beamGeo.rotateX(-Math.PI / 2 + 0.34);
+  res.registerGeometry(beamGeo, scope);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0xbae6fd,
+    transparent: true,
+    opacity: 0.14,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  res.registerMaterial(beamMat, scope);
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.name = 'searchlight_beam';
+  beam.userData.skipBvh = true;
+  head.add(beam);
+
+  g.add(head);
+  return g;
+}
+
+export function buildWoodenSupplyStack(
+  assets: AssetManager,
+  res: ResourceManager,
+  scope: ResourceScope
+): THREE.Group {
+  const g = new THREE.Group();
+  const wood = assets.getSharedMaterial('destruct_crate_wood', {
+    pattern: 'crate_wood',
+    roughness: 0.86,
+    metalness: 0.06,
+    color: 0x8b6b43,
+  });
+  const strap = assets.getSharedMaterial('destruct_crate_strap', {
+    color: 0x2f3742,
+    roughness: 0.5,
+    metalness: 0.65,
+  });
+  const c1Geo = new THREE.BoxGeometry(1.15, 0.95, 1.15);
+  const c2Geo = new THREE.BoxGeometry(1.05, 0.85, 1.05);
+  const strapGeo = new THREE.BoxGeometry(1.19, 0.1, 1.19);
+  res.registerGeometry(c1Geo, scope);
+  res.registerGeometry(c2Geo, scope);
+  res.registerGeometry(strapGeo, scope);
+
+  const left = new THREE.Mesh(c1Geo, wood);
+  left.position.set(-0.58, 0.475, 0);
+  left.castShadow = true;
+  left.receiveShadow = true;
+  const right = new THREE.Mesh(c1Geo, wood);
+  right.position.set(0.58, 0.475, 0.08);
+  right.rotation.y = 0.08;
+  right.castShadow = true;
+  right.receiveShadow = true;
+  const top = new THREE.Mesh(c2Geo, wood);
+  top.position.set(-0.08, 1.375, -0.04);
+  top.rotation.y = -0.14;
+  top.castShadow = true;
+  const band = new THREE.Mesh(strapGeo, strap);
+  band.position.set(-0.58, 0.52, 0);
+
+  g.add(left, right, top, band);
   return g;
 }
 

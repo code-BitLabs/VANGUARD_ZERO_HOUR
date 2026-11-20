@@ -34,7 +34,13 @@ export interface HudPublishContext {
   readonly worldData: BuiltWorldData | null;
   readonly cargoLiftManager?: CargoLiftManager | null;
   readonly sustainmentPrompt?: string | null;
+  readonly encounterPhase?: string;
+  readonly optionalObjectivesCompleted?: number;
+  readonly activeModifiers?: string[];
   readonly camera?: THREE.PerspectiveCamera;
+  readonly squadSummary?: HudSnapshot['squad'];
+  readonly carriedWeaponIds?: HudSnapshot['carriedWeaponIds'];
+  readonly nearSupplySwapStation?: boolean;
 }
 
 /**
@@ -262,7 +268,9 @@ export class HudSnapshotPublisher {
         ) < 11.5
     );
 
-    const incomingThreat = ctx.enemies.getActiveThreatWarning(ctx.player);
+    const incomingThreat =
+      ctx.enemies.getActiveThreatWarning(ctx.player) ??
+      ctx.airCombat.getActiveBossThreatWarning(ctx.player);
     const downedActive = Boolean(gameSessionStore.getState().downedState?.active);
 
     const activeTacticalHint = this.guidance.evaluateTier1Hint({
@@ -363,8 +371,16 @@ export class HudSnapshotPublisher {
       blips,
       activeBossLabel: boss?.label ?? null,
       activeBossHealthPct: boss?.healthPct ?? 0,
+      activeBossPhaseLabel: boss?.phaseLabel ?? null,
+      activeBossVulnerable: boss?.isVulnerable ?? false,
+      encounterPhase: ctx.encounterPhase,
+      optionalObjectivesCompleted: ctx.optionalObjectivesCompleted,
+      activeModifiers: ctx.activeModifiers,
       ordnance: ordnanceHud,
       liftStatus: liftCtx.activeSnapshot,
+      squad: ctx.squadSummary,
+      carriedWeaponIds: ctx.carriedWeaponIds,
+      nearSupplySwapStation: ctx.nearSupplySwapStation,
     };
   }
 

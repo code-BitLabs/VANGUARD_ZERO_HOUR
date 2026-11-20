@@ -24,9 +24,13 @@ import {
   ViewModelRig,
 } from './WeaponViewModels';
 import { FirstPersonAnimationGraph } from './FirstPersonAnimationGraph';
+import {
+  ResolvedWeaponProfile,
+  resolveWeaponConfig,
+} from './weapons/AttachmentCompositionEngine';
 
 export interface WeaponRuntimeState {
-  config: WeaponConfig;
+  config: ResolvedWeaponProfile;
   ammoInMag: number;
   magSize: number;
   reserveAmmo: number;
@@ -63,6 +67,8 @@ export class WeaponSystem {
   private rigs = new Map<WeaponId, ViewModelRig>();
   private activeWeaponId: WeaponId = 'assault_rifle';
   private previousPrimaryWeaponId: WeaponId = 'assault_rifle';
+  /** TRN-38: Carried weapon slots for the active mission (null = full 9-weapon sandbox access) */
+  private carriedMissionSlots: WeaponId[] | null = null;
   private viewModelContainer = new THREE.Group();
   private viewModelMaterialBank: ViewModelMaterialBank;
   private viewModelSceneRef: THREE.Scene;
@@ -108,6 +114,13 @@ export class WeaponSystem {
     upper_torso: 0,
     lower_body: 0,
   };
+  private headshotDamageScale = 1.0;
+  private bodyDamageScale = 1.0;
+
+  setDamageModifiers(headshotScale: number, bodyScale: number): void {
+    this.headshotDamageScale = Math.max(0.5, Math.min(2.5, headshotScale));
+    this.bodyDamageScale = Math.max(0.4, Math.min(2.0, bodyScale));
+  }
 
 
   private lockTarget: (HomingTarget & { label: string }) | null = null;
@@ -155,14 +168,21 @@ export class WeaponSystem {
     this.resetLoadout();
   }
 
-  resetLoadout(preferredId: WeaponId = 'assault_rifle'): void {
+  resetLoadout(preferredId: WeaponId = 'assault_rifle', carriedSlots?: readonly WeaponId[] | null): void {
     this.weapons.clear();
+    const saveState = progressionStore.getState().save;
+    this.carriedMissionSlots =
+      carriedSlots && carriedSlots.length > 0 ? Array.from(new Set(carriedSlots)) : null;
+
     for (const cfg of WEAPON_CATALOG) {
-      const capLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'capacity');
-      const magSize = Math.round(cfg.magazineSize * (1 + capLv * 0.1));
+      const upgrades = saveState.weaponUpgrades[cfg.id];
+      const equippedAttachments = saveState.weaponAttachments?.[cfg.id];
+      const resolved = resolveWeaponConfig(cfg, upgrades, equippedAttachments);
+      const capLv = upgrades?.capacity ?? 0;
+      const magSize = resolved.magazineSize;
       const reserveAmmo = Math.round(cfg.reserveAmmo * (1 + capLv * 0.12));
       this.weapons.set(cfg.id, {
-        config: cfg,
+        config: resolved,
         ammoInMag: magSize,
         magSize,
         reserveAmmo,
@@ -180,7 +200,74 @@ export class WeaponSystem {
     this.enemyZoneHits.head = 0;
     this.enemyZoneHits.upper_torso = 0;
     this.enemyZoneHits.lower_body = 0;
-    this.selectWeapon(preferredId, true);
+    const initialWeapon =
+      this.carriedMissionSlots && !this.carriedMissionSlots.includes(preferredId)
+        ? this.carriedMissionSlots[0]
+        : preferredId;
+    this.selectWeapon(initialWeapon, true);
+  }
+
+  getCarriedMissionSlots(): readonly WeaponId[] {
+    return this.carriedMissionSlots ?? WEAPON_CATALOG.map((w) => w.id);
+  }
+
+  isWeaponEquippedInMissionKit(id: WeaponId): boolean {
+    if (!this.carriedMissionSlots) return true;
+    return this.carriedMissionSlots.includes(id);
+  }
+
+  /**
+   * TRN-38: Controlled field weapon swap at a designated Sustainment Station.
+   * Swaps a carried weapon slot for any weapon in the 9-weapon campaign arsenal
+   * for a balanced REQ cost (or reserve-ammo trade-off when REQ is skipped).
+   */
+  swapWeaponAtSupplyStation(params: {
+    replaceSlotIndex: number;
+    nextWeaponId: WeaponId;
+    reqCost?: number;
+    useAmmoTradeoffIfLowReq?: boolean;
+  }): { ok: boolean; message: string } {
+    if (!this.weapons.has(params.nextWeaponId)) {
+      return { ok: false, message: 'Unknown weapon.' };
+    }
+    const slots = this.carriedMissionSlots
+      ? [...this.carriedMissionSlots]
+      : ['assault_rifle', 'pistol', 'rocket_launcher'] as WeaponId[];
+
+    const idx = Math.max(0, Math.min(slots.length - 1, params.replaceSlotIndex));
+    if (slots.includes(params.nextWeaponId)) {
+      this.selectWeapon(params.nextWeaponId, false);
+      return { ok: true, message: `${WEAPON_BY_ID[params.nextWeaponId].shortName} already in kit — equipped.` };
+    }
+
+    const cost = params.reqCost ?? 60;
+    const paidReq = cost <= 0 ? true : progressionStore.getState().spendRequisition(cost);
+    if (!paidReq) {
+      if (!params.useAmmoTradeoffIfLowReq) {
+        return { ok: false, message: `Requires ${cost} REQ for field armory swap.` };
+      }
+      // Reserve-ammo trade-off: swapped weapon enters with 60% reserve instead of 100%
+      const nextSt = this.weapons.get(params.nextWeaponId)!;
+      nextSt.reserveAmmo = Math.max(nextSt.magSize, Math.floor(nextSt.reserveAmmo * 0.6));
+    }
+
+    slots[idx] = params.nextWeaponId;
+    this.carriedMissionSlots = slots;
+    this.selectWeapon(params.nextWeaponId, false);
+    return {
+      ok: true,
+      message: paidReq
+        ? `Field Swap: ${WEAPON_BY_ID[params.nextWeaponId].shortName} (-${cost} REQ).`
+        : `Field Swap: ${WEAPON_BY_ID[params.nextWeaponId].shortName} (60% reserve trade-off).`,
+    };
+  }
+
+  getActiveWeaponSoundRadiusMeters(): number {
+    return this.getActiveState().config.soundRadiusMeters;
+  }
+
+  isActiveWeaponSuppressed(): boolean {
+    return this.getActiveState().config.isSuppressed;
   }
 
 
@@ -368,6 +455,7 @@ export class WeaponSystem {
 
   selectWeapon(id: WeaponId, instant = false): void {
     if (!this.weapons.has(id)) return;
+    if (this.carriedMissionSlots && !this.carriedMissionSlots.includes(id)) return;
     if (this.activeWeaponId !== 'rocket_launcher' && this.activeWeaponId !== 'guided_missile') {
       this.previousPrimaryWeaponId = this.activeWeaponId;
     }
@@ -915,10 +1003,8 @@ export class WeaponSystem {
           this.enemyZoneHits[hitZone]++;
         }
         const zoneMult = hitHead
-          ? cfg.headshotMultiplier
-          : hitZone === 'lower_body'
-            ? 0.85
-            : 1.0;
+          ? cfg.headshotMultiplier * this.headshotDamageScale
+          : (hitZone === 'lower_body' ? 0.85 : 1.0) * this.bodyDamageScale;
         const finalDmg = effectiveDamage * zoneMult;
         hitTarget.onHit(finalDmg, hitHead, endPoint, hitZone);
         this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, hitTarget.kind === 'enemy' ? 'blood' : 'metal');

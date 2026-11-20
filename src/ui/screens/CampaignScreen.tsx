@@ -11,7 +11,14 @@ import {
   Target,
   X,
 } from 'lucide-react';
+import {
+  computeCombinedModifierEffects,
+  evaluateWeaponMastery,
+  getChallengesForMission,
+  REPLAY_MODIFIERS,
+} from '@/src/data/challenges';
 import { MISSION_CATALOG } from '@/src/data/missions';
+import { WEAPON_CATALOG } from '@/src/data/weapons';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
@@ -19,6 +26,7 @@ import { uiStore } from '@/src/stores/uiStore';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
+import { OperationsPlanningPanel } from './OperationsPlanningPanel';
 
 const DIFFICULTIES: Array<{ id: Difficulty; label: string; desc: string }> = [
   { id: 'easy', label: 'Recruit', desc: 'Reduced incoming damage' },
@@ -41,12 +49,23 @@ export function CampaignScreen({
   const seenBriefings = useMissionSelectionStore((s) => s.seenMissionBriefings);
   const markMissionBriefingSeen = useMissionSelectionStore((s) => s.markMissionBriefingSeen);
   const records = useProgressionStore((s) => s.save.missionRecords);
+  const completedChallenges = useProgressionStore((s) => s.save.completedChallenges ?? []);
+  const activeModifiers = useProgressionStore((s) => s.save.activeModifiers ?? []);
+  const weaponMasteryKills = useProgressionStore((s) => s.save.weaponMasteryKills ?? {});
+  const toggleModifier = useProgressionStore((s) => s.toggleModifier);
   const viewport = useViewportMode();
 
   const [dossierModalOpen, setDossierModalOpen] = useState(false);
 
   const activeMission = MISSION_CATALOG.find((m) => m.id === selectedId) ?? MISSION_CATALOG[0];
   const rec = records[String(activeMission.id)];
+  const missionChallenges = getChallengesForMission(activeMission.id);
+  const modifierSummary = computeCombinedModifierEffects(activeModifiers);
+  const topMastery = WEAPON_CATALOG.map((w) =>
+    evaluateWeaponMastery(w.id, weaponMasteryKills[w.id] ?? 0)
+  )
+    .sort((a, b) => b.kills - a.kills)
+    .slice(0, 3);
   const hasSeenCurrentVersion =
     seenBriefings[activeMission.missionKey] === activeMission.briefingVersion;
 
@@ -319,6 +338,97 @@ export function CampaignScreen({
                   </div>
                 </div>
 
+                {/* Tactical Mission Challenges & Replay Modifiers (TRN-34) */}
+                <div className="mt-3.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div
+                    data-testid="mission-challenges-section"
+                    className="bg-[#0B0E11]/90 border border-zinc-800 p-2.5 rounded-sm space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-amber-400">
+                      <span>Tactical Challenges</span>
+                      <span className="tabular-nums text-zinc-400">
+                        {missionChallenges.filter((c) => completedChallenges.includes(c.id)).length}/
+                        {missionChallenges.length}
+                      </span>
+                    </div>
+                    {missionChallenges.map((ch) => {
+                      const done = completedChallenges.includes(ch.id);
+                      return (
+                        <div
+                          key={ch.id}
+                          className="border-t border-zinc-800/80 pt-1.5 flex items-start justify-between gap-2 text-[11px]"
+                        >
+                          <div className="min-w-0">
+                            <div className={`font-medium ${done ? 'text-emerald-400' : 'text-zinc-100'}`}>
+                              {done ? '✓ ' : ''}
+                              {ch.title}
+                            </div>
+                            <div className="text-[10px] text-zinc-400 leading-snug">{ch.description}</div>
+                          </div>
+                          <span className="font-mono text-[10px] tabular-nums text-amber-300 whitespace-nowrap shrink-0">
+                            +{ch.requisitionBonus} REQ
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div
+                    data-testid="replay-modifiers-section"
+                    className="bg-[#0B0E11]/90 border border-zinc-800 p-2.5 rounded-sm space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-cyan-400">
+                      <span>Replay Modifiers</span>
+                      <span className="tabular-nums text-amber-300">
+                        {activeModifiers.length > 0
+                          ? `x${modifierSummary.scoreMultiplier.toFixed(2)} SCORE · +${modifierSummary.requisitionBonusPct}% REQ`
+                          : 'STANDARD'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {REPLAY_MODIFIERS.map((mod) => {
+                        const enabled = activeModifiers.includes(mod.id);
+                        return (
+                          <button
+                            key={mod.id}
+                            type="button"
+                            data-testid={`modifier-toggle-${mod.id}`}
+                            aria-pressed={enabled}
+                            onClick={() => {
+                              onUiClick();
+                              toggleModifier(mod.id);
+                            }}
+                            title={mod.description}
+                            className={`px-2 py-1.5 rounded-xs border text-left transition-colors cursor-pointer ${
+                              enabled
+                                ? 'bg-amber-500/18 border-amber-400 text-amber-200'
+                                : 'bg-[#141920] border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                            }`}
+                          >
+                            <div className="font-mono text-[10px] font-bold uppercase truncate">
+                              {mod.shortLabel}
+                            </div>
+                            <div className="font-mono text-[9px] tabular-nums text-zinc-400">
+                              +{mod.requisitionBonusPct}% REQ
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="pt-1 border-t border-zinc-800/80 flex items-center justify-between font-mono text-[9.5px] text-zinc-400">
+                      <span>WEAPON MASTERY</span>
+                      <span className="tabular-nums text-zinc-300 truncate max-w-[190px]">
+                        {topMastery
+                          .map((m) => {
+                            const w = WEAPON_CATALOG.find((x) => x.id === m.weaponId);
+                            return `${w?.shortName ?? m.weaponId} ${m.tier} (${m.kills})`;
+                          })
+                          .join(' · ')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Platform-Matched Controls Preparation Strip */}
                 <div
                   data-testid="briefing-controls-guide"
@@ -344,6 +454,11 @@ export function CampaignScreen({
                     </>
                   )}
                 </div>
+
+                <OperationsPlanningPanel
+                  missionId={activeMission.id}
+                  onUiClick={onUiClick}
+                />
               </div>
 
               <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-3">

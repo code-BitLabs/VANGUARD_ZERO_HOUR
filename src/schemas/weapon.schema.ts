@@ -22,12 +22,23 @@ export type ProjectileType = z.infer<typeof ProjectileTypeSchema>;
 export const WeaponUpgradeKeySchema = z.enum(['damage', 'recoil', 'capacity', 'reload']);
 export type WeaponUpgradeKey = z.infer<typeof WeaponUpgradeKeySchema>;
 
+export const WeaponCategorySchema = z.enum([
+  'rifle',
+  'smg',
+  'sniper',
+  'shotgun',
+  'lmg',
+  'sidearm',
+  'launcher',
+]);
+export type WeaponCategory = z.infer<typeof WeaponCategorySchema>;
+
 export const WeaponSchema = z.object({
   id: WeaponIdSchema,
   slot: z.number().int().min(1).max(9),
   name: z.string().min(1),
   shortName: z.string().min(1),
-  category: z.enum(['rifle', 'smg', 'sniper', 'shotgun', 'lmg', 'sidearm', 'launcher']),
+  category: WeaponCategorySchema,
   description: z.string(),
   damage: z.number().positive(),
   headshotMultiplier: z.number().min(1).default(2.0),

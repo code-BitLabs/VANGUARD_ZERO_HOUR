@@ -6,9 +6,10 @@ import { Difficulty } from '@/src/schemas/common.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 import { missionSelectionStore, useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
-import { progressionStore } from '@/src/stores/progressionStore';
+import { progressionStore, useProgressionStore } from '@/src/stores/progressionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
+import { MissionIntroOverlay } from '@/src/ui/components/MissionIntroOverlay';
 import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { GameHUD } from '@/src/ui/hud/GameHUD';
 import { CombatDebugOverlay } from '@/src/ui/debug/CombatDebugOverlay';
@@ -57,8 +58,10 @@ export default function App() {
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
   const touchMode = useSettingsStore((s) => s.input.touchMode);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
+  const [deploymentKey, setDeploymentKey] = useState(0);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
+  const activeModifiers = useProgressionStore((s) => s.save.activeModifiers ?? []);
 
   const viewport = useViewportMode();
   const touchControlsVisible = resolveTouchControlsVisible(touchMode, touchHudOverride, viewport);
@@ -115,6 +118,7 @@ export default function App() {
   }, [viewport.shouldBlockPortrait]);
 
   const handleDeploy = (missionId: number, diff: Difficulty, weaponId?: WeaponId) => {
+    setDeploymentKey((k) => k + 1);
     void engineRef.current?.startMission(missionId, diff, weaponId);
   };
 
@@ -201,15 +205,29 @@ export default function App() {
           )}
 
           {screen === 'playing' && (
-            <GameHUD
-              onRequestPointerLock={() => engineRef.current?.requestPointerLock()}
-              onPause={() => engineRef.current?.pauseMission()}
-              onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
-              onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
-              onAbort={() => engineRef.current?.abortToMenu('campaign')}
-              inputManager={inputManager}
-              touchControlsVisible={touchControlsVisible}
-            />
+            <>
+              <GameHUD
+                onRequestPointerLock={() => engineRef.current?.requestPointerLock()}
+                onPause={() => engineRef.current?.pauseMission()}
+                onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
+                onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
+                onAbort={() => engineRef.current?.abortToMenu('campaign')}
+                onIssueSquadCommand={(order, source, opId) =>
+                  engineRef.current?.issueSquadCommand(order, source, opId)
+                }
+                onSwapFieldWeapon={(slotIdx, weaponId) =>
+                  engineRef.current?.swapFieldWeapon(slotIdx, weaponId)
+                }
+                inputManager={inputManager}
+                touchControlsVisible={touchControlsVisible}
+              />
+              <MissionIntroOverlay
+                missionId={selectedMissionId}
+                difficulty={difficulty}
+                activeModifiers={activeModifiers}
+                deploymentKey={deploymentKey}
+              />
+            </>
           )}
 
           {screen === 'paused' && (
@@ -218,6 +236,7 @@ export default function App() {
               onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
               onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
               onAbort={() => engineRef.current?.abortToMenu('campaign')}
+              gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
             />
           )}
 
@@ -231,6 +250,7 @@ export default function App() {
               }}
               onNextMission={(nextId) => handleDeploy(nextId, difficulty)}
               onReturnMenu={() => engineRef.current?.abortToMenu('campaign')}
+              gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
             />
           )}
 

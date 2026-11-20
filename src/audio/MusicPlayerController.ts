@@ -21,6 +21,8 @@ export interface MusicPlaybackSnapshot {
   durationSec: number;
   shuffle: boolean;
   repeatMode: MusicRepeatMode;
+  adaptiveEnabled: boolean;
+  userTrackLocked: boolean;
   duckLevel: number;
   activeSourceCount: number;
   errorTrackIds: string[];
@@ -93,6 +95,10 @@ export class MusicPlayerController {
   private targetDuckLevel = 1.0;
   private duckRemainingSec = 0;
 
+  private adaptiveEnabled = true;
+  private userTrackLocked = false;
+  private adaptiveCooldownSec = 0;
+
   private readonly errorTrackIds = new Set<string>();
   private lastError: string | null = null;
   private readonly listeners = new Set<(snap: MusicPlaybackSnapshot) => void>();
@@ -147,6 +153,8 @@ export class MusicPlayerController {
       durationSec: duration,
       shuffle: this.shuffle,
       repeatMode: this.repeatMode,
+      adaptiveEnabled: this.adaptiveEnabled,
+      userTrackLocked: this.userTrackLocked,
       duckLevel: this.duckLevel,
       activeSourceCount: this.getActiveSourceCount(),
       errorTrackIds: Array.from(this.errorTrackIds),
@@ -429,6 +437,7 @@ export class MusicPlayerController {
     this.currentTimeSec = 0;
     if (opts?.fromUser) {
       this.userEnabled = true;
+      this.userTrackLocked = true;
     }
     this.persistPreferences();
     this.emit();
@@ -488,6 +497,42 @@ export class MusicPlayerController {
     this.repeatMode = mode;
     this.persistPreferences();
     this.emit();
+  }
+
+  setAdaptiveEnabled(enabled: boolean): void {
+    this.adaptiveEnabled = Boolean(enabled);
+    if (this.adaptiveEnabled) {
+      this.userTrackLocked = false;
+      this.adaptiveCooldownSec = 0;
+    }
+    this.emit();
+  }
+
+  /**
+   * Adapts score mood smoothly to gameplay intensity (deployment -> recon -> combat -> climax).
+   * Strictly yields if adaptive scoring is off, music is paused/disabled by the user,
+   * or the player manually picked a specific track in Settings -> Audio.
+   */
+  async applyAdaptiveMood(mood: MusicMood, forceImmediate = false): Promise<boolean> {
+    if (!this.adaptiveEnabled || this.userTrackLocked || !this.userEnabled) {
+      return false;
+    }
+    if (!this.isPlaying || this.isPausedByLifecycle) {
+      return false;
+    }
+    if (!forceImmediate && this.adaptiveCooldownSec > 0) {
+      return false;
+    }
+    const targetTrack = getDefaultTrackForMood(mood);
+    if (!targetTrack || targetTrack.id === this.currentTrackId) {
+      return false;
+    }
+    if (!this.tracks.some((t) => t.id === targetTrack.id) || this.errorTrackIds.has(targetTrack.id)) {
+      return false;
+    }
+    this.adaptiveCooldownSec = 14.0;
+    await this.selectTrack(targetTrack.id, { autoPlay: true, fromUser: false });
+    return true;
   }
 
   syncPreferences(prefs: {
@@ -584,6 +629,9 @@ export class MusicPlayerController {
    */
   tick(dt: number): void {
     const safeDt = Math.max(0, Math.min(0.25, dt));
+    if (this.adaptiveCooldownSec > 0) {
+      this.adaptiveCooldownSec = Math.max(0, this.adaptiveCooldownSec - safeDt);
+    }
     if (this.duckRemainingSec > 0) {
       this.duckRemainingSec = Math.max(0, this.duckRemainingSec - safeDt);
       if (this.duckRemainingSec <= 0) {

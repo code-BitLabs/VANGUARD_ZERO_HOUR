@@ -16,6 +16,7 @@ import { ExplosiveCallbacks, ExplosiveManager } from './ExplosiveManager';
 import { HealthPickupManager } from './HealthPickupManager';
 import { MissionDirector } from './MissionDirector';
 import { Difficulty } from '@/src/schemas/common.schema';
+import { WeaponId } from '@/src/schemas/weapon.schema';
 import { PlayerController } from './PlayerController';
 import { ExplosionEvent } from './ProjectileManager';
 import { SustainmentEconomyManager } from './SustainmentEconomyManager';
@@ -40,6 +41,9 @@ export interface CombatDamageDependencies {
   readonly getMissionDirector: () => MissionDirector | null;
   readonly getActiveScope: () => ResourceScope | null;
   readonly getDifficulty?: () => Difficulty;
+  readonly onWeaponKill?: (weaponId: WeaponId) => void;
+  readonly onNonObjectiveDestructibleDestroyed?: (id: string, kind: string) => void;
+  readonly onHostileVehicleDestroyed?: (veh: VehicleEntity) => void;
 }
 
 /**
@@ -125,6 +129,7 @@ export class CombatDamageResolver {
             id,
             isAuthorizedC4 ? 'c4' : 'explosion'
           );
+        this.deps.onNonObjectiveDestructibleDestroyed?.(id, kind);
       },
       onAlert: (msg, dur) => {
         this.deps.getMissionDirector()?.showAlert(msg, dur);
@@ -169,6 +174,12 @@ export class CombatDamageResolver {
   readonly handleExplosionEvent = (ev: ExplosionEvent): void => {
     const t0 = performance.now();
     const settings = settingsStore.getState();
+    const preDestroyedSearchlights = new Set<string>();
+    for (const ent of this.deps.destruction.getAll()) {
+      if (ent.kind === 'searchlight_tower' && ent.state === 'DESTROYED') {
+        preDestroyedSearchlights.add(ent.id);
+      }
+    }
     this.deps.explosives.resolveExplosion(
       ev,
       this.deps.player,
@@ -180,6 +191,15 @@ export class CombatDamageResolver {
       settings.accessibility.reducedMotion,
       this.cachedExplosiveCallbacks
     );
+    for (const ent of this.deps.destruction.getAll()) {
+      if (
+        ent.kind === 'searchlight_tower' &&
+        ent.state === 'DESTROYED' &&
+        !preDestroyedSearchlights.has(ent.id)
+      ) {
+        this.deps.onNonObjectiveDestructibleDestroyed?.(ent.id, ent.kind);
+      }
+    }
     if (this.deps.sustainment && ev.damage > 0 && ev.radius > 0) {
       const destroyedStations = this.deps.sustainment.damageStationsInRadius(
         new THREE.Vector3(ev.x, ev.y, ev.z),
@@ -230,7 +250,9 @@ export class CombatDamageResolver {
     gameSessionStore.getState().triggerHit(isHead, killed, dmg);
     this.deps.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
     if (killed) {
-      const wepLabel = this.deps.weapons.getActiveState().config.shortName;
+      const activeWep = this.deps.weapons.getActiveState().config;
+      const wepLabel = activeWep.shortName;
+      this.deps.onWeaponKill?.(activeWep.id);
       this.deps.telemetry?.recordPlayerKill(wepLabel);
       this.deps.getMissionDirector()?.onEnemyKilled(isHead, 120);
       const scope = this.deps.getActiveScope();
@@ -259,7 +281,9 @@ export class CombatDamageResolver {
     gameSessionStore.getState().triggerHit(false, killed, 25);
     this.deps.audio.play2D('hit_marker', 8, 0.5);
     if (killed) {
-      const wepLabel = this.deps.weapons.getActiveState().config.shortName;
+      const activeWep = this.deps.weapons.getActiveState().config;
+      const wepLabel = activeWep.shortName;
+      this.deps.onWeaponKill?.(activeWep.id);
       this.deps.telemetry?.recordPlayerKill(wepLabel);
       this.deps.getMissionDirector()?.onAirUnitKilled(350, unit.type);
       gameSessionStore.getState().pushKillFeed({
@@ -277,8 +301,11 @@ export class CombatDamageResolver {
     gameSessionStore.getState().triggerHit(false, killed, 20);
     this.deps.audio.play2D('hit_marker', 7, 0.45);
     if (killed) {
-      const wepLabel = this.deps.weapons.getActiveState().config.shortName;
+      const activeWep = this.deps.weapons.getActiveState().config;
+      const wepLabel = activeWep.shortName;
+      this.deps.onWeaponKill?.(activeWep.id);
       this.deps.telemetry?.recordPlayerKill(wepLabel);
+      this.deps.onHostileVehicleDestroyed?.(veh);
       if (veh.isConvoyTarget) {
         this.deps.getMissionDirector()?.onConvoyVehicleDestroyed(400);
       } else {
@@ -300,12 +327,17 @@ export class CombatDamageResolver {
   };
 
   readonly onWeaponApplyDestructionDamage = (colliderId: string, dmg: number): void => {
-    this.deps.destruction.applyDamage(
+    const entBefore = this.deps.destruction.getAll().find((e) => e.id === colliderId);
+    const wasDestroyed = entBefore?.state === 'DESTROYED';
+    const destroyedNow = this.deps.destruction.applyDamage(
       colliderId,
       dmg,
       this.handleExplosion,
       this.onDestructibleTargetDestroyed
     );
+    if (destroyedNow && !wasDestroyed && entBefore && !entBefore.isObjectiveTarget) {
+      this.deps.onNonObjectiveDestructibleDestroyed?.(entBefore.id, entBefore.kind);
+    }
   };
 
   readonly onVehicleConvoyDestroyed = (): void => {
@@ -393,12 +425,17 @@ export class CombatDamageResolver {
     } else if (hitWall) {
       const wallHit = this._turretRayHit as RayHit;
       if (wallHit.collider && wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) {
-        this.deps.destruction.applyDamage(
+        const entBefore = this.deps.destruction.getAll().find((e) => e.id === wallHit.collider!.id);
+        const wasDestroyed = entBefore?.state === 'DESTROYED';
+        const destroyedNow = this.deps.destruction.applyDamage(
           wallHit.collider.id,
           26,
           this.handleExplosion,
           this.onDestructibleTargetDestroyed
         );
+        if (destroyedNow && !wasDestroyed && entBefore && !entBefore.isObjectiveTarget) {
+          this.deps.onNonObjectiveDestructibleDestroyed?.(entBefore.id, entBefore.kind);
+        }
         this.deps.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'metal');
       } else {
         this.deps.vfx.spawnImpact(wallHit.pointX, wallHit.pointY, wallHit.pointZ, 'concrete');

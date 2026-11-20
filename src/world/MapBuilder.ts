@@ -33,9 +33,11 @@ import {
   buildMovingGantry,
   buildPerimeterRidges,
   buildRadarRelay,
+  buildSearchlightTower,
   buildSupplyCrate,
   buildVehicleServiceBay,
   buildWeaponsCache,
+  buildWoodenSupplyStack,
 } from './builders/WorldPropsAndLandmarks';
 
 export interface BuiltWorldData {
@@ -711,27 +713,36 @@ export function buildWorldMap(
       });
     }
 
-    // Night searchlights for Mission 3
+    // Night destructible sweeping Searchlight Towers for Mission 3 (synced with EncounterDirector!)
     if (missionId === 3) {
-      for (const sx of [-24, 24]) {
-        const beamGeo = new THREE.ConeGeometry(6, 45, 16, 1, true);
-        resourceManager.registerGeometry(beamGeo, scope);
-        const beamMat = new THREE.MeshBasicMaterial({
-          color: 0x93c5fd,
-          transparent: true,
-          opacity: 0.14,
-          side: THREE.DoubleSide,
-          depthWrite: false,
+      const m3Towers = [
+        { id: 'm3_searchlight_west', x: -18, z: -14, baseYaw: 0.45, amp: 0.72, speed: 0.65 },
+        { id: 'm3_searchlight_east', x: 18, z: -16, baseYaw: -0.45, amp: 0.72, speed: 0.58 },
+      ];
+      for (const tw of m3Towers) {
+        const ty = Math.max(0, heightFn(tw.x, tw.z));
+        const towerMesh = buildSearchlightTower(assetManager, resourceManager, scope);
+        towerMesh.position.set(tw.x, ty, tw.z);
+        chunkManager.registerObject(towerMesh, tw.x, tw.z, scene);
+        destructionSystem.register({
+          id: tw.id,
+          kind: 'searchlight_tower',
+          isObjectiveTarget: false,
+          position: new THREE.Vector3(tw.x, ty, tw.z),
+          health: 110,
+          maxHealth: 110,
+          state: 'INTACT',
+          blastRadius: 4.0,
+          blastDamage: 45,
+          meshGroup: towerMesh,
+          collider: createDestructibleCollider(tw.id, tw.x, ty, tw.z, 1.35, 10.2, 1.35),
         });
-        resourceManager.registerMaterial(beamMat, scope);
-        const beam = new THREE.Mesh(beamGeo, beamMat);
-        beam.position.set(sx, 22, -22);
-        beam.rotation.z = sx < 0 ? -0.35 : 0.35;
-        scene.add(beam);
-        resourceManager.register('object3d', scope, () => scene.remove(beam));
+        const head = towerMesh.getObjectByName('searchlight_head');
         animatedProps.push({
           update: (elapsed) => {
-            beam.rotation.x = Math.sin(elapsed * 0.9 + sx) * 0.25;
+            if (head && head.visible) {
+              head.rotation.y = tw.baseYaw + Math.sin(elapsed * tw.speed) * tw.amp;
+            }
           },
         });
       }
@@ -1170,6 +1181,32 @@ export function buildWorldMap(
       collider: createDestructibleCollider(`destructible_cover_${i}`, dcx, dcy, dcz, 2.1, 1.45, 0.85),
     });
     coverNodes.push(new THREE.Vector3(dcx, dcy, dcz + (dcz > 0 ? -1.8 : 1.8)));
+  });
+
+  // Destructible Wooden Supply Crate Stacks (splinter on heavy fire, adding micro-cover variety)
+  const woodenCrateCoords: Array<[number, number]> = [
+    [-13, 20],
+    [13, -2],
+    [-12, -32],
+  ];
+  woodenCrateCoords.forEach(([wcx, wcz], i) => {
+    const wcy = Math.max(0, heightFn(wcx, wcz));
+    const stack = buildWoodenSupplyStack(assetManager, resourceManager, scope);
+    stack.position.set(wcx, wcy, wcz);
+    chunkManager.registerObject(stack, wcx, wcz, scene);
+    destructionSystem.register({
+      id: `wooden_crate_${i}`,
+      kind: 'wooden_crate',
+      isObjectiveTarget: false,
+      position: new THREE.Vector3(wcx, wcy, wcz),
+      health: 65,
+      maxHealth: 65,
+      state: 'INTACT',
+      blastRadius: 0,
+      blastDamage: 0,
+      meshGroup: stack,
+      collider: createDestructibleCollider(`wooden_crate_${i}`, wcx, wcy, wcz, 1.25, 1.85, 0.75),
+    });
   });
 
   // Destructible Explosive Barrels scattered tactically near combat lanes

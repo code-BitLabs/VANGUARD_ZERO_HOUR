@@ -28,17 +28,29 @@ import { HudSnapshot } from '@/src/schemas/events.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { SquadCommandSource, SquadOrderType } from '@/src/gameplay/squad/SquadIntentRouter';
 import {
   computeMobileHudLayout,
+  computeMobileSquadStripRect,
   computeMobileVehicleHudLayout,
 } from './mobileHudLayoutEngine';
+import { MobileSquadCommandStrip } from './MobileSquadCommandStrip';
 
 interface MobileTouchControlsProps {
   inputManager: InputManager | null;
   hud: HudSnapshot;
+  onIssueSquadCommand?: (
+    order: SquadOrderType,
+    source: SquadCommandSource,
+    operatorId?: string
+  ) => void;
 }
 
-export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsProps) {
+export function MobileTouchControls({
+  inputManager,
+  hud,
+  onIssueSquadCommand,
+}: MobileTouchControlsProps) {
   const inputSettings = useSettingsStore((s) => s.input);
   const {
     touchControlProfile,
@@ -132,6 +144,7 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
     width: viewport.width,
     height: viewport.height,
   });
+  const squadStripRect = computeMobileSquadStripRect(layout);
 
   const stickRect = layout.controls.move_joystick;
   const fireLeftRect = layout.controls.fire_left;
@@ -1767,6 +1780,14 @@ export function MobileTouchControls({ inputManager, hud }: MobileTouchControlsPr
               </button>
             </div>
           </div>
+
+          {onIssueSquadCommand && (
+            <MobileSquadCommandStrip
+              hud={hud}
+              stripRect={squadStripRect}
+              onIssueCommand={(order, source, opId) => onIssueSquadCommand(order, source, opId)}
+            />
+          )}
         </>
       )}
     </div>

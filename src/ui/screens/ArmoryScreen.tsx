@@ -9,6 +9,7 @@ import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
+import { AttachmentBenchPanel } from './AttachmentBenchPanel';
 
 const UPGRADES: Array<{ key: WeaponUpgradeKey; label: string; effect: string }> = [
   { key: 'damage', label: 'Ballistic Damage', effect: '+9% per tier' },
@@ -164,6 +165,8 @@ export function ArmoryScreen({
                     );
                   })}
                 </div>
+
+                <AttachmentBenchPanel weapon={active} onUiClick={onUiClick} />
               </div>
 
               <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-3">

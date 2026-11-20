@@ -6,9 +6,15 @@ import {
   DamageTelemetryRecord,
   FatalDamageAttribution,
 } from '@/src/gameplay/CombatTelemetryRecorder';
+import { PlaytestExperienceReport } from '@/src/gameplay/diagnostics/PlaytestTelemetrySummary';
 import { AssetLoadProgress } from '@/src/schemas/asset.schema';
 import { DamageArc, HitFeedback, HudSnapshot, KillFeedItem } from '@/src/schemas/events.schema';
-import { MissionResultPayload } from './progressionStore';
+import {
+  CampaignEventDraft,
+  CampaignRebaseDiff,
+} from '@/src/gameplay/campaign/CampaignEventLedger';
+import { ReplayMode } from '@/src/schemas/campaign.schema';
+import { MissionResultPayload, SquadOperatorMissionReport } from './progressionStore';
 
 export interface DebriefSummary extends MissionResultPayload {
   accuracyPct: number;
@@ -21,8 +27,19 @@ export interface DebriefSummary extends MissionResultPayload {
   fatalSource?: FatalDamageAttribution | null;
   lastHits?: DamageTelemetryRecord[];
   newAchievements: string[];
+  newChallenges?: string[];
+  challengeXpBonus?: number;
+  challengeReqBonus?: number;
+  modifierReqBonus?: number;
+  masteryTierUps?: Array<{ weaponId: string; tier: string }>;
   canRestartCheckpoint?: boolean;
   checkpointDeathsCount?: number;
+  playtestReport?: PlaytestExperienceReport;
+  replayMode?: ReplayMode;
+  committedCampaignEvents?: number;
+  stagedRebaseDiff?: CampaignRebaseDiff | null;
+  pendingRebaseDrafts?: CampaignEventDraft[];
+  squadReports?: SquadOperatorMissionReport[];
 }
 
 export interface DownedState {

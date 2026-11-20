@@ -229,7 +229,48 @@ export const HudSnapshotSchema = z.object({
   blips: z.array(MiniMapBlipSchema),
   activeBossLabel: z.string().nullable(),
   activeBossHealthPct: z.number().min(0).max(1),
+  activeBossPhaseLabel: z.string().nullable().optional(),
+  activeBossVulnerable: z.boolean().optional(),
+  encounterPhase: z.string().optional(),
+  optionalObjectivesCompleted: z.number().int().nonnegative().optional(),
+  activeModifiers: z.array(z.string()).optional(),
   ordnance: TacticalOrdnanceHudSchema.optional(),
   liftStatus: CargoLiftHudSnapshotSchema.nullable().optional(),
+  squad: z
+    .object({
+      activeOrderLabel: z.string(),
+      activeFormation: z.enum(['WEDGE', 'COLUMN', 'LINE', 'COMPACT']),
+      squadMedCharges: z.number().int().nonnegative(),
+      downedCount: z.number().int().nonnegative(),
+      nearestDownedOperatorId: z.string().nullable(),
+      nearestDownedDistanceM: z.number(),
+      playerRevivingOperatorId: z.string().nullable(),
+      playerReviveProgress: z.number().min(0).max(1),
+      operators: z.array(
+        z.object({
+          id: z.string(),
+          callsign: z.string(),
+          role: z.enum(['assault', 'support', 'recon', 'anti_armor', 'medic']),
+          roleBadge: z.string(),
+          health: z.number().nonnegative(),
+          maxHealth: z.number().positive(),
+          armor: z.number().nonnegative(),
+          maxArmor: z.number().positive(),
+          state: z.string(),
+          morale: z.enum(['STEADY', 'SUPPRESSED', 'SHAKEN']),
+          suppressionLevel: z.number().min(0).max(1),
+          reasonTag: z.string(),
+          bleedoutRemainingSec: z.number().nonnegative(),
+          reviveProgress: z.number().min(0).max(1),
+          reviveChargesRemaining: z.number().int().nonnegative(),
+          inVehicleId: z.string().nullable(),
+          isReserve: z.boolean(),
+          distanceToPlayerM: z.number().nonnegative(),
+        })
+      ),
+    })
+    .optional(),
+  carriedWeaponIds: z.array(WeaponIdSchema).optional(),
+  nearSupplySwapStation: z.boolean().optional(),
 });
 export type HudSnapshot = z.infer<typeof HudSnapshotSchema>;

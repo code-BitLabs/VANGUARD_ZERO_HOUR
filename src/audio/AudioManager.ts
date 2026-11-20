@@ -304,6 +304,11 @@ export class AudioManager {
     this.musicController.duckForDialogue(durationSec, duckLevel);
   }
 
+  public applyAdaptiveMusicMood(mood: MusicMood, forceImmediate = false): Promise<boolean> {
+    if (!this.settings.musicEnabled) return Promise.resolve(false);
+    return this.musicController.applyAdaptiveMood(mood, forceImmediate);
+  }
+
   public tick(dt: number): void {
     this.musicController.tick(dt);
   }

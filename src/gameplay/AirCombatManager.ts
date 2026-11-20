@@ -43,6 +43,12 @@ export type AirFlightPhase =
   | 'CLIMB_EGRESS'
   | 'WIDE_TURN';
 
+export type BossAttackPhase =
+  | 'PATROL'
+  | 'SALVO_TELEGRAPH'
+  | 'ROCKET_SALVO'
+  | 'COOLING_VULNERABLE';
+
 export interface AirUnit {
   id: string;
   squadId: string;
@@ -90,6 +96,10 @@ export interface AirUnit {
   lastDamageDealt: number;
   lastDamageTimeSec: number | null;
   crashTimer: number;
+  bossAttackPhase: BossAttackPhase;
+  bossPhaseTimerSec: number;
+  bossSalvoShotsRemaining: number;
+  isVulnerable: boolean;
   meshRoot: THREE.Group;
   rotor: THREE.Object3D | null;
 }
@@ -227,6 +237,10 @@ export class AirCombatManager {
       lastDamageDealt: 0,
       lastDamageTimeSec: null,
       crashTimer: 0,
+      bossAttackPhase: 'PATROL',
+      bossPhaseTimerSec: type === 'gunship' ? 6.5 : 8.0,
+      bossSalvoShotsRemaining: 0,
+      isVulnerable: false,
       meshRoot: rig.root,
       rotor: rig.rotor,
     });
@@ -239,7 +253,8 @@ export class AirCombatManager {
 
   damageUnit(unit: AirUnit, damage: number, onAirKilled?: (u: AirUnit) => void): boolean {
     if (!unit.alive || unit.crashing) return false;
-    unit.health -= damage;
+    const effectiveDamage = unit.isVulnerable ? damage * 1.45 : damage;
+    unit.health -= effectiveDamage;
     if (unit.health <= 0) {
       const prevState = unit.state;
       unit.health = 0;
@@ -410,7 +425,7 @@ export class AirCombatManager {
     playerPosition?: THREE.Vector3;
     isPrimaryObjective?: boolean;
     lockStatus?: 'none' | 'scanning' | 'acquiring' | 'locked';
-  }): { label: string; healthPct: number } | null {
+  }): { label: string; healthPct: number; phaseLabel: string; isVulnerable: boolean } | null {
     const boss = this.units.find((u) => u.alive && !u.crashing && (u.type === 'gunship' || u.type === 'helicopter'));
     if (!boss) return null;
 
@@ -429,9 +444,43 @@ export class AirCombatManager {
       }
     }
 
+    const phaseLabel =
+      boss.bossAttackPhase === 'SALVO_TELEGRAPH'
+        ? 'CHARGING SALVO — SEEK COVER'
+        : boss.bossAttackPhase === 'ROCKET_SALVO'
+          ? 'BARRAGE ACTIVE'
+          : boss.bossAttackPhase === 'COOLING_VULNERABLE'
+            ? 'TURBINE COOLING — 1.45× VULNERABLE'
+            : 'AIRBORNE PATROL';
+
     return {
       label: boss.displayName.toUpperCase(),
       healthPct: boss.health / boss.maxHealth,
+      phaseLabel,
+      isVulnerable: boss.isVulnerable,
+    };
+  }
+
+  getActiveBossThreatWarning(player: PlayerController): {
+    kind: 'rocket';
+    label: string;
+    progress: number;
+    angleRad: number;
+  } | null {
+    const boss = this.units.find(
+      (u) =>
+        u.alive &&
+        !u.crashing &&
+        (u.type === 'gunship' || u.type === 'helicopter') &&
+        u.bossAttackPhase === 'SALVO_TELEGRAPH'
+    );
+    if (!boss) return null;
+    const progress = Math.min(1, Math.max(0, 1 - boss.bossPhaseTimerSec / 2.2));
+    return {
+      kind: 'rocket',
+      label: `${boss.displayName.toUpperCase()} SALVO LOCK — TAKE COVER`,
+      progress: Number(progress.toFixed(2)),
+      angleRad: player.computeRelativeThreatAngle(boss.position.x, boss.position.z),
     };
   }
 
@@ -615,12 +664,55 @@ export class AirCombatManager {
         this.telemetry?.recordStateTransition(u.id, u.squadId, 'air', prevState, u.state);
       }
 
+      // Boss attack phase state machine for heavy rotorcraft (PATROL -> SALVO_TELEGRAPH -> ROCKET_SALVO -> COOLING_VULNERABLE)
+      if ((u.type === 'gunship' || u.type === 'helicopter') && u.detectedPlayer && player.alive) {
+        u.bossPhaseTimerSec = Math.max(0, u.bossPhaseTimerSec - dt);
+        if (u.bossAttackPhase === 'PATROL') {
+          u.isVulnerable = false;
+          if (u.bossPhaseTimerSec <= 0 && rawLos && dist <= 95) {
+            u.bossAttackPhase = 'SALVO_TELEGRAPH';
+            u.bossPhaseTimerSec = 2.2;
+            this.audio.playSpatial('lock_beep', u.position.x, u.position.y, u.position.z, 7, 0.7);
+          }
+        } else if (u.bossAttackPhase === 'SALVO_TELEGRAPH') {
+          u.isVulnerable = false;
+          if (u.bossPhaseTimerSec <= 0) {
+            u.bossAttackPhase = 'ROCKET_SALVO';
+            u.bossPhaseTimerSec = 2.6;
+            u.bossSalvoShotsRemaining = u.type === 'gunship' ? 5 : 3;
+            u.fireTimer = 0.08;
+          }
+        } else if (u.bossAttackPhase === 'ROCKET_SALVO') {
+          u.isVulnerable = false;
+          if (u.bossPhaseTimerSec <= 0 || u.bossSalvoShotsRemaining <= 0) {
+            u.bossAttackPhase = 'COOLING_VULNERABLE';
+            u.bossPhaseTimerSec = 4.0;
+            u.isVulnerable = true;
+            u.flightPhase = 'STANDOFF_HOVER';
+            u.phaseTimerSec = 4.0;
+          }
+        } else if (u.bossAttackPhase === 'COOLING_VULNERABLE') {
+          u.isVulnerable = true;
+          if (u.bossPhaseTimerSec <= 0) {
+            u.bossAttackPhase = 'PATROL';
+            u.bossPhaseTimerSec = u.type === 'gunship' ? 6.5 : 8.0;
+            u.isVulnerable = false;
+          }
+        }
+      } else {
+        u.isVulnerable = false;
+      }
+
       u.fireTimer = Math.max(0, u.fireTimer - dt);
       const lease = this.coordinator?.getUnitLease(u.id);
+      const suppressedByBossPhase =
+        (u.type === 'gunship' || u.type === 'helicopter') &&
+        (u.bossAttackPhase === 'SALVO_TELEGRAPH' || u.bossAttackPhase === 'COOLING_VULNERABLE');
       const allowedToFire =
         u.state === 'ENGAGING' &&
         rawLos &&
         !u.isReloading &&
+        !suppressedByBossPhase &&
         player.alive &&
         (Boolean(lease) || !this.coordinator);
 
@@ -682,6 +774,9 @@ export class AirCombatManager {
         u.ammoInMag--;
         u.burstShotsRemaining--;
         u.burstShotIndex++;
+        if (u.bossAttackPhase === 'ROCKET_SALVO' && u.bossSalvoShotsRemaining > 0) {
+          u.bossSalvoShotsRemaining--;
+        }
 
         if (u.ammoInMag <= 0) {
           u.isReloading = true;

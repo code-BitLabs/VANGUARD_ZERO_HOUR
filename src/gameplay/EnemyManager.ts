@@ -33,6 +33,7 @@ import {
   buildEnemyPhysicsInspectorRows,
   fillEnemyMiniMapBlips,
 } from './ai/EnemyTelemetryMapper';
+import { SquadTacticalOrder, SquadTacticsCoordinator } from './ai/SquadTacticsCoordinator';
 import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from './BallisticSolver';
 import { CargoLiftManager, CargoLiftOccupantProxy } from './CargoLiftManager';
 import { CombatEngagementCoordinator } from './CombatEngagementCoordinator';
@@ -145,6 +146,8 @@ export interface EnemyUnit {
   stuckTimerSec: number;
   lastProgressX: number;
   lastProgressZ: number;
+  shotsFiredSinceRelocate: number;
+  squadOrder: SquadTacticalOrder | null;
 }
 
 function mapArchetypeToWeapon(archetype: EnemyArchetype, index: number): EnemyWeaponClass {
@@ -171,6 +174,8 @@ export class EnemyManager {
   private seq = 0;
   private waveSeq = 0;
   private pathSyncAccum = 0;
+  private squadEvalAccum = 0;
+  private readonly squadTactics = new SquadTacticsCoordinator();
   private difficulty: Difficulty = 'normal';
   private difficultyMult = 1.0;
 
@@ -313,6 +318,35 @@ export class EnemyManager {
 
   getUnits(): readonly EnemyUnit[] {
     return this.enemies;
+  }
+
+  getSquadTacticsCoordinator(): SquadTacticsCoordinator {
+    return this.squadTactics;
+  }
+
+  /**
+   * Alerts unaware/suspicious enemies near a world event (e.g. sweeping searchlight spotting the player).
+   */
+  alertSquadsNearPosition(pos: THREE.Vector3, radius: number, nowSec: number): number {
+    let alerted = 0;
+    const rSq = radius * radius;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      const dx = u.position.x - pos.x;
+      const dz = u.position.z - pos.z;
+      if (dx * dx + dz * dz > rSq) continue;
+      u.initialGraceTimerSec = 0;
+      if (!u.lastKnownPosition) u.lastKnownPosition = new THREE.Vector3();
+      u.lastKnownPosition.copy(pos);
+      u.lkpTimestampSec = nowSec;
+      if (u.state === 'UNAWARE' || u.state === 'SUSPICIOUS') {
+        u.state = 'INVESTIGATING';
+        u.stateTimerSec = AUTHORITATIVE_COMBAT_CONFIG.investigateDurationSec;
+        alerted++;
+      }
+    }
+    return alerted;
   }
 
   getActiveThreatWarning(player: PlayerController): IncomingThreatWarning | null {
@@ -553,6 +587,8 @@ export class EnemyManager {
         stuckTimerSec: 0,
         lastProgressX: spawnPos.x,
         lastProgressZ: spawnPos.z,
+        shotsFiredSinceRelocate: 0,
+        squadOrder: null,
       };
       this.syncUnitHitboxes(unit);
       this.enemies.push(unit);
@@ -753,6 +789,34 @@ export class EnemyManager {
     const px = player.position.x;
     const py = player.position.y;
     const pz = player.position.z;
+
+    // Evaluate coordinated squad-level tactics every 0.35s across all active squads (TRN-31)
+    this.squadEvalAccum += dt;
+    if (this.squadEvalAccum >= 0.35) {
+      this.squadEvalAccum = 0;
+      const anyLos = this.enemies.some((e) => e.alive && e.hasLos);
+      const orders = this.squadTactics.evaluateSquads(
+        this.enemies.map((e) => ({
+          id: e.id,
+          squadId: e.squadId,
+          archetype: e.archetype,
+          role: e.role,
+          alive: e.alive,
+          healthRatio: e.maxHealth > 0 ? e.health / e.maxHealth : 0,
+          hasLos: e.hasLos,
+          isSuppressedOrHit: e.state === 'RETREATING' || e.isReloading,
+          distanceToPlayer: Math.hypot(e.position.x - px, e.position.z - pz),
+          elevationDelta: e.position.y - py,
+          shotsFiredSinceRelocate: e.shotsFiredSinceRelocate,
+        })),
+        player.isOccupyingVehicle(),
+        !anyLos
+      );
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
+        e.squadOrder = e.alive ? (orders.get(e.id) ?? null) : null;
+      }
+    }
 
     // Batch off-thread Hierarchical Multi-Elevation 3D A* path requests every 0.45s
     this.pathSyncAccum += dt;
@@ -1214,6 +1278,29 @@ export class EnemyManager {
                 false,
                 collision
               );
+            } else if (u.squadOrder?.shouldRelocateOverwatch && !u.isReloading) {
+              // Overwatch/Sniper relocation after firing shots so they displace tactically instead of turret-camping
+              this.coordinator?.releaseLease(u.id, 'tactical_relocate');
+              u.shotsFiredSinceRelocate = 0;
+              u.state = 'REPOSITIONING';
+              u.stateTimerSec = 2.0;
+              u.coverTarget = this.findTacticalCover(
+                u,
+                coverNodes,
+                u.lastKnownPosition ?? player.position,
+                u.squadOrder.order === 'REGROUP_FALLBACK',
+                collision
+              );
+            } else if (u.squadOrder?.order === 'REGROUP_FALLBACK') {
+              this.coordinator?.releaseLease(u.id, 'squad_fallback');
+              u.state = 'RETREATING';
+              u.coverTarget = this.findTacticalCover(
+                u,
+                coverNodes,
+                u.lastKnownPosition ?? player.position,
+                true,
+                collision
+              );
             }
           }
           break;
@@ -1338,8 +1425,21 @@ export class EnemyManager {
     let moveZ = 0;
     let holdForLift = false;
     const agentProf = getAgentTraversalProfile(u.agentProfile);
-    const preferredRange =
-      u.archetype === 'sniper' ? 52 : u.archetype === 'rocket_trooper' ? 40 : 22;
+    let preferredRange =
+      u.archetype === 'sniper'
+        ? 52
+        : u.archetype === 'rocket_trooper'
+          ? 40
+          : u.archetype === 'drone_operator'
+            ? 34
+            : 22;
+    if (u.squadOrder?.order === 'ANTI_ARMOR_FLUSH') {
+      preferredRange = Math.max(preferredRange, 44);
+    } else if (u.squadOrder?.order === 'BACKLINE_DRONE_SUPPORT') {
+      preferredRange = Math.max(preferredRange, 36);
+    } else if (u.squadOrder?.order === 'FLANK_LEFT' || u.squadOrder?.order === 'FLANK_RIGHT') {
+      preferredRange = Math.min(preferredRange, 16);
+    }
     const wpDist = Math.hypot(u.waypoint.x - u.position.x, u.waypoint.z - u.position.z);
     if (u.hasValidWaypoint && wpDist <= 0.6 && !u.targetLiftId) {
       u.hasValidWaypoint = false;
@@ -1399,8 +1499,20 @@ export class EnemyManager {
       moveX = (hasWaypoint ? u.waypoint.x : u.coverTarget.x) - u.position.x;
       moveZ = (hasWaypoint ? u.waypoint.z : u.coverTarget.z) - u.position.z;
     } else if (u.state === 'REPOSITIONING') {
-      if (u.role === 'flanker' && u.lastKnownPosition && !u.targetLiftId) {
-        const side = parseInt(u.id.split('_')[1] ?? '1', 10) % 2 === 0 ? 1 : -1;
+      if (
+        (u.role === 'flanker' ||
+          u.squadOrder?.order === 'FLANK_LEFT' ||
+          u.squadOrder?.order === 'FLANK_RIGHT') &&
+        u.lastKnownPosition &&
+        !u.targetLiftId
+      ) {
+        const flankAngle = u.squadOrder?.flankAngleOffsetRad ?? 0;
+        const side =
+          flankAngle !== 0
+            ? Math.sign(flankAngle)
+            : parseInt(u.id.split('_')[1] ?? '1', 10) % 2 === 0
+              ? 1
+              : -1;
         const dx = u.lastKnownPosition.x - u.position.x;
         const dz = u.lastKnownPosition.z - u.position.z;
         moveX = dx * 0.35 - dz * side * 0.85;
@@ -1557,6 +1669,7 @@ export class EnemyManager {
         u.ammoInMag--;
         u.burstShotsRemaining--;
         u.burstShotIndex++;
+        u.shotsFiredSinceRelocate++;
 
         if (u.ammoInMag <= 0) {
           u.isReloading = true;
@@ -1935,6 +2048,8 @@ export class EnemyManager {
     this.enemies = [];
     this.waveSeq = 0;
     this.pathSyncAccum = 0;
+    this.squadEvalAccum = 0;
+    this.squadTactics.reset();
     for (let i = 0; i < this._hitscanPool.length; i++) {
       this._hitscanPool[i].unit = null;
       this._hitscanPool[i].cb = null;

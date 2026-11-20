@@ -26,8 +26,11 @@ import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { getMissionVisualProfile } from '@/src/world/VisualBible';
+import { SquadCommandSource, SquadOrderType } from '@/src/gameplay/squad/SquadIntentRouter';
+import { WeaponId } from '@/src/schemas/weapon.schema';
 import { computeMobileHudLayout } from './mobileHudLayoutEngine';
 import { MobileTouchControls } from './MobileTouchControls';
+import { SquadCommandHud } from './SquadCommandHud';
 import { TacticalMiniMap } from './TacticalMiniMap';
 import { DownedActionOverlay, TacticalOverviewDrawer } from './TacticalOverlays';
 
@@ -37,6 +40,8 @@ export function GameHUD({
   onRestartCheckpoint,
   onRestartMission,
   onAbort,
+  onIssueSquadCommand,
+  onSwapFieldWeapon,
   inputManager = null,
   touchControlsVisible = false,
 }: {
@@ -45,6 +50,12 @@ export function GameHUD({
   onRestartCheckpoint?: () => void;
   onRestartMission?: () => void;
   onAbort?: () => void;
+  onIssueSquadCommand?: (
+    order: SquadOrderType,
+    source: SquadCommandSource,
+    operatorId?: string
+  ) => void;
+  onSwapFieldWeapon?: (replaceSlotIndex: number, nextWeaponId: WeaponId) => void;
   inputManager?: InputManager | null;
   touchControlsVisible?: boolean;
 }) {
@@ -387,22 +398,44 @@ export function GameHUD({
           </button>
         )}
 
-        {/* Compact Encounter-Relevant Aircraft Health Bar */}
+        {/* Compact Encounter-Relevant Aircraft Health Bar with Boss Phase & Vulnerability Cue */}
         {hud.activeBossLabel && (
           <div
             data-testid="hud-boss-bar"
-            className="w-40 sm:w-56 bg-[#0B0E11]/78 border border-red-500/55 px-2 py-0.5 rounded-sm shadow-sm"
+            className={`w-48 sm:w-64 bg-[#0B0E11]/82 border px-2 py-1 rounded-sm shadow-sm transition-colors ${
+              hud.activeBossVulnerable ? 'border-amber-400/85' : 'border-red-500/55'
+            }`}
           >
-            <div className="flex justify-between items-center font-mono text-[9px] sm:text-[10px] text-red-300 leading-none mb-0.5">
-              <span className="truncate max-w-[115px] sm:max-w-[165px]">{hud.activeBossLabel}</span>
-              <span className="tabular-nums font-bold">{Math.round(hud.activeBossHealthPct * 100)}%</span>
+            <div className="flex justify-between items-center font-mono text-[9px] sm:text-[10px] leading-none mb-0.5">
+              <span
+                className={`truncate max-w-[135px] sm:max-w-[190px] ${
+                  hud.activeBossVulnerable ? 'text-amber-300 font-bold' : 'text-red-300'
+                }`}
+              >
+                {hud.activeBossLabel}
+              </span>
+              <span className="tabular-nums font-bold text-zinc-100">
+                {Math.round(hud.activeBossHealthPct * 100)}%
+              </span>
             </div>
             <div className="h-1 bg-zinc-800/90 overflow-hidden">
               <div
-                className="h-full bg-red-500 transition-all duration-150"
+                className={`h-full transition-all duration-150 ${
+                  hud.activeBossVulnerable ? 'bg-amber-400' : 'bg-red-500'
+                }`}
                 style={{ width: `${Math.round(hud.activeBossHealthPct * 100)}%` }}
               />
             </div>
+            {hud.activeBossPhaseLabel && (
+              <div
+                data-testid="hud-boss-phase"
+                className={`mt-0.5 font-mono text-[8.5px] uppercase tracking-wider leading-none ${
+                  hud.activeBossVulnerable ? 'text-amber-300 font-bold' : 'text-zinc-400'
+                }`}
+              >
+                {hud.activeBossPhaseLabel}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1235,9 +1268,24 @@ export function GameHUD({
         />
       )}
 
+      {/* Stage 7 TRN-37 Fireteam Status Strip, Hold-[Q] Radial Wheel & Supply Swap */}
+      {onIssueSquadCommand && onSwapFieldWeapon && (
+        <SquadCommandHud
+          hud={hud}
+          compactHud={compactHud}
+          downedActive={Boolean(downedState?.active)}
+          onIssueCommand={onIssueSquadCommand}
+          onSwapFieldWeapon={onSwapFieldWeapon}
+        />
+      )}
+
       {/* Multi-Touch Virtual Twin-Stick & Profile-Aware Action Overlay */}
       {touchControlsVisible && !downedState?.active && (
-        <MobileTouchControls inputManager={inputManager} hud={hud} />
+        <MobileTouchControls
+          inputManager={inputManager}
+          hud={hud}
+          onIssueSquadCommand={onIssueSquadCommand}
+        />
       )}
     </div>
   );

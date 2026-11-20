@@ -878,3 +878,114 @@ export function computeMobileVehicleHudLayout(
     overlappingPairs,
   };
 }
+
+export interface MobileSquadStripRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  right: number;
+  bottom: number;
+  buttonSizePx: number;
+  overlapsAnyControl: boolean;
+  stickyViewportRatio: number;
+}
+
+/**
+ * TRN-37 Mobile-Native Thumb-Safe Squad Command Strip Layout.
+ * Places a compact single-button contextual ping + hold-slide command anchor
+ * in the upper-right/mid-right safe corridor (>= 44px touch target, <= 15% sticky budget,
+ * strictly non-overlapping with every active touch control and top-bar chrome).
+ */
+export function computeMobileSquadStripRect(
+  layout: ComputedMobileHudLayout
+): MobileSquadStripRect {
+  const buttonSizePx = 46;
+  const width = buttonSizePx;
+  const height = buttonSizePx;
+  const minGap = 8;
+
+  // Preferred corridor: upper-right edge below the top-right status/pause bar
+  // and above the right-thumb action cluster (ADS / Jump / Crouch / Fire).
+  const candidatePositions: Array<{ left: number; top: number }> = [
+    {
+      left: layout.safeBounds.right - width,
+      top: layout.topHudKeepOutBottomPx + 8,
+    },
+    {
+      left: layout.safeBounds.right - width - 56,
+      top: layout.topHudKeepOutBottomPx + 8,
+    },
+    {
+      left: Math.round(layout.viewportWidth * 0.5 - width * 0.5),
+      top: layout.topHudKeepOutBottomPx + 8,
+    },
+    {
+      left: layout.safeBounds.left,
+      top: layout.topHudKeepOutBottomPx + 8,
+    },
+  ];
+
+  const crosshairBox = {
+    left: Math.round(layout.viewportWidth / 2 - 28),
+    right: Math.round(layout.viewportWidth / 2 + 28),
+    top: Math.round(layout.viewportHeight / 2 - 28),
+    bottom: Math.round(layout.viewportHeight / 2 + 28),
+  };
+
+  let chosen = candidatePositions[0];
+  let overlapsAnyControl = true;
+
+  for (const cand of candidatePositions) {
+    const clampedLeft = Math.round(
+      clamp(cand.left, layout.safeBounds.left, Math.max(layout.safeBounds.left, layout.safeBounds.right - width))
+    );
+    const clampedTop = Math.round(
+      clamp(cand.top, layout.topHudKeepOutBottomPx + 4, Math.max(layout.topHudKeepOutBottomPx + 4, layout.safeBounds.bottom - height))
+    );
+    const rect = {
+      left: clampedLeft,
+      top: clampedTop,
+      right: clampedLeft + width,
+      bottom: clampedTop + height,
+    };
+    const collides =
+      doRectsOverlap(rect, crosshairBox, 4) ||
+      layout.visibleControls.some((ctrl) => doRectsOverlap(rect, ctrl, minGap));
+    if (!collides) {
+      chosen = { left: clampedLeft, top: clampedTop };
+      overlapsAnyControl = false;
+      break;
+    }
+  }
+
+  // Fallback vertical scan along the right safe edge if all preset slots collided
+  if (overlapsAnyControl) {
+    const x = Math.max(layout.safeBounds.left, layout.safeBounds.right - width);
+    for (let y = layout.topHudKeepOutBottomPx + 4; y <= layout.safeBounds.bottom - height; y += 8) {
+      const rect = { left: x, top: y, right: x + width, bottom: y + height };
+      const collides =
+        doRectsOverlap(rect, crosshairBox, 4) ||
+        layout.visibleControls.some((ctrl) => doRectsOverlap(rect, ctrl, 4));
+      if (!collides) {
+        chosen = { left: x, top: y };
+        overlapsAnyControl = false;
+        break;
+      }
+    }
+  }
+
+  const stickyViewportRatio = (width * height) / Math.max(1, layout.viewportWidth * layout.viewportHeight);
+  return {
+    left: chosen.left,
+    top: chosen.top,
+    width,
+    height,
+    right: chosen.left + width,
+    bottom: chosen.top + height,
+    buttonSizePx,
+    overlapsAnyControl,
+    stickyViewportRatio,
+  };
+}
+
