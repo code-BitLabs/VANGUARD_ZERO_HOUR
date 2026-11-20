@@ -8,6 +8,7 @@ import {
   MissionLoadoutConfigSchema,
   NamedLoadoutPresetSchema,
   OperatorCustomizationSchema,
+  SavedWeaponBuildSchema,
   SquadOperatorRecordSchema,
 } from './campaign.schema';
 import { DifficultySchema, GradeSchema } from './common.schema';
@@ -83,12 +84,24 @@ export const ProgressionSaveSchema = z.object({
     heavyWeapon: 'rocket_launcher',
     tacticalEquipment: 'frag_pack',
     squadIds: ['vanguard_2', 'bulwark_3', 'lifeline_6'],
+    initialFormation: 'WEDGE',
   }),
   loadoutPresets: z
     .array(NamedLoadoutPresetSchema)
-    .default(() => DEFAULT_ROLE_LOADOUT_PRESETS.map((p) => ({ ...p, config: { ...p.config, squadIds: [...p.config.squadIds] } }))),
+    .default(() =>
+      DEFAULT_ROLE_LOADOUT_PRESETS.map((p) => ({
+        ...p,
+        config: {
+          ...p.config,
+          squadIds: [...p.config.squadIds],
+          initialFormation: p.config.initialFormation ?? 'WEDGE',
+        },
+      }))
+    ),
   unlockedAttachments: z.array(z.string()).default([]),
   weaponAttachments: z.record(z.string(), EquippedWeaponAttachmentsSchema).default({}),
+  savedWeaponBuilds: z.array(SavedWeaponBuildSchema).default([]),
+  creditedOperationRunIds: z.array(z.string()).default([]),
   unlockedCosmetics: z
     .array(z.string())
     .default(['camo:obsidian_ops', 'helmet:standard_ops', 'patch:task_force_zero']),

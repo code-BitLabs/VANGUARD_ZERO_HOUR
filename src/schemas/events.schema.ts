@@ -239,7 +239,7 @@ export const HudSnapshotSchema = z.object({
   squad: z
     .object({
       activeOrderLabel: z.string(),
-      activeFormation: z.enum(['WEDGE', 'COLUMN', 'LINE', 'COMPACT']),
+      activeFormation: z.enum(['WEDGE', 'COLUMN', 'LINE', 'COMPACT', 'OVERWATCH']),
       squadMedCharges: z.number().int().nonnegative(),
       downedCount: z.number().int().nonnegative(),
       nearestDownedOperatorId: z.string().nullable(),
@@ -272,5 +272,24 @@ export const HudSnapshotSchema = z.object({
     .optional(),
   carriedWeaponIds: z.array(WeaponIdSchema).optional(),
   nearSupplySwapStation: z.boolean().optional(),
+  deploymentMode: z.enum(['solo', 'fireteam']).optional(),
+  soloTraumaKit: z
+    .object({
+      chargesRemaining: z.number().int().nonnegative(),
+      maxCharges: z.number().int().nonnegative(),
+      cooldownRemainingSec: z.number().nonnegative(),
+      pressureState: z.enum(['CALM', 'ENGAGED', 'HIGH_PRESSURE', 'RELIEF_WINDOW']).optional(),
+    })
+    .optional(),
+  activeRadioSubtitle: z
+    .object({
+      id: z.number().int().positive(),
+      callsign: z.string(),
+      roleBadge: z.string(),
+      text: z.string(),
+      priority: z.enum(['CRITICAL', 'TACTICAL', 'BANTER']),
+    })
+    .nullable()
+    .optional(),
 });
 export type HudSnapshot = z.infer<typeof HudSnapshotSchema>;

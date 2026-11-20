@@ -2,6 +2,7 @@ import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { Smartphone } from 'lucide-react';
 import { GameEngine } from '@/src/engine/GameEngine';
 import { InputManager } from '@/src/engine/InputManager';
+import { DeploymentMode } from '@/src/schemas/campaign.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 import { missionSelectionStore, useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
@@ -117,9 +118,16 @@ export default function App() {
     }
   }, [viewport.shouldBlockPortrait]);
 
-  const handleDeploy = (missionId: number, diff: Difficulty, weaponId?: WeaponId) => {
+  const handleDeploy = (
+    missionId: number,
+    diff: Difficulty,
+    weaponId?: WeaponId,
+    mode?: DeploymentMode
+  ) => {
+    const resolvedMode =
+      mode ?? missionSelectionStore.getState().getDeploymentModeForMission(missionId);
     setDeploymentKey((k) => k + 1);
-    void engineRef.current?.startMission(missionId, diff, weaponId);
+    void engineRef.current?.startMission(missionId, diff, weaponId, resolvedMode);
   };
 
   const handleUiClick = () => {
@@ -162,7 +170,7 @@ export default function App() {
           <Suspense fallback={<MenuSuspenseFallback />}>
             {screen === 'campaign' && (
               <CampaignScreen
-                onDeploy={(mId, diff) => handleDeploy(mId, diff)}
+                onDeploy={(mId, diff, mode) => handleDeploy(mId, diff, undefined, mode)}
                 onUiClick={handleUiClick}
               />
             )}
@@ -218,6 +226,7 @@ export default function App() {
                 onSwapFieldWeapon={(slotIdx, weaponId) =>
                   engineRef.current?.swapFieldWeapon(slotIdx, weaponId)
                 }
+                onTriggerSoloSelfRecovery={() => engineRef.current?.triggerSoloSelfRecovery()}
                 inputManager={inputManager}
                 touchControlsVisible={touchControlsVisible}
               />

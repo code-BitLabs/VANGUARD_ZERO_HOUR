@@ -6,6 +6,10 @@ import {
   TelegraphedCounterDirective,
 } from '@/src/gameplay/ai/BattlefieldIntelligenceBoard';
 import { MissionConsequenceModifiers } from '@/src/gameplay/campaign/CampaignEventLedger';
+import {
+  getMissionBalanceProfile,
+  resolveConsequenceWaveMutation,
+} from '@/src/gameplay/campaign/CampaignBalanceProfile';
 
 export type EncounterPhase =
   | 'OPENING_PUSH'
@@ -191,8 +195,13 @@ export class EncounterDirector {
   private searchlights: SearchlightTowerState[] = [];
   private slagHazards: SlagHazardZone[] = [];
   private campaignModifiers: MissionConsequenceModifiers | null = null;
+  private deploymentMode: 'solo' | 'fireteam' = 'fireteam';
 
-  reset(missionId: number, campaignModifiers?: MissionConsequenceModifiers | null): void {
+  reset(
+    missionId: number,
+    campaignModifiers?: MissionConsequenceModifiers | null,
+    deploymentMode: 'solo' | 'fireteam' = 'fireteam'
+  ): void {
     this.missionId = missionId;
     this.phase = 'OPENING_PUSH';
     this.triggeredSetPieces.clear();
@@ -206,6 +215,7 @@ export class EncounterDirector {
     this.searchlights = [];
     this.slagHazards = [];
     this.campaignModifiers = campaignModifiers ?? null;
+    this.deploymentMode = deploymentMode;
     this.intelBoard.reset(campaignModifiers?.enemyCommsDelayMult ?? 1.0);
 
     if (missionId === 3) {
@@ -295,12 +305,36 @@ export class EncounterDirector {
     const entry = pool[this.waveCycleIndex % pool.length];
     this.waveCycleIndex++;
 
+    const mutation = resolveConsequenceWaveMutation({
+      missionId,
+      stageIndex: activeStageIndex,
+      baseArchetype: entry.archetype,
+      consequences: this.campaignModifiers,
+    });
+
+    const finalArchetype = mutation.archetypeOverride ?? entry.archetype;
+    const rawCount = Math.max(1, Math.min(4, requestedCount + mutation.countDelta));
+    const soloStaggerDelta = this.deploymentMode === 'solo' && rawCount >= 3 ? -1 : 0;
+    const finalCount = Math.max(1, rawCount + soloStaggerDelta);
+    const calloutPrefix = mutation.calloutPrefix
+      ? mutation.calloutPrefix
+      : this.deploymentMode === 'solo'
+        ? '[TELEGRAPH]'
+        : '';
+    const finalCallout = calloutPrefix
+      ? `${calloutPrefix} ${entry.callout}`
+      : entry.callout;
+
     return {
-      archetype: entry.archetype,
-      count: Math.max(2, Math.min(4, requestedCount)),
-      spawnPos: { x: entry.x, y: entry.y, z: entry.z },
+      archetype: finalArchetype,
+      count: finalCount,
+      spawnPos: {
+        x: entry.x + mutation.spawnOffsetX,
+        y: entry.y,
+        z: entry.z + mutation.spawnOffsetZ,
+      },
       radius: 10,
-      radioCallout: entry.callout,
+      radioCallout: finalCallout,
     };
   }
 
@@ -318,10 +352,12 @@ export class EncounterDirector {
       this.searchlightAlertCooldownSec = Math.max(0, this.searchlightAlertCooldownSec - safeDt);
     }
 
-    // 1. Pacing state transitions (breather window on stage advance prevents exhausting nonstop attrition)
+    // 1. Pacing state transitions (mission-calibrated breather window prevents exhausting nonstop attrition)
     if (input.activeStageIndex > this.lastStageIndex) {
       this.lastStageIndex = input.activeStageIndex;
-      this.breatherRemainingSec = 5.0;
+      const soloBreatherBonus = this.deploymentMode === 'solo' ? 4.0 : 0;
+      this.breatherRemainingSec =
+        getMissionBalanceProfile(this.missionId).stageBreatherSec + soloBreatherBonus;
     } else if (this.breatherRemainingSec > 0) {
       this.breatherRemainingSec = Math.max(0, this.breatherRemainingSec - safeDt);
     }

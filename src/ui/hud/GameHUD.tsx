@@ -42,6 +42,7 @@ export function GameHUD({
   onAbort,
   onIssueSquadCommand,
   onSwapFieldWeapon,
+  onTriggerSoloSelfRecovery,
   inputManager = null,
   touchControlsVisible = false,
 }: {
@@ -56,6 +57,7 @@ export function GameHUD({
     operatorId?: string
   ) => void;
   onSwapFieldWeapon?: (replaceSlotIndex: number, nextWeaponId: WeaponId) => void;
+  onTriggerSoloSelfRecovery?: () => boolean | void;
   inputManager?: InputManager | null;
   touchControlsVisible?: boolean;
 }) {
@@ -1027,16 +1029,43 @@ export function GameHUD({
         </div>
       )}
 
-      {hud.subtitleText && (
+      {hud.activeRadioSubtitle ? (
         <div
-          data-testid="hud-tier2-radio-subtitle"
-          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/88 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 text-center ${
-            compactHud ? 'bottom-[68px] max-w-[320px]' : 'bottom-24 max-w-md sm:max-w-xl'
-          }`}
+          data-testid="hud-squad-radio-subtitle"
+          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/92 border-l-2 border-y border-r px-3 py-1.5 rounded-xs flex items-center gap-2 text-[10px] sm:text-xs text-zinc-100 shadow-lg ${
+            hud.activeRadioSubtitle.priority === 'CRITICAL'
+              ? 'border-l-red-500 border-red-500/40'
+              : hud.activeRadioSubtitle.priority === 'TACTICAL'
+                ? 'border-l-amber-400 border-zinc-700'
+                : 'border-l-cyan-400 border-zinc-800'
+          } ${compactHud ? 'bottom-[68px] max-w-[330px]' : 'bottom-24 max-w-md sm:max-w-xl'}`}
         >
-          <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-          <span>{hud.subtitleText}</span>
+          <Radio
+            className={`w-3.5 h-3.5 shrink-0 ${
+              hud.activeRadioSubtitle.priority === 'CRITICAL'
+                ? 'text-red-400'
+                : hud.activeRadioSubtitle.priority === 'TACTICAL'
+                  ? 'text-amber-400'
+                  : 'text-cyan-400'
+            }`}
+          />
+          <span className="font-mono text-[9.5px] uppercase font-bold text-amber-300 whitespace-nowrap shrink-0">
+            [{hud.activeRadioSubtitle.roleBadge}] {hud.activeRadioSubtitle.callsign}:
+          </span>
+          <span className="text-left leading-snug">{hud.activeRadioSubtitle.text}</span>
         </div>
+      ) : (
+        hud.subtitleText && (
+          <div
+            data-testid="hud-tier2-radio-subtitle"
+            className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/88 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 text-center ${
+              compactHud ? 'bottom-[68px] max-w-[320px]' : 'bottom-24 max-w-md sm:max-w-xl'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>{hud.subtitleText}</span>
+          </div>
+        )
       )}
 
       {/* Desktop Bottom-Left Health & Armor Telemetry */}
@@ -1258,23 +1287,42 @@ export function GameHUD({
         />
       )}
 
-      {/* Tactical Downed / Kill-Cam Overlay (~2.4s controlled transition with fatal attacker breakdown) */}
+      {/* Solo Operator Compact Trauma Charge Indicator (No Squad Controls) */}
+      {hud.deploymentMode === 'solo' && hud.soloTraumaKit && !compactHud && !downedState?.active && (
+        <div
+          data-testid="hud-solo-trauma-status"
+          className="absolute bottom-36 left-4 z-20 bg-[#0B0E11]/86 border border-zinc-800 rounded-sm px-3 py-1.5 font-mono text-[10px] flex items-center gap-2.5 pointer-events-none"
+        >
+          <span className="text-amber-400 font-bold uppercase tracking-wider">SOLO OPERATOR</span>
+          <span className="text-zinc-700">|</span>
+          <span
+            className={
+              hud.soloTraumaKit.chargesRemaining > 0 ? 'text-emerald-400 font-semibold' : 'text-zinc-500'
+            }
+          >
+            TRAUMA REVIVE {hud.soloTraumaKit.chargesRemaining}/{hud.soloTraumaKit.maxCharges}
+          </span>
+        </div>
+      )}
+
+      {/* Tactical Downed / Kill-Cam Overlay (with Solo Emergency Trauma Revive when available) */}
       {downedState?.active && (
         <DownedActionOverlay
           downedState={downedState}
+          onTriggerSoloSelfRecovery={onTriggerSoloSelfRecovery}
           onRestartCheckpoint={onRestartCheckpoint}
           onRestartMission={onRestartMission}
           onAbort={onAbort}
         />
       )}
 
-      {/* Stage 7 TRN-37 Fireteam Status Strip, Hold-[Q] Radial Wheel & Supply Swap */}
-      {onIssueSquadCommand && onSwapFieldWeapon && (
+      {/* Stage 7 TRN-37 Fireteam Status Strip, Hold-[Q] Radial Wheel & Supply Swap (Solo hides squad UI, keeps Field Swap) */}
+      {onSwapFieldWeapon && (
         <SquadCommandHud
           hud={hud}
           compactHud={compactHud}
           downedActive={Boolean(downedState?.active)}
-          onIssueCommand={onIssueSquadCommand}
+          onIssueCommand={hud.deploymentMode === 'solo' ? undefined : onIssueSquadCommand}
           onSwapFieldWeapon={onSwapFieldWeapon}
         />
       )}
@@ -1284,7 +1332,7 @@ export function GameHUD({
         <MobileTouchControls
           inputManager={inputManager}
           hud={hud}
-          onIssueSquadCommand={onIssueSquadCommand}
+          onIssueSquadCommand={hud.deploymentMode === 'solo' ? undefined : onIssueSquadCommand}
         />
       )}
     </div>

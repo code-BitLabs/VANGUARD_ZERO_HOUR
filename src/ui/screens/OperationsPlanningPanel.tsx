@@ -20,7 +20,9 @@ import {
   resolveDeployableFireteam,
   SQUAD_ARCHETYPE_FLYWEIGHTS,
 } from '@/src/data/squadRoster';
+import { getOperatorVoiceProfile } from '@/src/data/squadDialogue';
 import { WEAPON_CATALOG } from '@/src/data/weapons';
+import { getMissionBalanceProfile } from '@/src/gameplay/campaign/CampaignBalanceProfile';
 import {
   foldCampaignLedger,
   getMissionIntelBriefing,
@@ -87,6 +89,10 @@ export function OperationsPlanningPanel({
     [missionId, consequences]
   );
   const recommendation = MISSION_LOADOUT_RECOMMENDATIONS[missionId];
+  const missionBalanceProfile = useMemo(
+    () => getMissionBalanceProfile(missionId),
+    [missionId]
+  );
 
   const resolvedTeam = useMemo(
     () => resolveDeployableFireteam(save.squadRoster, activeLoadout.squadIds, 3),
@@ -162,6 +168,24 @@ export function OperationsPlanningPanel({
                 ? 'Hide Ledger'
                 : `Ledger (${save.campaignLedger.events.length} Events)`}
             </button>
+          </div>
+
+          <div
+            data-testid="mission-pacing-brief"
+            className="bg-[#141920] border border-zinc-800/90 px-2.5 py-2 rounded-xs space-y-1 text-[10.5px]"
+          >
+            <div className="flex items-center justify-between gap-2 font-mono text-[9.5px] uppercase">
+              <span className="text-amber-300 font-bold truncate">
+                {missionBalanceProfile.tacticalFocus}
+              </span>
+              <span className="text-zinc-400 tabular-nums shrink-0">
+                THREAT {missionBalanceProfile.difficultyIndex.toFixed(2)}×
+              </span>
+            </div>
+            <div className="text-zinc-300 leading-snug">
+              <span className="font-mono text-[9.5px] text-cyan-400 uppercase mr-1">Squad Edge:</span>
+              {missionBalanceProfile.squadValueHighlight}
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -294,6 +318,7 @@ export function OperationsPlanningPanel({
             <div className="space-y-1">
               {save.squadRoster.map((op) => {
                 const archetype = SQUAD_ARCHETYPE_FLYWEIGHTS[op.role];
+                const voice = getOperatorVoiceProfile(op.id, op.role);
                 const selected = activeLoadout.squadIds.includes(op.id);
                 const recovering = op.status === 'recovering';
                 const kia = op.status === 'kia';
@@ -327,6 +352,12 @@ export function OperationsPlanningPanel({
                       {specs && (
                         <div className="font-mono text-[9px] text-amber-300 truncate mt-0.5">
                           {specs}
+                        </div>
+                      )}
+                      {selected && !recovering && !kia && (
+                        <div className="text-[9.5px] text-zinc-400 truncate mt-0.5">
+                          <span className="font-mono text-zinc-300 uppercase">{voice.personalityTag}:</span>{' '}
+                          “{voice.briefingQuip}”
                         </div>
                       )}
                     </button>

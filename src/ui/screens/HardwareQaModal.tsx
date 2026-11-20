@@ -3,6 +3,8 @@ import { Check, ClipboardCopy, Download, MonitorCheck, Plus, X } from 'lucide-re
 import {
   HardwareProfileCategory,
   hardwareReadinessHarness,
+  PlatformVerificationStatus,
+  ReleaseCandidateDeviceId,
 } from '@/src/gameplay/diagnostics/HardwareReadinessHarness';
 import { Button } from '@/src/ui/primitives/Button';
 
@@ -58,6 +60,28 @@ export function HardwareQaModal({ open, onClose, gpuRenderer }: HardwareQaModalP
     setSavedNotice(true);
     setRevision((r) => r + 1);
     window.setTimeout(() => setSavedNotice(false), 1800);
+  };
+
+  const cyclePlatformStatus = (
+    deviceId: ReleaseCandidateDeviceId,
+    current: PlatformVerificationStatus
+  ) => {
+    const next: PlatformVerificationStatus =
+      current === 'NOT_RUN_HEADLESS'
+        ? 'PASS_ON_HARDWARE'
+        : current === 'PASS_ON_HARDWARE'
+          ? 'FAIL_ON_HARDWARE'
+          : 'NOT_RUN_HEADLESS';
+    const p95 = snapshot.frameTimePercentilesMs.sampleCount > 0 ? snapshot.frameTimePercentilesMs.p95 : null;
+    hardwareReadinessHarness.setPlatformChecklistStatus(
+      deviceId,
+      next,
+      next === 'NOT_RUN_HEADLESS'
+        ? 'Reset to pending physical device verification.'
+        : `Recorded in interactive browser session (${snapshot.viewport.width}x${snapshot.viewport.height}).`,
+      next === 'NOT_RUN_HEADLESS' ? null : p95
+    );
+    setRevision((r) => r + 1);
   };
 
   const buildPayload = (kind: 'json' | 'md') => {
@@ -142,6 +166,89 @@ export function HardwareQaModal({ open, onClose, gpuRenderer }: HardwareQaModalP
             {snapshot.gpuSummary.rendererLabel}
           </span>
         </div>
+
+        {/* TRN-49 Physical Hardware Verification Checklist */}
+        <div
+          data-testid="rc-platform-checklist"
+          className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wider">
+            <span className="text-cyan-400 font-bold">
+              Release Candidate Physical Hardware Matrix
+            </span>
+            <span className="text-zinc-500">
+              Headless checks never mark physical hardware as passed
+            </span>
+          </div>
+          <div className="space-y-1">
+            {snapshot.platformChecklist.map((entry) => (
+              <div
+                key={entry.deviceId}
+                className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-900 pt-1.5 font-mono text-[10.5px]"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-zinc-200 truncate">
+                    {entry.label}{' '}
+                    <span className="text-zinc-500">({entry.targetFps} FPS target)</span>
+                  </div>
+                  <div className="text-[9.5px] text-zinc-500 truncate">{entry.note}</div>
+                </div>
+                <button
+                  type="button"
+                  data-testid={`rc-device-status-${entry.deviceId}`}
+                  onClick={() => cyclePlatformStatus(entry.deviceId, entry.status)}
+                  className={`min-h-[30px] px-2 py-0.5 rounded-xs border text-[9.5px] uppercase font-bold cursor-pointer whitespace-nowrap ${
+                    entry.status === 'PASS_ON_HARDWARE'
+                      ? 'bg-emerald-950/50 border-emerald-500 text-emerald-300'
+                      : entry.status === 'FAIL_ON_HARDWARE'
+                        ? 'bg-red-950/50 border-red-500 text-red-300'
+                        : 'bg-[#141920] border-zinc-700 text-amber-300'
+                  }`}
+                >
+                  {entry.status.replace(/_/g, ' ')}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* TRN-48 Read-Only Local Playtest Friction Diagnostics */}
+        {snapshot.latestPlaytestSummary && (
+          <div
+            data-testid="qa-playtest-friction"
+            className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-1.5 font-mono text-[10.5px]"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase">
+              <span className="text-amber-400 font-bold">
+                Latest Playtest Diagnostics (Mission 0{snapshot.latestPlaytestSummary.missionId} ·{' '}
+                {snapshot.latestPlaytestSummary.outcome})
+              </span>
+              <span className="text-zinc-400 tabular-nums">
+                {snapshot.latestPlaytestSummary.squadCommandsIssued} ORDERS · AVG{' '}
+                {snapshot.latestPlaytestSummary.avgCommandLatencyMs}ms ·{' '}
+                {snapshot.latestPlaytestSummary.squadDownedEvents} DOWNS
+              </span>
+            </div>
+            <div className="space-y-1">
+              {snapshot.latestPlaytestSummary.frictionFindings.map((finding, idx) => (
+                <div key={`${finding.area}-${idx}`} className="text-[10px] text-zinc-300 leading-snug">
+                  <span
+                    className={`uppercase font-bold mr-1.5 ${
+                      finding.severity === 'critical'
+                        ? 'text-red-400'
+                        : finding.severity === 'warning'
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                    }`}
+                  >
+                    [{finding.severity}]
+                  </span>
+                  <span>{finding.summary}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">

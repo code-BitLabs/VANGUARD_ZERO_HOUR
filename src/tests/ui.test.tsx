@@ -44,9 +44,17 @@ describe('Tactical UI Screens & HUD', () => {
     expect(screen.getByText(/Jungle Strike/i)).toBeTruthy();
     expect(screen.getByText(/Final Extraction/i)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /Deploy Operation/i }));
+    fireEvent.click(screen.getByTestId('campaign-step1-continue'));
+    expect(screen.getByTestId('campaign-step-playstyle')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('campaign-step2-continue'));
+    expect(screen.getByTestId('campaign-step-configure')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('campaign-step3-continue'));
+    expect(screen.getByTestId('campaign-step-review')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('deploy-operation-btn'));
     expect(onDeploy).toHaveBeenCalledTimes(1);
     expect(missionSelectionStore.getState().hasSeenCampaignBriefing).toBe(true);
+    expect(missionSelectionStore.getState().hasConfirmedDeploymentMode).toBe(true);
 
     // Returning player now sees Quick Deploy on TitleScreen
     cleanup();

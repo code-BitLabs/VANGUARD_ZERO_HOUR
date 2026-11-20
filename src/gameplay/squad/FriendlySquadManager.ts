@@ -20,6 +20,8 @@ import {
   SquadCommandBeacon,
 } from './FriendlyOperatorRigBuilder';
 import {
+  assignFormationSlotIndicesByRole,
+  computeCrossfireClearanceOffset,
   FormationWorldSlot,
   projectFormationSlotsInto,
   selectDynamicFormation,
@@ -107,6 +109,21 @@ export interface FriendlyFireRequest {
   suppressionPower: number;
 }
 
+export interface SquadTelemetryEventBatch {
+  commandLatencySamplesMs: number[];
+  medicRevivesThisTick: number;
+  playerRevivesThisTick: number;
+  downedEventsThisTick: Array<{ operatorId: string; callsign: string; role: SquadRoleId }>;
+  miaEventsThisTick: Array<{ operatorId: string; callsign: string; role: SquadRoleId }>;
+  revivedEventsThisTick: Array<{
+    operatorId: string;
+    callsign: string;
+    role: SquadRoleId;
+    byMedic: boolean;
+    rescuerCallsign: string;
+  }>;
+}
+
 export interface SquadFrameOutput {
   fireRequests: FriendlyFireRequest[];
   radioCallout: string | null;
@@ -114,12 +131,14 @@ export interface SquadFrameOutput {
   navSolvesThisTick: number;
   maxDisplacementThisTick: number;
   hudSummary: SquadHudSummary;
+  telemetryEvents: SquadTelemetryEventBatch;
 }
 
 export interface FriendlyOperatorRuntime extends EnemyLocomotionUnit {
   record: SquadOperatorRecord;
   isReserve: boolean;
   role: SquadRoleId;
+  roleSlotIndex: number;
   health: number;
   maxHealth: number;
   armor: number;
@@ -137,6 +156,11 @@ export interface FriendlyOperatorRuntime extends EnemyLocomotionUnit {
   inVehicleId: string | null;
   fireCooldownSec: number;
   muzzleFlashTimerSec: number;
+  ackPulseTimerSec: number;
+  commandIssuedAtSec: number | null;
+  pendingImmediateCommandAck: boolean;
+  stanceOffsetY: number;
+  recoilOffsetZ: number;
   killsThisOp: number;
   revivesThisOp: number;
   vehiclesDisabledThisOp: number;
@@ -220,6 +244,15 @@ export class FriendlySquadManager {
   private readonly fireRequestsScratch: FriendlyFireRequest[] = [];
   private readonly aliveEnemyIdSet = new Set<string>();
   private readonly plannerSnapshotsScratch: PlannerOperatorSnapshot[] = [];
+  private readonly crossfireOffsetScratch = { x: 0, z: 0 };
+  private readonly pendingTelemetry: SquadTelemetryEventBatch = {
+    commandLatencySamplesMs: [],
+    medicRevivesThisTick: 0,
+    playerRevivesThisTick: 0,
+    downedEventsThisTick: [],
+    miaEventsThisTick: [],
+    revivedEventsThisTick: [],
+  };
 
   initializeForMission(params: {
     scene: THREE.Scene | null;
@@ -231,12 +264,13 @@ export class FriendlySquadManager {
     difficulty: Difficulty;
     bonusMedCharges?: number;
     squadSize?: number;
+    initialFormation?: SquadFormationType;
   }): { reserveCount: number; substitutedNames: string[] } {
     this.dispose(params.scene);
 
     this.difficulty = params.difficulty;
     this.squadMedCharges = Math.max(1, 2 + (params.bonusMedCharges ?? 0));
-    this.activeFormation = 'WEDGE';
+    this.activeFormation = params.initialFormation ?? 'WEDGE';
     this.plannerAccumSec = 0;
     this.plannerRoundRobin = 0;
     this.nowSec = 0;
@@ -271,14 +305,17 @@ export class FriendlySquadManager {
       params.spawnOrigin.z,
       0,
       -1,
-      'WEDGE',
+      this.activeFormation,
       resolved.operators.length,
       this.formationSlotsScratch
     );
 
+    const roleSlots = assignFormationSlotIndicesByRole(resolved.operators.map((r) => r.role));
+
     this.operators = resolved.operators.map((rec, idx) => {
       const archetype = SQUAD_ARCHETYPE_FLYWEIGHTS[rec.role];
-      const slot = this.formationSlotsScratch[idx] ?? {
+      const slotIdx = roleSlots[idx] ?? idx;
+      const slot = this.formationSlotsScratch[slotIdx] ?? this.formationSlotsScratch[idx] ?? {
         x: params.spawnOrigin.x + (idx - 1) * 2.2,
         y: params.spawnOrigin.y,
         z: params.spawnOrigin.z + 2.5,
@@ -314,6 +351,7 @@ export class FriendlySquadManager {
         record: rec,
         isReserve: rec.id.startsWith('reserve_'),
         role: rec.role,
+        roleSlotIndex: slotIdx,
         health: archetype.maxHealth,
         maxHealth: archetype.maxHealth,
         armor: archetype.maxArmor,
@@ -331,6 +369,11 @@ export class FriendlySquadManager {
         inVehicleId: null,
         fireCooldownSec: 0.4 + idx * 0.15,
         muzzleFlashTimerSec: 0,
+        ackPulseTimerSec: 0,
+        commandIssuedAtSec: null,
+        pendingImmediateCommandAck: false,
+        stanceOffsetY: 0,
+        recoilOffsetZ: 0,
         killsThisOp: 0,
         revivesThisOp: 0,
         vehiclesDisabledThisOp: 0,
@@ -347,10 +390,21 @@ export class FriendlySquadManager {
       return op;
     });
 
+    this.resetPendingTelemetry();
+
     return {
       reserveCount: resolved.reserveCount,
       substitutedNames: resolved.substitutedNames,
     };
+  }
+
+  private resetPendingTelemetry(): void {
+    this.pendingTelemetry.commandLatencySamplesMs.length = 0;
+    this.pendingTelemetry.medicRevivesThisTick = 0;
+    this.pendingTelemetry.playerRevivesThisTick = 0;
+    this.pendingTelemetry.downedEventsThisTick.length = 0;
+    this.pendingTelemetry.miaEventsThisTick.length = 0;
+    this.pendingTelemetry.revivedEventsThisTick.length = 0;
   }
 
   dispose(scene: THREE.Scene | null): void {
@@ -378,10 +432,16 @@ export class FriendlySquadManager {
         this.spawnCommandBeacon(res.intent.anchorX, res.intent.anchorY, res.intent.anchorZ, res.intent.order);
       }
       this.emitCallout(`Fireteam: ${res.intent.label}.`, true);
-      // Enqueue affected operators into bounded nav scheduler
+      // TRN-43: Immediately preempt stale recoveryHoldSec and flag affected operators for
+      // immediate next-tick directive adoption (near-zero latency) while navScheduler stays bounded.
       for (const op of this.operators) {
         if (!op.alive || op.state === 'DOWNED' || op.state === 'MIA') continue;
         if (!res.intent.operatorId || res.intent.operatorId === op.id) {
+          op.recoveryHoldSec = 0;
+          op.stuckTimerSec = 0;
+          op.ackPulseTimerSec = 1.15;
+          op.commandIssuedAtSec = this.nowSec;
+          op.pendingImmediateCommandAck = true;
           this.navScheduler.enqueue(op.id);
         }
       }
@@ -472,6 +532,11 @@ export class FriendlySquadManager {
 
       op.bleedoutRemainingSec = DOWNED_WINDOW_BY_DIFFICULTY[this.difficulty];
       op.stabilizedTimerSec = 0;
+      this.pendingTelemetry.downedEventsThisTick.push({
+        operatorId: op.id,
+        callsign: op.record.callsign,
+        role: op.role,
+      });
       this.emitCallout(`${op.record.callsign} is DOWN! Triage needed (${Math.ceil(op.bleedoutRemainingSec)}s)!`, true);
       return { downed: true, becameMia: false };
     }
@@ -515,6 +580,14 @@ export class FriendlySquadManager {
       this.completeOperatorRevive(target, 0.55);
       this.playerRevivingOperatorId = null;
       this.playerReviveProgressSec = 0;
+      this.pendingTelemetry.playerRevivesThisTick += 1;
+      this.pendingTelemetry.revivedEventsThisTick.push({
+        operatorId: target.id,
+        callsign: target.record.callsign,
+        role: target.role,
+        byMedic: false,
+        rescuerCallsign: 'Commander',
+      });
       this.emitCallout(`${target.record.callsign} back on their feet!`, true);
       return { rescuedOperatorId: target.id, activeTargetId: null, progress: 1 };
     }
@@ -644,6 +717,19 @@ export class FriendlySquadManager {
         ? this.operators.reduce((s, o) => s + o.suppressionLevel, 0) / this.operators.length
         : 0;
 
+    const activeThreats = this.threatBoard.getAllThreats();
+    let hasDistantOrElevatedThreats = false;
+    for (let t = 0; t < activeThreats.length; t++) {
+      const th = activeThreats[t];
+      if (
+        th.isElevated ||
+        Math.hypot(th.x - params.playerPos.x, th.z - params.playerPos.z) >= 28
+      ) {
+        hasDistantOrElevatedThreats = true;
+        break;
+      }
+    }
+
     this.activeFormation = selectDynamicFormation({
       corridorWidthMeters: corridorWidth,
       onVerticalPortalOrBridge: anyOnElevationChange || corridorWidth < 2.2,
@@ -653,6 +739,7 @@ export class FriendlySquadManager {
         squadIntent?.order === 'DEFEND' ||
         squadIntent?.order === 'SUPPRESS',
       threatExposure: avgSuppression,
+      hasDistantOrElevatedThreats,
     });
 
     projectFormationSlotsInto(
@@ -692,6 +779,11 @@ export class FriendlySquadManager {
           if (op.bleedoutRemainingSec <= 0) {
             op.state = 'MIA';
             op.alive = false;
+            this.pendingTelemetry.miaEventsThisTick.push({
+              operatorId: op.id,
+              callsign: op.record.callsign,
+              role: op.role,
+            });
             this.emitCallout(`${op.record.callsign} is MIA — Medevac beacon activated.`, true);
           }
         }
@@ -712,13 +804,23 @@ export class FriendlySquadManager {
       if (op.fireCooldownSec > 0) {
         op.fireCooldownSec = Math.max(0, op.fireCooldownSec - safeDt);
       }
+      if (op.ackPulseTimerSec > 0) {
+        op.ackPulseTimerSec = Math.max(0, op.ackPulseTimerSec - safeDt);
+      }
     }
 
     // 5. Staggered 5 Hz Tactical Planner + Bounded Nav Request Drain (max 2 solves/tick)
+    // Plus immediate directive adoption for newly commanded operators (TRN-43 near-zero latency)
     this.plannerAccumSec += safeDt;
     const navBatch = this.navScheduler.drainBatch(2);
     const navSolvesThisTick = navBatch.length;
     const forcePlanSet = new Set(navBatch);
+
+    for (let i = 0; i < this.operators.length; i++) {
+      if (this.operators[i].pendingImmediateCommandAck) {
+        forcePlanSet.add(this.operators[i].id);
+      }
+    }
 
     if (this.plannerAccumSec >= 0.066 || forcePlanSet.size > 0) {
       if (this.plannerAccumSec >= 0.066) {
@@ -735,12 +837,14 @@ export class FriendlySquadManager {
         const op = this.operators[i];
         if (!forcePlanSet.has(op.id) && op.lastDirective) continue;
         const intent = this.intentRouter.getActiveIntentForOperator(op.id);
-        const slot = this.formationSlotsScratch[i] ?? {
-          x: params.playerPos.x,
-          y: params.playerPos.y,
-          z: params.playerPos.z,
-          formation: this.activeFormation,
-        };
+        const slot =
+          this.formationSlotsScratch[op.roleSlotIndex] ??
+          this.formationSlotsScratch[i] ?? {
+            x: params.playerPos.x,
+            y: params.playerPos.y,
+            z: params.playerPos.z,
+            formation: this.activeFormation,
+          };
         op.lastDirective = evaluateOperatorDirective({
           operator: this.plannerSnapshotsScratch[i],
           allOperators: this.plannerSnapshotsScratch,
@@ -748,8 +852,19 @@ export class FriendlySquadManager {
           formationSlot: slot,
           playerPos: params.playerPos,
           threatBoard: this.threatBoard,
-          slotIndex: i,
+          slotIndex: op.roleSlotIndex,
+          playerRevivingOperatorId: this.playerRevivingOperatorId,
         });
+
+        if (op.pendingImmediateCommandAck) {
+          const latencyMs =
+            op.commandIssuedAtSec !== null
+              ? Math.max(0.5, (this.nowSec - op.commandIssuedAtSec) * 1000)
+              : safeDt * 1000;
+          this.pendingTelemetry.commandLatencySamplesMs.push(Number(latencyMs.toFixed(1)));
+          op.pendingImmediateCommandAck = false;
+          op.commandIssuedAtSec = null;
+        }
       }
     }
 
@@ -806,7 +921,7 @@ export class FriendlySquadManager {
         goalZ = op.recoveryAnchorZ;
       }
 
-      // Keep clear of player corridor so companions never block doorways or player movement
+      // Keep clear of player corridor & forward muzzle cone so companions never block shots or doors (TRN-43)
       const distToPlayer = Math.hypot(
         op.position.x - params.playerPos.x,
         op.position.z - params.playerPos.z
@@ -817,6 +932,24 @@ export class FriendlySquadManager {
         const pushLen = Math.max(0.01, Math.hypot(pushX, pushZ));
         goalX = op.position.x + (pushX / pushLen) * 1.8;
         goalZ = op.position.z + (pushZ / pushLen) * 1.8;
+      } else if (
+        directive.microState !== 'RESCUE_ALLY' &&
+        directive.microState !== 'STABILIZE_ALLY' &&
+        Math.abs(op.position.y - params.playerPos.y) < 1.8
+      ) {
+        const inMuzzleLane = computeCrossfireClearanceOffset({
+          playerX: params.playerPos.x,
+          playerZ: params.playerPos.z,
+          playerForwardX: params.playerForward.x,
+          playerForwardZ: params.playerForward.z,
+          operatorX: op.position.x,
+          operatorZ: op.position.z,
+          outOffset: this.crossfireOffsetScratch,
+        });
+        if (inMuzzleLane) {
+          goalX += this.crossfireOffsetScratch.x;
+          goalZ += this.crossfireOffsetScratch.z;
+        }
       }
 
       const dx = goalX - op.position.x;
@@ -847,6 +980,14 @@ export class FriendlySquadManager {
                 this.completeOperatorRevive(ally, hpFrac);
                 op.revivingTargetId = null;
                 op.reviveChannelSec = 0;
+                this.pendingTelemetry.medicRevivesThisTick += 1;
+                this.pendingTelemetry.revivedEventsThisTick.push({
+                  operatorId: ally.id,
+                  callsign: ally.record.callsign,
+                  role: ally.role,
+                  byMedic: true,
+                  rescuerCallsign: op.record.callsign,
+                });
                 this.emitCallout(
                   `${op.record.callsign} revived ${ally.record.callsign}! (${op.reviveChargesRemaining} med charges left)`,
                   true
@@ -860,7 +1001,7 @@ export class FriendlySquadManager {
               );
               this.tryOperatorFire(op, directive, params.enemies);
             }
-            this.syncOperatorRig(op, safeDt);
+            this.syncOperatorRig(op, safeDt, params.enemies);
             continue;
           }
         }
@@ -934,7 +1075,7 @@ export class FriendlySquadManager {
         friendlySuppressorActive = true;
       }
 
-      this.syncOperatorRig(op, safeDt);
+      this.syncOperatorRig(op, safeDt, params.enemies);
     }
 
     // 7. Update command beacons
@@ -951,6 +1092,16 @@ export class FriendlySquadManager {
       }
     }
 
+    const telemetrySnapshot: SquadTelemetryEventBatch = {
+      commandLatencySamplesMs: [...this.pendingTelemetry.commandLatencySamplesMs],
+      medicRevivesThisTick: this.pendingTelemetry.medicRevivesThisTick,
+      playerRevivesThisTick: this.pendingTelemetry.playerRevivesThisTick,
+      downedEventsThisTick: [...this.pendingTelemetry.downedEventsThisTick],
+      miaEventsThisTick: [...this.pendingTelemetry.miaEventsThisTick],
+      revivedEventsThisTick: [...this.pendingTelemetry.revivedEventsThisTick],
+    };
+    this.resetPendingTelemetry();
+
     return {
       fireRequests: this.fireRequestsScratch,
       radioCallout: this.pendingCallout,
@@ -958,6 +1109,7 @@ export class FriendlySquadManager {
       navSolvesThisTick,
       maxDisplacementThisTick,
       hudSummary: this.buildHudSummary(params.playerPos),
+      telemetryEvents: telemetrySnapshot,
     };
   }
 
@@ -1099,7 +1251,11 @@ export class FriendlySquadManager {
     }
   }
 
-  private syncOperatorRig(op: FriendlyOperatorRuntime, _dt: number): void {
+  private syncOperatorRig(
+    op: FriendlyOperatorRuntime,
+    dt: number,
+    enemies?: readonly SquadEnemyReadView[]
+  ): void {
     if (!op.rig) return;
     op.rig.root.visible = op.state !== 'MIA' && op.state !== 'IN_VEHICLE';
     if (!op.rig.root.visible) return;
@@ -1107,30 +1263,91 @@ export class FriendlySquadManager {
     op.rig.root.position.copy(op.position);
 
     if (op.state === 'DOWNED') {
-      op.rig.bodyGroup.rotation.x = Math.PI * 0.44;
-      op.rig.bodyGroup.position.y = -0.35;
-      op.rig.statusHaloMat.color.setHex(0xef4444);
-      op.rig.muzzleFlash.visible = false;
-    } else {
-      op.rig.bodyGroup.rotation.x = 0;
-      op.rig.bodyGroup.position.y = 0;
-      const arch = SQUAD_ARCHETYPE_FLYWEIGHTS[op.role];
-      op.rig.statusHaloMat.color.setHex(
-        op.morale === 'SHAKEN' ? 0xf59e0b : arch.rigAccentHex
+      op.rig.bodyGroup.rotation.x = THREE.MathUtils.damp(
+        op.rig.bodyGroup.rotation.x,
+        Math.PI * 0.44,
+        10,
+        dt
       );
-      op.rig.muzzleFlash.visible = op.muzzleFlashTimerSec > 0;
+      op.rig.bodyGroup.position.y = THREE.MathUtils.damp(
+        op.rig.bodyGroup.position.y,
+        -0.35,
+        10,
+        dt
+      );
+      op.rig.statusHaloMat.color.setHex(0xef4444);
+      const pulse = 1 + Math.sin(this.nowSec * 7.5) * 0.16;
+      op.rig.statusHalo.scale.set(pulse, pulse, 1);
+      op.rig.statusHaloMat.opacity = 0.82;
+      op.rig.muzzleFlash.visible = false;
+      return;
+    }
 
-      // Lightweight stride cycle driven strictly by measured horizontal speed
-      const speed = op.actualHorizSpeed ?? 0;
-      if (speed > 0.25) {
-        const phase = this.nowSec * 9.5;
-        const swing = Math.sin(phase) * 0.42;
-        op.rig.leftLeg.rotation.x = swing;
-        op.rig.rightLeg.rotation.x = -swing;
-        op.rig.root.rotation.y = Math.atan2(op.velocity.x, op.velocity.z);
-      } else {
-        op.rig.leftLeg.rotation.x = 0;
-        op.rig.rightLeg.rotation.x = 0;
+    // Target combat stance posture (crouch in cover/suppression, kneel in triage)
+    let targetBodyY = 0;
+    let targetBodyPitch = 0;
+    if (op.state === 'RESCUE_ALLY' || op.state === 'STABILIZE_ALLY') {
+      targetBodyY = -0.32;
+      targetBodyPitch = 0.24;
+    } else if (op.state === 'HOLD_COVER' || op.state === 'SUPPRESS_SECTOR') {
+      targetBodyY = -0.22;
+      targetBodyPitch = 0.08;
+    }
+
+    op.stanceOffsetY = THREE.MathUtils.damp(op.stanceOffsetY, targetBodyY, 9, dt);
+    op.rig.bodyGroup.position.y = op.stanceOffsetY;
+    op.rig.bodyGroup.rotation.x = THREE.MathUtils.damp(
+      op.rig.bodyGroup.rotation.x,
+      targetBodyPitch,
+      9,
+      dt
+    );
+
+    // Command acknowledgement pulse on tactical floor halo
+    if (op.ackPulseTimerSec > 0) {
+      const t = 1 - op.ackPulseTimerSec / 1.15;
+      const pulseScale = 1.0 + Math.sin(t * Math.PI) * 0.48;
+      op.rig.statusHalo.scale.set(pulseScale, pulseScale, 1);
+      op.rig.statusHaloMat.color.setHex(0x38bdf8);
+      op.rig.statusHaloMat.opacity = 0.92;
+    } else {
+      op.rig.statusHalo.scale.set(1, 1, 1);
+      op.rig.statusHaloMat.color.setHex(
+        op.morale === 'SHAKEN' ? 0xf59e0b : op.rig.baseHaloColorHex
+      );
+      op.rig.statusHaloMat.opacity = 0.65;
+    }
+
+    // Muzzle flash & damped rifle recoil kick
+    op.rig.muzzleFlash.visible = op.muzzleFlashTimerSec > 0;
+    const targetRecoil = op.muzzleFlashTimerSec > 0 ? -0.11 : 0;
+    op.recoilOffsetZ = THREE.MathUtils.damp(op.recoilOffsetZ, targetRecoil, 20, dt);
+    op.rig.rifle.position.z = 0.36 + op.recoilOffsetZ;
+
+    // Stride cycle & smooth combat facing toward threat or movement heading
+    const speed = op.actualHorizSpeed ?? 0;
+    if (speed > 0.25) {
+      const phase = this.nowSec * 9.5;
+      const swing = Math.sin(phase) * 0.42;
+      op.rig.leftLeg.rotation.x = swing;
+      op.rig.rightLeg.rotation.x = -swing;
+      op.rig.leftArm.rotation.x = -swing * 0.35;
+      op.rig.root.rotation.y = Math.atan2(op.velocity.x, op.velocity.z);
+    } else {
+      op.rig.leftLeg.rotation.x = THREE.MathUtils.damp(op.rig.leftLeg.rotation.x, 0, 12, dt);
+      op.rig.rightLeg.rotation.x = THREE.MathUtils.damp(op.rig.rightLeg.rotation.x, 0, 12, dt);
+      op.rig.leftArm.rotation.x = THREE.MathUtils.damp(op.rig.leftArm.rotation.x, 0, 12, dt);
+      // Aim smoothly toward active focus threat when stationary in cover or suppressing
+      const focusId = op.lastDirective?.focusEnemyId;
+      if (focusId && enemies) {
+        const threat = enemies.find((e) => e.id === focusId && e.alive);
+        if (threat) {
+          const aimYaw = Math.atan2(
+            threat.position.x - op.position.x,
+            threat.position.z - op.position.z
+          );
+          op.rig.root.rotation.y = aimYaw;
+        }
       }
     }
   }

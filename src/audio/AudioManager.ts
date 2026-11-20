@@ -44,7 +44,9 @@ export type SoundId =
   | 'lock_beep'
   | 'lock_ready'
   | 'engine'
-  | 'pickup_health';
+  | 'pickup_health'
+  | 'squad_order_confirm'
+  | 'operator_downed_alarm';
 
 export type ReloadStageId = 'MAG_OUT' | 'MAG_IN' | 'CHAMBER';
 
@@ -155,6 +157,7 @@ export class AudioManager {
   private readonly musicController: MusicPlayerController;
 
   private activeLoopNodes: Array<{ stop: () => void }> = [];
+  private radioVoiceCueCount = 0;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -333,6 +336,81 @@ export class AudioManager {
     return this.reverbNode !== null && this.reverbReturnGain !== null;
   }
 
+  public getRadioVoiceCueCount(): number {
+    return this.radioVoiceCueCount;
+  }
+
+  /**
+   * TRN-46 / TRN-47 Procedural Tactical Radio Voice Signature.
+   * Synthesizes a clean, non-fatiguing radio squelch + operator-distinct vocal cadence
+   * strictly routed through dialogueGain (honoring dialogueVolume & mute) and gently
+   * ducking background music on CRITICAL alerts without touching manual track selection.
+   */
+  public playOperatorRadioVoice(
+    voiceProfile: {
+      basePitchHz: number;
+      formantPitchHz: number;
+      cadenceMs: number;
+      radioClickHz: number;
+    },
+    priority: 'CRITICAL' | 'TACTICAL' | 'BANTER' = 'TACTICAL'
+  ): void {
+    this.radioVoiceCueCount++;
+    if (priority === 'CRITICAL') {
+      this.duckMusicForDialogue(2.6, 0.34);
+    } else if (priority === 'TACTICAL') {
+      this.duckMusicForDialogue(1.8, 0.52);
+    }
+
+    if (!this.ctx || !this.dialogueGain || this.settings.muted) {
+      return;
+    }
+
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const bandpass = this.ctx.createBiquadFilter();
+      const env = this.ctx.createGain();
+
+      bandpass.type = 'bandpass';
+      bandpass.frequency.setValueAtTime(Math.max(400, Math.min(2600, voiceProfile.formantPitchHz)), now);
+      bandpass.Q.setValueAtTime(2.6, now);
+
+      const durSec = Math.max(0.14, Math.min(0.32, (voiceProfile.cadenceMs / 1000) * 1.4));
+      const gainPeak = priority === 'CRITICAL' ? 0.24 : priority === 'TACTICAL' ? 0.17 : 0.12;
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(voiceProfile.radioClickHz, now);
+      osc.frequency.setValueAtTime(voiceProfile.basePitchHz, now + 0.025);
+      osc.frequency.linearRampToValueAtTime(voiceProfile.basePitchHz * 1.12, now + durSec * 0.55);
+      osc.frequency.linearRampToValueAtTime(voiceProfile.basePitchHz * 0.94, now + durSec - 0.02);
+      osc.frequency.setValueAtTime(voiceProfile.radioClickHz * 0.85, now + durSec - 0.015);
+
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.linearRampToValueAtTime(gainPeak, now + 0.018);
+      env.gain.setValueAtTime(gainPeak * 0.78, now + durSec * 0.65);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
+
+      osc.connect(bandpass);
+      bandpass.connect(env);
+      env.connect(this.dialogueGain);
+
+      osc.start(now);
+      osc.stop(now + durSec + 0.02);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          bandpass.disconnect();
+          env.disconnect();
+        } catch {
+          // already disconnected
+        }
+      };
+    } catch {
+      // ignore audio graph errors on suspended/headless contexts
+    }
+  }
+
   public updateListener(
     posX: number,
     posY: number,
@@ -431,6 +509,8 @@ export class AudioManager {
       lock_ready: 0.18,
       engine: 0.5,
       pickup_health: 0.42,
+      squad_order_confirm: 0.16,
+      operator_downed_alarm: 0.48,
     };
 
     const dur = durations[id] ?? 0.25;
@@ -657,6 +737,13 @@ export class AudioManager {
       } else if (id === 'pickup_health') {
         const f = t < 0.13 ? 587.33 : t < 0.26 ? 783.99 : 1046.5;
         sampleL = sampleR = Math.sin(2 * Math.PI * f * t) * Math.exp(-t * 4.5) * 0.68;
+      } else if (id === 'squad_order_confirm') {
+        const f = t < 0.065 ? 920 : 1380;
+        sampleL = sampleR = Math.sin(2 * Math.PI * f * t) * Math.exp(-t * 20) * 0.52;
+      } else if (id === 'operator_downed_alarm') {
+        const pulse = (t < 0.18 || (t >= 0.24 && t < 0.42)) ? 1 : 0;
+        const f = t < 0.24 ? 880 : 660;
+        sampleL = sampleR = Math.sin(2 * Math.PI * f * t) * pulse * Math.exp(-t * 3.8) * 0.64;
       } else {
         sampleL = sampleR = Math.sin(2 * Math.PI * 82 * t) * 0.4;
       }

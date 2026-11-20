@@ -4,6 +4,7 @@ import { TACTICAL_CHALLENGES } from '@/src/data/challenges';
 import { ACHIEVEMENT_DEFINITIONS, getRankForXp } from '@/src/data/ranks';
 import { getMissionById } from '@/src/data/missions';
 import { WEAPON_BY_ID } from '@/src/data/weapons';
+import { evaluateOperatorCommendations } from '@/src/gameplay/narrative/SquadDialogueDirector';
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
@@ -229,6 +230,14 @@ export function DebriefScreen({
               <h2 className="font-display text-2xl sm:text-3xl font-bold uppercase text-white mt-0.5">
                 {mission.codeName}: {mission.title}
               </h2>
+              <p
+                data-testid="debrief-deployment-mode"
+                className="font-mono text-[11px] uppercase tracking-wider text-cyan-400 mt-1"
+              >
+                {debrief.deploymentMode === 'solo'
+                  ? 'SOLO OPERATOR · SINGLE-PLAYER'
+                  : 'FIRETEAM SQUAD · SINGLE-PLAYER'}
+              </p>
             </div>
 
             <div className="text-center bg-[#0B0E11] border border-amber-500/60 px-3.5 py-1.5 rounded-sm shrink-0">
@@ -407,8 +416,32 @@ export function DebriefScreen({
             </div>
           )}
 
+          {/* Safe HQ Recovery Status Summary (when resting Fireteam operators progressed during Solo/Fireteam op) */}
+          {((debrief.recoveredOperatorCallsigns && debrief.recoveredOperatorCallsigns.length > 0) ||
+            (debrief.hqRecoveryProgressedCount && debrief.hqRecoveryProgressedCount > 0)) && (
+            <div
+              data-testid="debrief-hq-recovery-summary"
+              className="bg-emerald-950/25 border border-emerald-500/45 p-3 rounded-sm font-mono text-xs space-y-1"
+            >
+              <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">
+                Safe HQ Recovery Report
+              </div>
+              {debrief.recoveredOperatorCallsigns && debrief.recoveredOperatorCallsigns.length > 0 ? (
+                <div className="text-zinc-100">
+                  Returned to Active Duty: {debrief.recoveredOperatorCallsigns.join(', ')}
+                </div>
+              ) : (
+                <div className="text-zinc-200">
+                  {debrief.hqRecoveryProgressedCount} resting Fireteam operator
+                  {debrief.hqRecoveryProgressedCount === 1 ? '' : 's'} advanced HQ recovery safely
+                  with zero combat risk.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Stage 7 TRN-37 Fireteam After-Action Report */}
-          {debrief.squadReports && debrief.squadReports.length > 0 && (
+          {debrief.deploymentMode !== 'solo' && debrief.squadReports && debrief.squadReports.length > 0 && (
             <div
               data-testid="debrief-squad-report"
               className="bg-[#0B0E11] border border-zinc-800 p-3 rounded-sm space-y-2"
@@ -422,30 +455,42 @@ export function DebriefScreen({
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[10.5px]">
-                {debrief.squadReports.map((rep) => (
-                  <div
-                    key={rep.operatorId}
-                    className="bg-[#141920] border border-zinc-800 px-2.5 py-1.5 rounded-xs space-y-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-zinc-100">{rep.callsign}</span>
-                      <span
-                        className={
-                          rep.becameMia
-                            ? 'text-red-400 font-bold'
-                            : rep.severeInjury
-                              ? 'text-amber-400'
-                              : 'text-emerald-400'
-                        }
-                      >
-                        {rep.becameMia ? 'MIA' : rep.severeInjury ? 'INJURED' : 'READY'}
-                      </span>
+                {debrief.squadReports.map((rep) => {
+                  const awards = evaluateOperatorCommendations(rep);
+                  return (
+                    <div
+                      key={rep.operatorId}
+                      className="bg-[#141920] border border-zinc-800 px-2.5 py-1.5 rounded-xs space-y-0.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-zinc-100">{rep.callsign}</span>
+                        <span
+                          className={
+                            rep.becameMia
+                              ? 'text-red-400 font-bold'
+                              : rep.severeInjury
+                                ? 'text-amber-400'
+                                : 'text-emerald-400'
+                          }
+                        >
+                          {rep.becameMia ? 'MIA' : rep.severeInjury ? 'INJURED' : 'READY'}
+                        </span>
+                      </div>
+                      <div className="text-[9.5px] text-zinc-400 tabular-nums">
+                        {rep.kills} KILLS · {rep.revivesPerformed} REV · {rep.timesDowned} DOWNED
+                      </div>
+                      {awards.length > 0 && (
+                        <div
+                          data-testid={`debrief-commendation-${rep.operatorId}`}
+                          className="text-[9.5px] text-amber-300 truncate pt-0.5 border-t border-zinc-800/80"
+                          title={awards.map((a) => `${a.title}: ${a.summary}`).join(' | ')}
+                        >
+                          ★ {awards.map((a) => a.title).join(' · ')}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-[9.5px] text-zinc-400 tabular-nums">
-                      {rep.kills} KILLS · {rep.revivesPerformed} REV · {rep.timesDowned} DOWNED
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

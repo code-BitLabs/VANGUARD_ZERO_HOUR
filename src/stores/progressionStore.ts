@@ -26,10 +26,13 @@ import {
 import { DEFAULT_EQUIPPED_ATTACHMENTS } from '@/src/gameplay/weapons/AttachmentCompositionEngine';
 import {
   AttachmentSlot,
+  DeploymentMode,
+  EquippedWeaponAttachments,
   MissionLoadoutConfig,
   NamedLoadoutPreset,
   OperatorCustomization,
   ReplayMode,
+  SavedWeaponBuild,
 } from '@/src/schemas/campaign.schema';
 import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { ProgressionSave } from '@/src/schemas/save.schema';
@@ -70,6 +73,8 @@ export interface MissionResultPayload {
   killsByWeapon?: Record<string, number>;
   activeModifiers?: ReplayModifierId[];
   replayMode?: ReplayMode;
+  deploymentMode?: DeploymentMode;
+  operationRunId?: string;
   campaignEventDrafts?: CampaignEventDraft[];
   squadReports?: SquadOperatorMissionReport[];
 }
@@ -84,6 +89,8 @@ export interface MissionProgressionOutcome {
   committedCampaignEvents: number;
   stagedRebaseDiff: CampaignRebaseDiff | null;
   pendingRebaseDrafts: CampaignEventDraft[];
+  recoveredOperatorCallsigns: string[];
+  hqRecoveryProgressedCount: number;
 }
 
 export interface ProgressionStoreState {
@@ -97,13 +104,20 @@ export interface ProgressionStoreState {
   getUpgradeLevel: (weaponId: WeaponId, key: WeaponUpgradeKey) => number;
   toggleModifier: (modifierId: ReplayModifierId) => void;
   clearModifiers: () => void;
-  // Stage 7 actions
+  // Stage 7 & Redesign actions
   updateMissionLoadout: (config: Partial<MissionLoadoutConfig>) => void;
   applyLoadoutPreset: (presetId: string) => boolean;
   saveCustomLoadoutPreset: (name: string, config: MissionLoadoutConfig) => NamedLoadoutPreset;
   deleteCustomLoadoutPreset: (presetId: string) => boolean;
   unlockAttachment: (weaponId: WeaponId, attachmentId: string) => { ok: boolean; reason?: string };
   equipAttachment: (weaponId: WeaponId, slot: AttachmentSlot, attachmentId: string | null) => boolean;
+  applyWeaponAttachmentsBulk: (weaponId: WeaponId, equipped: EquippedWeaponAttachments) => boolean;
+  saveNamedWeaponBuild: (
+    weaponId: WeaponId,
+    name: string,
+    attachments: EquippedWeaponAttachments
+  ) => SavedWeaponBuild;
+  deleteNamedWeaponBuild: (buildId: string) => boolean;
   unlockCosmetic: (kind: 'camo' | 'helmet' | 'patch', id: string) => boolean;
   setOperatorCustomization: (operatorId: string, customization: Partial<OperatorCustomization>) => void;
   setPlayerCustomization: (customization: Partial<OperatorCustomization>) => void;
@@ -358,18 +372,50 @@ export const progressionStore = createStore<ProgressionStoreState>()(
         // clean_replay: strictly score/challenges/mastery only, never touches canonical ledger
       }
 
-      // Advance squad roster recovery & field specializations (never decrements on Clean Replay)
+      // Advance squad roster recovery & field specializations (never decrements on Clean Replay; deduplicated per run)
+      const prevCredited = current.creditedOperationRunIds ?? [];
       const nextRosterRaw = advanceRosterAfterOperation(current.squadRoster, {
         replayMode,
         victory: result.victory,
         difficulty: result.difficulty,
         ironmanActive: current.ironmanSquadEnabled,
-        operatorReports: result.squadReports ?? [],
+        deploymentMode: result.deploymentMode ?? 'fireteam',
+        missionElapsedSec: result.durationSec,
+        operationRunId: result.operationRunId,
+        creditedOperationRunIds: prevCredited,
+        operatorReports: result.deploymentMode === 'solo' ? [] : (result.squadReports ?? []),
       });
       const nextRoster = nextRosterRaw.map((op) => ({
         ...op,
         unlockedSpecializations: evaluateOperatorSpecializations(op),
       }));
+
+      // Track which recovering HQ operators advanced or returned to Active duty
+      const recoveredOperatorCallsigns: string[] = [];
+      let hqRecoveryProgressedCount = 0;
+      for (const prevOp of current.squadRoster) {
+        if (prevOp.status !== 'recovering') continue;
+        const nextOp = nextRoster.find((o) => o.id === prevOp.id);
+        if (!nextOp) continue;
+        if (nextOp.status === 'active') {
+          recoveredOperatorCallsigns.push(nextOp.callsign);
+          hqRecoveryProgressedCount += 1;
+        } else if (
+          (nextOp.recoveryElapsedSec ?? 0) > (prevOp.recoveryElapsedSec ?? 0) ||
+          nextOp.recoveryOpsRemaining < prevOp.recoveryOpsRemaining
+        ) {
+          hqRecoveryProgressedCount += 1;
+        }
+      }
+
+      const shouldCreditRunId =
+        replayMode !== 'clean_replay' &&
+        Boolean(result.operationRunId) &&
+        !prevCredited.includes(result.operationRunId!) &&
+        (result.victory || result.durationSec >= 45);
+      const nextCreditedRunIds = shouldCreditRunId
+        ? [...prevCredited.slice(-39), result.operationRunId!]
+        : prevCredited;
 
       // Unlock mission-earned camos automatically on first clear
       const unlockedCosmeticsSet = new Set(current.unlockedCosmetics ?? []);
@@ -393,6 +439,7 @@ export const progressionStore = createStore<ProgressionStoreState>()(
         achievements: Array.from(unlocked),
         campaignLedger: nextLedger,
         squadRoster: nextRoster,
+        creditedOperationRunIds: nextCreditedRunIds,
         unlockedCosmetics: Array.from(unlockedCosmeticsSet),
         updatedAt: Date.now(),
       };
@@ -425,6 +472,8 @@ export const progressionStore = createStore<ProgressionStoreState>()(
         committedCampaignEvents,
         stagedRebaseDiff,
         pendingRebaseDrafts,
+        recoveredOperatorCallsigns,
+        hqRecoveryProgressedCount,
       };
     },
     commitStagedCampaignRebase: (missionId, drafts) => {
@@ -559,7 +608,12 @@ export const progressionStore = createStore<ProgressionStoreState>()(
           return false;
         }
         const key = `${weaponId}:${attachmentId}`;
-        if (!current.unlockedAttachments.includes(key)) return false;
+        if (
+          !current.unlockedAttachments.includes(key) &&
+          !current.unlockedAttachments.includes(attachmentId)
+        ) {
+          return false;
+        }
       }
       const prevEquipped = current.weaponAttachments[weaponId] ?? { ...DEFAULT_EQUIPPED_ATTACHMENTS };
       const nextSave: ProgressionSave = {
@@ -571,6 +625,74 @@ export const progressionStore = createStore<ProgressionStoreState>()(
             [slot]: attachmentId,
           },
         },
+        updatedAt: Date.now(),
+      };
+      set({ save: nextSave });
+      SaveManager.saveProgression(nextSave);
+      return true;
+    },
+    applyWeaponAttachmentsBulk: (weaponId, equipped) => {
+      const current = get().save;
+      const weapon = WEAPON_BY_ID[weaponId];
+      if (!weapon) return false;
+      const slots: AttachmentSlot[] = ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine'];
+      for (const slot of slots) {
+        const attId = equipped[slot];
+        if (attId !== null) {
+          const att = ATTACHMENT_BY_ID[attId];
+          if (!att || att.slot !== slot || !att.compatibleCategories.includes(weapon.category)) {
+            return false;
+          }
+          const key = `${weaponId}:${attId}`;
+          if (
+            !current.unlockedAttachments.includes(key) &&
+            !current.unlockedAttachments.includes(attId)
+          ) {
+            return false;
+          }
+        }
+      }
+      const nextSave: ProgressionSave = {
+        ...current,
+        weaponAttachments: {
+          ...current.weaponAttachments,
+          [weaponId]: { ...equipped },
+        },
+        updatedAt: Date.now(),
+      };
+      set({ save: nextSave });
+      SaveManager.saveProgression(nextSave);
+      return true;
+    },
+    saveNamedWeaponBuild: (weaponId, name, attachments) => {
+      const current = get().save;
+      const weapon = WEAPON_BY_ID[weaponId];
+      const existing = current.savedWeaponBuilds ?? [];
+      const cleanName =
+        name.trim().slice(0, 32) || `${weapon?.shortName ?? weaponId} Build ${existing.length + 1}`;
+      const build: SavedWeaponBuild = {
+        id: `wb_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        weaponId,
+        name: cleanName,
+        attachments: { ...attachments },
+        createdAt: Date.now(),
+      };
+      const nextSave: ProgressionSave = {
+        ...current,
+        savedWeaponBuilds: [build, ...existing].slice(0, 24),
+        updatedAt: Date.now(),
+      };
+      set({ save: nextSave });
+      SaveManager.saveProgression(nextSave);
+      return build;
+    },
+    deleteNamedWeaponBuild: (buildId) => {
+      const current = get().save;
+      const existing = current.savedWeaponBuilds ?? [];
+      if (!existing.some((b) => b.id === buildId)) return false;
+      const nextSave: ProgressionSave = {
+        ...current,
+        savedWeaponBuilds: existing.filter((b) => b.id !== buildId),
         updatedAt: Date.now(),
       };
       set({ save: nextSave });
@@ -637,6 +759,8 @@ export const progressionStore = createStore<ProgressionStoreState>()(
         return {
           ...op,
           recoveryOpsRemaining: remaining,
+          recoveryElapsedSec: remaining === 0 ? 0 : op.recoveryElapsedSec ?? 0,
+          recoveryTargetSec: remaining === 0 ? 0 : remaining * 180,
           status: remaining === 0 ? ('active' as const) : ('recovering' as const),
           injurySeverity: remaining === 0 ? ('none' as const) : op.injurySeverity,
         };

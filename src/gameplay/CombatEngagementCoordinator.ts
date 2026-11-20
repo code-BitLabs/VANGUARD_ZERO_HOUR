@@ -12,6 +12,7 @@ import {
   CoordinatorTelemetrySnapshot,
   SquadStatusSnapshot,
 } from './CombatTelemetryRecorder';
+import type { SoloEngagementConstraints } from './SoloEncounterDirector';
 
 export type LeaseKind = 'DIRECT' | 'HEAVY' | 'SUPPRESS';
 
@@ -164,6 +165,7 @@ export interface AttackLeaseRequest {
 export class CombatEngagementCoordinator {
   private difficulty: Difficulty = 'normal';
   private profile: DifficultyCombatProfile = DIFFICULTY_COMBAT_PROFILES.normal;
+  private soloConstraints: SoloEngagementConstraints | null = null;
   private climaxActive = false;
   private squads = new Map<string, SquadCoordinator>();
   private leases = new Map<string, ActiveLease>();
@@ -179,6 +181,15 @@ export class CombatEngagementCoordinator {
     this.enforceCapReductions();
   }
 
+  setSoloConstraints(constraints: SoloEngagementConstraints | null): void {
+    this.soloConstraints = constraints;
+    this.enforceCapReductions();
+  }
+
+  getSoloConstraints(): SoloEngagementConstraints | null {
+    return this.soloConstraints;
+  }
+
   setEncounterClimaxActive(active: boolean): void {
     if (this.climaxActive === active) return;
     this.climaxActive = active;
@@ -188,13 +199,48 @@ export class CombatEngagementCoordinator {
   }
 
   getEffectiveMaxGlobalAttackers(): number {
-    return this.climaxActive
+    const base = this.climaxActive
       ? (this.profile.maxClimaxGlobalAttackers ?? this.profile.maxGlobalAttackers)
       : this.profile.maxGlobalAttackers;
+    if (!this.soloConstraints) return base;
+    const soloCap = this.climaxActive
+      ? this.soloConstraints.maxClimaxGlobalAttackers
+      : this.soloConstraints.maxGlobalAttackers;
+    return Math.max(1, Math.min(base, soloCap));
+  }
+
+  private getEffectiveProfile(): DifficultyCombatProfile {
+    if (!this.soloConstraints) return this.profile;
+    return {
+      ...this.profile,
+      maxGlobalAttackers: Math.max(
+        1,
+        Math.min(this.profile.maxGlobalAttackers, this.soloConstraints.maxGlobalAttackers)
+      ),
+      maxClimaxGlobalAttackers: Math.max(
+        1,
+        Math.min(
+          this.profile.maxClimaxGlobalAttackers ?? this.profile.maxGlobalAttackers,
+          this.soloConstraints.maxClimaxGlobalAttackers
+        )
+      ),
+      maxSquadAttackers: Math.max(
+        1,
+        Math.min(this.profile.maxSquadAttackers, this.soloConstraints.maxSquadAttackers)
+      ),
+      maxSquadSuppressors: Math.max(
+        0,
+        Math.min(this.profile.maxSquadSuppressors, this.soloConstraints.maxSquadSuppressors)
+      ),
+      maxGlobalSuppressors: Math.max(
+        0,
+        Math.min(this.profile.maxGlobalSuppressors, this.soloConstraints.maxSquadSuppressors)
+      ),
+    };
   }
 
   getProfile(): DifficultyCombatProfile {
-    return this.profile;
+    return this.getEffectiveProfile();
   }
 
   getDifficulty(): Difficulty {
@@ -203,6 +249,7 @@ export class CombatEngagementCoordinator {
 
   reset(): void {
     this.climaxActive = false;
+    this.soloConstraints = null;
     this.squads.clear();
     this.leases.clear();
     this.releaseCooldownUntil.clear();
@@ -310,17 +357,41 @@ export class CombatEngagementCoordinator {
       return false;
     }
 
+    const effProfile = this.getEffectiveProfile();
     const isBossOrClimax =
       this.climaxActive || (req.domain === 'air' && req.kind === 'HEAVY');
     const maxGlobalAttackers = isBossOrClimax
-      ? (this.profile.maxClimaxGlobalAttackers ?? this.profile.maxGlobalAttackers)
-      : this.profile.maxGlobalAttackers;
+      ? (effProfile.maxClimaxGlobalAttackers ?? effProfile.maxGlobalAttackers)
+      : effProfile.maxGlobalAttackers;
+
+    // Solo anti-focus-fire invariant: prevent multiple ground squads from directly focusing player simultaneously
+    if (
+      this.soloConstraints &&
+      req.kind !== 'SUPPRESS' &&
+      req.domain === 'ground' &&
+      this.soloConstraints.maxSimultaneousFocusSquads > 0
+    ) {
+      const activeGroundSquads = new Set<string>();
+      for (const l of this.leases.values()) {
+        if ((l.kind === 'DIRECT' || l.kind === 'HEAVY') && l.domain === 'ground') {
+          activeGroundSquads.add(l.squadId);
+        }
+      }
+      if (
+        !activeGroundSquads.has(req.squadId) &&
+        activeGroundSquads.size >= this.soloConstraints.maxSimultaneousFocusSquads
+      ) {
+        sq.markWaiting(req.unitId, true);
+        this.waitingUnits.add(req.unitId);
+        return false;
+      }
+    }
 
     // Check Tier 1 (Squad) and Tier 2 (Global) budgets
     if (req.kind === 'SUPPRESS') {
       if (
-        !sq.canGrantLocalSuppress(req.unitId, this.profile) ||
-        this.getActiveSuppressCount() >= this.profile.maxGlobalSuppressors
+        !sq.canGrantLocalSuppress(req.unitId, effProfile) ||
+        this.getActiveSuppressCount() >= effProfile.maxGlobalSuppressors
       ) {
         sq.markWaiting(req.unitId, true);
         this.waitingUnits.add(req.unitId);
@@ -328,7 +399,7 @@ export class CombatEngagementCoordinator {
       }
     } else if (req.kind === 'HEAVY') {
       if (
-        this.getActiveHeavyCount() >= this.profile.maxGlobalHeavyAttackers ||
+        this.getActiveHeavyCount() >= effProfile.maxGlobalHeavyAttackers ||
         this.getActiveDirectCount() >= maxGlobalAttackers
       ) {
         sq.markWaiting(req.unitId, true);
@@ -338,7 +409,7 @@ export class CombatEngagementCoordinator {
     } else {
       // DIRECT lease
       if (
-        (req.domain === 'ground' && !sq.canGrantLocalDirect(req.unitId, this.profile)) ||
+        (req.domain === 'ground' && !sq.canGrantLocalDirect(req.unitId, effProfile)) ||
         this.getActiveDirectCount() >= maxGlobalAttackers
       ) {
         sq.markWaiting(req.unitId, true);

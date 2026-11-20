@@ -480,6 +480,7 @@ export const DEFAULT_ROLE_LOADOUT_PRESETS: readonly NamedLoadoutPreset[] = Objec
       heavyWeapon: 'grenade_launcher',
       tacticalEquipment: 'frag_pack',
       squadIds: ['vanguard_2', 'bulwark_3', 'lifeline_6'],
+      initialFormation: 'WEDGE',
     }) as MissionLoadoutConfig,
   }),
   Object.freeze({
@@ -493,6 +494,7 @@ export const DEFAULT_ROLE_LOADOUT_PRESETS: readonly NamedLoadoutPreset[] = Objec
       heavyWeapon: 'rocket_launcher',
       tacticalEquipment: 'c4_breach_kit',
       squadIds: ['bulwark_3', 'anvil_5', 'lifeline_6'],
+      initialFormation: 'LINE',
     }) as MissionLoadoutConfig,
   }),
   Object.freeze({
@@ -506,6 +508,7 @@ export const DEFAULT_ROLE_LOADOUT_PRESETS: readonly NamedLoadoutPreset[] = Objec
       heavyWeapon: 'guided_missile',
       tacticalEquipment: 'c4_breach_kit',
       squadIds: ['anvil_5', 'bulwark_3', 'specter_4'],
+      initialFormation: 'WEDGE',
     }) as MissionLoadoutConfig,
   }),
   Object.freeze({
@@ -519,6 +522,7 @@ export const DEFAULT_ROLE_LOADOUT_PRESETS: readonly NamedLoadoutPreset[] = Objec
       heavyWeapon: 'guided_missile',
       tacticalEquipment: 'smoke_conceal_kit',
       squadIds: ['specter_4', 'vanguard_2', 'lifeline_6'],
+      initialFormation: 'COLUMN',
     }) as MissionLoadoutConfig,
   }),
 ]);

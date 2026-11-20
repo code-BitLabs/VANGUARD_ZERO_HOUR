@@ -503,6 +503,58 @@ export function getMissionIntelBriefing(
  * Pure recovery & injury progression step executed strictly on canonical mission completion.
  * Never decrements recovery timers on Clean Replay or mission abort.
  */
+export const HQ_RECOVERY_SEC_PER_TIER = 180;
+
+export interface OperatorRecoverySummary {
+  isRecovering: boolean;
+  progressPct: number;
+  elapsedSec: number;
+  targetSec: number;
+  remainingSec: number;
+  remainingOps: number;
+  etaLabel: string;
+}
+
+export function computeOperatorRecoverySummary(op: SquadOperatorRecord): OperatorRecoverySummary {
+  if (op.status !== 'recovering') {
+    return {
+      isRecovering: false,
+      progressPct: 100,
+      elapsedSec: 0,
+      targetSec: 0,
+      remainingSec: 0,
+      remainingOps: 0,
+      etaLabel: 'READY',
+    };
+  }
+
+  const targetSec =
+    op.recoveryTargetSec > 0
+      ? op.recoveryTargetSec
+      : Math.max(1, op.recoveryOpsRemaining) * HQ_RECOVERY_SEC_PER_TIER;
+  const elapsedSec = Math.min(targetSec, Math.max(0, op.recoveryElapsedSec ?? 0));
+  const remainingSec = Math.max(0, Math.round(targetSec - elapsedSec));
+  const remainingOps = Math.max(
+    op.recoveryOpsRemaining > 0 ? 1 : 0,
+    Math.ceil(remainingSec / HQ_RECOVERY_SEC_PER_TIER)
+  );
+  const progressPct = Math.min(99, Math.max(0, Math.round((elapsedSec / Math.max(1, targetSec)) * 100)));
+  const remMin = Math.floor(remainingSec / 60);
+  const remSec = remainingSec % 60;
+  const etaLabel =
+    remMin > 0 ? `${remMin}m ${String(remSec).padStart(2, '0')}s op time` : `${remSec}s op time`;
+
+  return {
+    isRecovering: true,
+    progressPct,
+    elapsedSec,
+    targetSec,
+    remainingSec,
+    remainingOps,
+    etaLabel,
+  };
+}
+
 export function advanceRosterAfterOperation(
   roster: readonly SquadOperatorRecord[],
   missionOutcome: {
@@ -510,6 +562,10 @@ export function advanceRosterAfterOperation(
     victory: boolean;
     difficulty: Difficulty;
     ironmanActive: boolean;
+    deploymentMode?: 'solo' | 'fireteam';
+    missionElapsedSec?: number;
+    operationRunId?: string;
+    creditedOperationRunIds?: readonly string[];
     operatorReports: ReadonlyArray<{
       operatorId: string;
       deployed: boolean;
@@ -525,31 +581,60 @@ export function advanceRosterAfterOperation(
     }>;
   }
 ): SquadOperatorRecord[] {
+  // Clean Replay is strictly isolated from persistent roster state & HQ recovery
   if (missionOutcome.replayMode === 'clean_replay') {
     return roster.map((op) => ({ ...op }));
   }
 
-  const reportById = new Map(missionOutcome.operatorReports.map((r) => [r.operatorId, r]));
-  const canDecrementRecovery = missionOutcome.victory;
+  // Exploit protection: deduplicate credited operation runs across retries/checkpoint reloads
+  const alreadyCredited =
+    Boolean(missionOutcome.operationRunId) &&
+    Boolean(missionOutcome.creditedOperationRunIds?.includes(missionOutcome.operationRunId!));
+
+  const isSoloDeployment = missionOutcome.deploymentMode === 'solo';
+  const reportById = isSoloDeployment
+    ? new Map<string, (typeof missionOutcome.operatorReports)[number]>()
+    : new Map(missionOutcome.operatorReports.map((r) => [r.operatorId, r]));
+
+  // Authoritative mission elapsed time (bounded against short retry farming; victories guarantee >= 1 full tier)
+  const rawElapsedSec = Math.max(0, Math.round(missionOutcome.missionElapsedSec ?? 0));
+  const creditedRecoverySec = alreadyCredited
+    ? 0
+    : missionOutcome.victory
+      ? Math.max(HQ_RECOVERY_SEC_PER_TIER, Math.min(HQ_RECOVERY_SEC_PER_TIER * 2, rawElapsedSec || HQ_RECOVERY_SEC_PER_TIER))
+      : rawElapsedSec >= 45
+        ? Math.min(Math.round(HQ_RECOVERY_SEC_PER_TIER * 0.5), rawElapsedSec)
+        : 0;
 
   return roster.map((op) => {
     const report = reportById.get(op.id);
 
-    // Operator was recovering off-duty while this canonical mission completed
+    // Operator rested safely at HQ while this Solo or Fireteam canonical operation ran
     if (!report || !report.deployed) {
-      if (op.status === 'recovering' && canDecrementRecovery) {
-        const remaining = Math.max(0, op.recoveryOpsRemaining - 1);
+      if (op.status === 'recovering' && creditedRecoverySec > 0) {
+        const currentTarget =
+          op.recoveryTargetSec > 0
+            ? op.recoveryTargetSec
+            : Math.max(1, op.recoveryOpsRemaining) * HQ_RECOVERY_SEC_PER_TIER;
+        const currentElapsed = Math.max(0, op.recoveryElapsedSec ?? 0);
+        const nextElapsed = Math.min(currentTarget, currentElapsed + creditedRecoverySec);
+        const remainingSec = Math.max(0, currentTarget - nextElapsed);
+        const remainingOps =
+          remainingSec <= 0 ? 0 : Math.max(1, Math.ceil(remainingSec / HQ_RECOVERY_SEC_PER_TIER));
+
         return {
           ...op,
-          recoveryOpsRemaining: remaining,
-          status: remaining === 0 ? 'active' : 'recovering',
-          injurySeverity: remaining === 0 ? 'none' : op.injurySeverity,
+          recoveryOpsRemaining: remainingOps,
+          recoveryElapsedSec: remainingOps === 0 ? 0 : nextElapsed,
+          recoveryTargetSec: remainingOps === 0 ? 0 : currentTarget,
+          status: remainingOps === 0 ? 'active' : 'recovering',
+          injurySeverity: remainingOps === 0 ? 'none' : op.injurySeverity,
         };
       }
       return { ...op };
     }
 
-    // Operator deployed in this op
+    // Operator deployed in this Fireteam op
     const nextKills = op.kills + report.kills;
     const nextRevives = op.revivesPerformed + report.revivesPerformed;
     const nextVehicles = op.vehiclesDisabled + report.vehiclesDisabled;
@@ -564,6 +649,8 @@ export function advanceRosterAfterOperation(
 
     let nextStatus = op.status;
     let nextRecoveryOps = op.recoveryOpsRemaining;
+    let nextRecoveryElapsedSec = op.recoveryElapsedSec ?? 0;
+    let nextRecoveryTargetSec = op.recoveryTargetSec ?? 0;
     let nextSeverity = op.injurySeverity;
     let nextTimesMia = op.timesMia;
 
@@ -572,6 +659,8 @@ export function advanceRosterAfterOperation(
       if (missionOutcome.ironmanActive) {
         nextStatus = 'kia';
         nextRecoveryOps = 0;
+        nextRecoveryElapsedSec = 0;
+        nextRecoveryTargetSec = 0;
         nextSeverity = 'severe';
       } else {
         nextStatus = 'recovering';
@@ -583,10 +672,14 @@ export function advanceRosterAfterOperation(
         } else {
           nextRecoveryOps = 2;
         }
+        nextRecoveryElapsedSec = 0;
+        nextRecoveryTargetSec = nextRecoveryOps * HQ_RECOVERY_SEC_PER_TIER;
       }
     } else {
       nextStatus = 'active';
       nextRecoveryOps = 0;
+      nextRecoveryElapsedSec = 0;
+      nextRecoveryTargetSec = 0;
       nextSeverity = 'none';
     }
 
@@ -594,6 +687,8 @@ export function advanceRosterAfterOperation(
       ...op,
       status: nextStatus,
       recoveryOpsRemaining: nextRecoveryOps,
+      recoveryElapsedSec: nextRecoveryElapsedSec,
+      recoveryTargetSec: nextRecoveryTargetSec,
       injurySeverity: nextSeverity,
       missionsDeployed: op.missionsDeployed + 1,
       missionsSurvived: op.missionsSurvived + (report.survived && !report.becameMia ? 1 : 0),

@@ -100,12 +100,20 @@ export const OperatorCustomizationSchema = z.object({
 });
 export type OperatorCustomization = z.infer<typeof OperatorCustomizationSchema>;
 
+export const DeploymentModeSchema = z.enum(['solo', 'fireteam']);
+export type DeploymentMode = z.infer<typeof DeploymentModeSchema>;
+
+export const InitialFormationSchema = z.enum(['WEDGE', 'COLUMN', 'LINE', 'COMPACT']);
+export type InitialFormation = z.infer<typeof InitialFormationSchema>;
+
 export const SquadOperatorRecordSchema = z.object({
   id: z.string().min(1),
   callsign: z.string().min(1),
   role: SquadRoleIdSchema,
   status: OperatorStatusSchema.default('active'),
   recoveryOpsRemaining: z.number().int().min(0).max(4).default(0),
+  recoveryElapsedSec: z.number().nonnegative().default(0),
+  recoveryTargetSec: z.number().nonnegative().default(0),
   injurySeverity: z.enum(['none', 'light', 'severe']).default('none'),
   missionsDeployed: z.number().int().nonnegative().default(0),
   missionsSurvived: z.number().int().nonnegative().default(0),
@@ -140,6 +148,7 @@ export const MissionLoadoutConfigSchema = z.object({
   heavyWeapon: WeaponIdSchema.default('rocket_launcher'),
   tacticalEquipment: TacticalEquipmentIdSchema.default('frag_pack'),
   squadIds: z.array(z.string()).min(1).max(3).default(['vanguard_2', 'bulwark_3', 'lifeline_6']),
+  initialFormation: InitialFormationSchema.default('WEDGE'),
 });
 export type MissionLoadoutConfig = z.infer<typeof MissionLoadoutConfigSchema>;
 
@@ -163,3 +172,12 @@ export const EquippedWeaponAttachmentsSchema = z.object({
   magazine: z.string().nullable().default(null),
 });
 export type EquippedWeaponAttachments = z.infer<typeof EquippedWeaponAttachmentsSchema>;
+
+export const SavedWeaponBuildSchema = z.object({
+  id: z.string().min(1),
+  weaponId: WeaponIdSchema,
+  name: z.string().min(1).max(32),
+  attachments: EquippedWeaponAttachmentsSchema,
+  createdAt: z.number().int().nonnegative(),
+});
+export type SavedWeaponBuild = z.infer<typeof SavedWeaponBuildSchema>;

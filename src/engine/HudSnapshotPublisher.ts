@@ -41,6 +41,9 @@ export interface HudPublishContext {
   readonly squadSummary?: HudSnapshot['squad'];
   readonly carriedWeaponIds?: HudSnapshot['carriedWeaponIds'];
   readonly nearSupplySwapStation?: boolean;
+  readonly deploymentMode?: 'solo' | 'fireteam';
+  readonly soloTraumaKit?: HudSnapshot['soloTraumaKit'];
+  readonly activeRadioSubtitle?: HudSnapshot['activeRadioSubtitle'];
 }
 
 /**
@@ -378,9 +381,14 @@ export class HudSnapshotPublisher {
       activeModifiers: ctx.activeModifiers,
       ordnance: ordnanceHud,
       liftStatus: liftCtx.activeSnapshot,
-      squad: ctx.squadSummary,
+      squad: ctx.deploymentMode === 'solo' ? undefined : ctx.squadSummary,
       carriedWeaponIds: ctx.carriedWeaponIds,
       nearSupplySwapStation: ctx.nearSupplySwapStation,
+      deploymentMode: ctx.deploymentMode ?? 'fireteam',
+      soloTraumaKit: ctx.deploymentMode === 'solo' ? ctx.soloTraumaKit : undefined,
+      activeRadioSubtitle: settings.accessibility.subtitles
+        ? (ctx.activeRadioSubtitle ?? null)
+        : null,
     };
   }
 

@@ -11,6 +11,7 @@ import {
   resolveWeaponConfig,
   validateWeaponBuild,
 } from '@/src/gameplay/weapons/AttachmentCompositionEngine';
+import { compareWeaponBuilds } from '@/src/gameplay/weapons/WeaponBalanceTelemetry';
 import {
   AttachmentSlot,
   OperatorCamoId,
@@ -64,6 +65,10 @@ export function AttachmentBenchPanel({ weapon, onUiClick }: AttachmentBenchPanel
   const buildReport = useMemo(
     () => validateWeaponBuild(weapon, equipped),
     [weapon, equipped]
+  );
+  const telemetryComparison = useMemo(
+    () => compareWeaponBuilds(baseWithUpgrades, resolved),
+    [baseWithUpgrades, resolved]
   );
 
   const slotOptions = useMemo(
@@ -159,6 +164,43 @@ export function AttachmentBenchPanel({ weapon, onUiClick }: AttachmentBenchPanel
               label="Mobility"
               current={`${Math.round(resolved.mobilityFactor * 100)}%`}
               delta={Math.round((resolved.mobilityFactor - baseWithUpgrades.mobilityFactor) * 100)}
+              unit="%"
+            />
+          </div>
+
+          <div
+            data-testid="weapon-telemetry-comparison"
+            className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[10px]"
+          >
+            <DeltaStat
+              label="Infantry TTK"
+              current={`${telemetryComparison.configured.ttkInfantrySec.toFixed(2)}s`}
+              delta={telemetryComparison.deltas.ttkInfantryMsDelta}
+              unit="ms"
+              lowerIsBetter
+            />
+            <DeltaStat
+              label="Heavy Armor TTK"
+              current={`${telemetryComparison.configured.ttkHeavyArmorSec.toFixed(2)}s`}
+              delta={Number(
+                (
+                  telemetryComparison.configured.ttkHeavyArmorSec -
+                  telemetryComparison.baseline.ttkHeavyArmorSec
+                ).toFixed(2)
+              )}
+              unit="s"
+              lowerIsBetter
+            />
+            <DeltaStat
+              label="Sustained DPM"
+              current={`${telemetryComparison.configured.sustainedDpm}`}
+              delta={telemetryComparison.deltas.sustainedDpmPct}
+              unit="%"
+            />
+            <DeltaStat
+              label="Handling / Stealth"
+              current={`${telemetryComparison.configured.handlingIndex} / ${telemetryComparison.configured.stealthRating}`}
+              delta={telemetryComparison.deltas.handlingDelta}
             />
           </div>
 
@@ -364,11 +406,13 @@ function DeltaStat({
   current,
   delta,
   lowerIsBetter = false,
+  unit = '',
 }: {
   label: string;
   current: string;
   delta: number;
   lowerIsBetter?: boolean;
+  unit?: string;
 }) {
   const isPositive = delta > 0;
   const isGood = delta === 0 ? null : lowerIsBetter ? !isPositive : isPositive;
@@ -383,7 +427,7 @@ function DeltaStat({
               isGood ? 'text-emerald-400' : 'text-rose-400'
             }`}
           >
-            {delta > 0 ? `+${delta}` : `${delta}`}
+            {delta > 0 ? `+${delta}${unit}` : `${delta}${unit}`}
           </span>
         )}
       </div>

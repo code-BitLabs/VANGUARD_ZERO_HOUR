@@ -13,7 +13,7 @@ import {
   CampaignEventDraft,
   CampaignRebaseDiff,
 } from '@/src/gameplay/campaign/CampaignEventLedger';
-import { ReplayMode } from '@/src/schemas/campaign.schema';
+import { DeploymentMode, ReplayMode } from '@/src/schemas/campaign.schema';
 import { MissionResultPayload, SquadOperatorMissionReport } from './progressionStore';
 
 export interface DebriefSummary extends MissionResultPayload {
@@ -36,10 +36,13 @@ export interface DebriefSummary extends MissionResultPayload {
   checkpointDeathsCount?: number;
   playtestReport?: PlaytestExperienceReport;
   replayMode?: ReplayMode;
+  deploymentMode?: DeploymentMode;
   committedCampaignEvents?: number;
   stagedRebaseDiff?: CampaignRebaseDiff | null;
   pendingRebaseDrafts?: CampaignEventDraft[];
   squadReports?: SquadOperatorMissionReport[];
+  recoveredOperatorCallsigns?: string[];
+  hqRecoveryProgressedCount?: number;
 }
 
 export interface DownedState {
@@ -48,6 +51,7 @@ export interface DownedState {
   fatalSource: FatalDamageAttribution | null;
   lastHits: DamageTelemetryRecord[];
   canRestartCheckpoint: boolean;
+  canUseSoloTraumaRevive?: boolean;
 }
 
 export interface EngineDiagnosticsSnapshot {

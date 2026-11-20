@@ -147,8 +147,18 @@ export function evaluateOperatorDirective(params: {
   playerPos: { x: number; y: number; z: number };
   threatBoard: SharedFriendlyThreatBoard;
   slotIndex: number;
+  playerRevivingOperatorId?: string | null;
 }): OperatorTacticalDirective {
-  const { operator, allOperators, intent, formationSlot, playerPos, threatBoard, slotIndex } = params;
+  const {
+    operator,
+    allOperators,
+    intent,
+    formationSlot,
+    playerPos,
+    threatBoard,
+    slotIndex,
+    playerRevivingOperatorId = null,
+  } = params;
   const archetype = SQUAD_ARCHETYPE_FLYWEIGHTS[operator.role];
 
   if (operator.isMia) {
@@ -187,17 +197,19 @@ export function evaluateOperatorDirective(params: {
     };
   }
 
-  // 1. Casualty Triage Priority (Medic autonomous revive, or Non-Medic Emergency Stabilization if Medic is unavailable)
+  // 1. Casualty Triage Priority (Medic autonomous revive, avoiding redundant overlap when player is rescuing)
   const downedAllies = allOperators
     .filter((a) => a.id !== operator.id && a.isDowned && !a.isMia)
     .sort((a, b) => a.bleedoutRemainingSec - b.bleedoutRemainingSec);
+
+  const unattendedDownedAllies = downedAllies.filter((a) => a.id !== playerRevivingOperatorId);
 
   const healthyMedicAvailable = allOperators.some(
     (a) => a.role === 'medic' && !a.isDowned && !a.isMia && a.reviveChargesRemaining > 0
   );
 
-  if (downedAllies.length > 0 && !operator.inVehicleId) {
-    const urgentAlly = downedAllies[0];
+  if (unattendedDownedAllies.length > 0 && !operator.inVehicleId) {
+    const urgentAlly = unattendedDownedAllies[0];
     const distToAlly = Math.hypot(urgentAlly.x - operator.x, urgentAlly.z - operator.z);
 
     if (
@@ -251,6 +263,29 @@ export function evaluateOperatorDirective(params: {
         };
       }
     }
+  } else if (
+    downedAllies.length > 0 &&
+    unattendedDownedAllies.length === 0 &&
+    operator.role === 'medic' &&
+    !operator.inVehicleId
+  ) {
+    // Player is actively reviving the only downed ally -> Medic provides immediate covering fire around triage site
+    const coverThreat = threatBoard.selectBestThreatForRole(operator.role, operator.x, operator.z, null);
+    return {
+      operatorId: operator.id,
+      microState: coverThreat ? 'SUPPRESS_SECTOR' : 'HOLD_COVER',
+      targetPosX: formationSlot.x,
+      targetPosY: formationSlot.y,
+      targetPosZ: formationSlot.z,
+      focusEnemyId: coverThreat?.enemyId ?? null,
+      rescueAllyId: null,
+      boardVehicleId: null,
+      preferCover: true,
+      suppressFire: Boolean(coverThreat),
+      flankSideSign: 0,
+      formation: 'COMPACT',
+      reasonTag: 'Covering Commander Triage',
+    };
   }
 
   // 2. Vehicle Boarding / Staying Seated / Dismounting
@@ -399,7 +434,7 @@ export function evaluateOperatorDirective(params: {
       };
     }
 
-    if (operator.role === 'recon' || operator.role === 'medic') {
+    if (operator.role === 'recon') {
       return {
         operatorId: operator.id,
         microState: 'ENGAGE_TARGET',
@@ -412,8 +447,26 @@ export function evaluateOperatorDirective(params: {
         preferCover: true,
         suppressFire: false,
         flankSideSign: 0,
+        formation: 'OVERWATCH',
+        reasonTag: 'Recon Bounding Overwatch',
+      };
+    }
+
+    if (operator.role === 'medic') {
+      return {
+        operatorId: operator.id,
+        microState: 'HOLD_COVER',
+        targetPosX: formationSlot.x,
+        targetPosY: formationSlot.y,
+        targetPosZ: formationSlot.z,
+        focusEnemyId: bestThreat?.enemyId ?? intent?.targetEnemyId ?? null,
+        rescueAllyId: null,
+        boardVehicleId: null,
+        preferCover: true,
+        suppressFire: false,
+        flankSideSign: 0,
         formation: formationSlot.formation,
-        reasonTag: operator.role === 'recon' ? 'Recon Overwatch' : 'Tactical Support',
+        reasonTag: 'Medic Cover Overwatch',
       };
     }
 

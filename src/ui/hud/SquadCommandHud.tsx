@@ -27,7 +27,7 @@ export interface SquadCommandHudProps {
   hud: HudSnapshot;
   compactHud: boolean;
   downedActive: boolean;
-  onIssueCommand: (
+  onIssueCommand?: (
     order: SquadOrderType,
     source: SquadCommandSource,
     operatorId?: string
@@ -61,6 +61,8 @@ export function SquadCommandHud({
     }
   }, [hud.nearSupplySwapStation, swapOpen]);
 
+  const isSoloMode = hud.deploymentMode === 'solo' || !hud.squad || !onIssueCommand;
+
   useEffect(() => {
     if (compactHud || downedActive) {
       setRadialOpen(false);
@@ -69,13 +71,13 @@ export function SquadCommandHud({
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-      if (e.code === 'KeyQ' && !swapOpen) {
+      if (!isSoloMode && e.code === 'KeyQ' && !swapOpen) {
         setRadialOpen(true);
         setHoveredOrder(null);
       } else if (e.code === 'Escape' && radialOpenRef.current) {
         setRadialOpen(false);
         setHoveredOrder(null);
-      } else if (radialOpenRef.current && (e.key === '1' || e.key === '2' || e.key === '3')) {
+      } else if (!isSoloMode && radialOpenRef.current && (e.key === '1' || e.key === '2' || e.key === '3')) {
         const idx = Number(e.key) - 1;
         const op = hud.squad?.operators[idx];
         setTargetOperatorId((prev) => (op && prev !== op.id ? op.id : undefined));
@@ -85,11 +87,11 @@ export function SquadCommandHud({
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'KeyQ' && radialOpenRef.current) {
+      if (!isSoloMode && e.code === 'KeyQ' && radialOpenRef.current) {
         const chosen = hoveredOrderRef.current;
         setRadialOpen(false);
         setHoveredOrder(null);
-        if (chosen) {
+        if (chosen && onIssueCommand) {
           onIssueCommand(chosen, 'desktop_radial', targetOpRef.current);
         }
       }
@@ -127,19 +129,21 @@ export function SquadCommandHud({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('mousemove', onMouseMove);
     };
-  }, [compactHud, downedActive, hud.nearSupplySwapStation, hud.squad?.operators, onIssueCommand, swapOpen]);
+  }, [compactHud, downedActive, hud.nearSupplySwapStation, hud.squad?.operators, isSoloMode, onIssueCommand, swapOpen]);
 
-  const squad = hud.squad;
-  if (!squad || downedActive) return null;
+  const squad = isSoloMode ? undefined : hud.squad;
+  if (downedActive) return null;
+  if (!squad && !hud.nearSupplySwapStation) return null;
 
   const carriedIds = hud.carriedWeaponIds ?? ['assault_rifle', 'pistol', 'rocket_launcher'];
-  const nearestDownedOp = squad.nearestDownedOperatorId
-    ? squad.operators.find((o) => o.id === squad.nearestDownedOperatorId) ?? null
-    : null;
+  const nearestDownedOp =
+    squad && squad.nearestDownedOperatorId
+      ? squad.operators.find((o) => o.id === squad.nearestDownedOperatorId) ?? null
+      : null;
 
   return (
     <>
-      {!compactHud && (
+      {!compactHud && squad && (
         <div
           data-testid="hud-fireteam-strip"
           className="absolute bottom-36 left-4 z-20 bg-[#0B0E11]/86 border border-zinc-800 rounded-sm px-3 py-2 w-[264px] space-y-1.5 pointer-events-none"
@@ -337,7 +341,7 @@ export function SquadCommandHud({
               </span>
               <span className="font-mono text-[8.5px] text-cyan-300 mt-0.5 truncate max-w-[82px]">
                 {targetOperatorId
-                  ? squad.operators.find((o) => o.id === targetOperatorId)?.callsign ?? 'UNIT'
+                  ? squad?.operators.find((o) => o.id === targetOperatorId)?.callsign ?? 'UNIT'
                   : 'ALL SQUAD'}
               </span>
             </div>
@@ -357,7 +361,7 @@ export function SquadCommandHud({
                   onClick={() => {
                     setRadialOpen(false);
                     setHoveredOrder(null);
-                    onIssueCommand(opt.order, 'desktop_radial', targetOperatorId);
+                    onIssueCommand?.(opt.order, 'desktop_radial', targetOperatorId);
                   }}
                   style={{
                     transform: `translate(${Math.round(x)}px, ${Math.round(y)}px)`,

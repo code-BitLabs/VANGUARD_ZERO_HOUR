@@ -19,6 +19,9 @@ export function TitleScreen({
   const rank = getRankForXp(save.xp);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
+  const deploymentMode = useMissionSelectionStore((s) =>
+    s.getDeploymentModeForMission(s.selectedMissionId)
+  );
   const seenBriefings = useMissionSelectionStore((s) => s.seenMissionBriefings);
   const selectedMission = getMissionById(selectedMissionId);
   const hasSeenVersionedBriefing =
@@ -113,7 +116,7 @@ export function TitleScreen({
               }}
               className="min-h-[44px]"
             >
-              <Zap className="w-4 h-4 text-amber-400" /> Quick Deploy (Op 0{selectedMission.id} · {difficulty})
+              <Zap className="w-4 h-4 text-amber-400" /> Quick Deploy (Op 0{selectedMission.id} · {difficulty} · {deploymentMode === 'solo' ? 'Solo' : 'Fireteam'})
             </Button>
           ) : (
             <Button

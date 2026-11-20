@@ -19,8 +19,12 @@ import { CombatDamageResolver } from '@/src/gameplay/CombatDamageResolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { DiagnosticRulesEngine } from '@/src/gameplay/diagnostics/DiagnosticRulesEngine';
-import { PlaytestExperienceTracker } from '@/src/gameplay/diagnostics/PlaytestTelemetrySummary';
+import {
+  diagnosePlaytestFriction,
+  PlaytestExperienceTracker,
+} from '@/src/gameplay/diagnostics/PlaytestTelemetrySummary';
 import { EncounterDirector } from '@/src/gameplay/EncounterDirector';
+import { SoloEncounterDirector } from '@/src/gameplay/SoloEncounterDirector';
 import { EnemyManager } from '@/src/gameplay/EnemyManager';
 import { ExplosiveManager } from '@/src/gameplay/ExplosiveManager';
 import { HealthPickupManager } from '@/src/gameplay/HealthPickupManager';
@@ -50,6 +54,7 @@ import {
 } from '@/src/gameplay/campaign/CampaignEventLedger';
 import { buildMissionCampaignEventDrafts } from '@/src/gameplay/campaign/MissionOutcomeBuilder';
 import { hardwareReadinessHarness } from '@/src/gameplay/diagnostics/HardwareReadinessHarness';
+import { DeploymentMode } from '@/src/schemas/campaign.schema';
 import {
   FriendlySquadManager,
   SquadEnemyReadView,
@@ -59,6 +64,11 @@ import {
   SquadCommandSource,
   SquadOrderType,
 } from '@/src/gameplay/squad/SquadIntentRouter';
+import { SQUAD_ARCHETYPE_FLYWEIGHTS } from '@/src/data/squadRoster';
+import {
+  DialogueTriggerInput,
+  SquadDialogueDirector,
+} from '@/src/gameplay/narrative/SquadDialogueDirector';
 import { WeaponSystem } from '@/src/gameplay/WeaponSystem';
 import { buildSupplyCrate } from '@/src/world/builders/WorldPropsAndLandmarks';
 import { PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
@@ -119,10 +129,16 @@ export class GameEngine {
   private readonly healthPickups: HealthPickupManager;
   private readonly sustainment = new SustainmentEconomyManager();
   private readonly encounterDirector = new EncounterDirector();
+  private readonly soloDirector = new SoloEncounterDirector();
   private readonly friendlySquad = new FriendlySquadManager();
+  private readonly squadDialogue = new SquadDialogueDirector();
+  private activeDeploymentMode: DeploymentMode = 'fireteam';
+  private activeOperationRunId = '';
   private activeCampaignConsequences: MissionConsequenceModifiers | null = null;
   private latestSquadHudSummary: SquadHudSummary | undefined = undefined;
   private friendlySuppressorActiveThisTick = false;
+  private lastDialogueStageIndex = 1;
+  private extractionLiveAnnounced = false;
   private readonly _squadForwardScratch = new THREE.Vector3();
   private readonly _squadRayOriginScratch = new THREE.Vector3();
   private readonly _squadRayDirScratch = new THREE.Vector3();
@@ -535,6 +551,16 @@ export class GameEngine {
     );
 
     this.resourceManager.trackEventListener(window, 'pagehide', handleLifecycleHide, 'shared');
+    this.resourceManager.trackEventListener(
+      window,
+      'pageshow',
+      () => {
+        if (!document.hidden && uiStore.getState().screen !== 'paused') {
+          this.audio.resume();
+        }
+      },
+      'shared'
+    );
   }
 
   private setupMenuDiorama(): void {
@@ -569,13 +595,23 @@ export class GameEngine {
     this.dioramaLoaded = true;
   }
 
-  async startMission(missionId: number, difficulty: Difficulty, preferredWeapon?: WeaponId): Promise<void> {
+  async startMission(
+    missionId: number,
+    difficulty: Difficulty,
+    preferredWeapon?: WeaponId,
+    deploymentMode?: DeploymentMode
+  ): Promise<void> {
     this.audio.unlock();
     this.input.clearAllInputs();
     this.flushPendingDefeatProgression();
     const mission = getMissionById(missionId);
+    const resolvedMode: DeploymentMode =
+      deploymentMode ?? missionSelectionStore.getState().getDeploymentModeForMission(mission.id);
+    this.activeDeploymentMode = resolvedMode;
+    this.activeOperationRunId = `op_${mission.id}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
     missionSelectionStore.getState().setSelectedMission(mission.id);
     missionSelectionStore.getState().setDifficulty(difficulty);
+    missionSelectionStore.getState().setDeploymentMode(resolvedMode, mission.id);
 
     // Cleanly unload prior diorama or mission before starting next one
     this.unloadCurrentWorld();
@@ -800,6 +836,9 @@ export class GameEngine {
     );
     const bonusSupplyCharges = this.activeCampaignConsequences.bonusSupplyCharges;
 
+    const isSoloMode = this.activeDeploymentMode === 'solo';
+    this.soloDirector.reset(isSoloMode, mission.id, difficulty);
+
     this.sustainment.clear();
     for (const sc of this.worldData.supplyCrates) {
       this.sustainment.registerStation({
@@ -811,13 +850,36 @@ export class GameEngine {
         statusLightMesh: sc.statusLightMesh ?? null,
       });
     }
+    if (isSoloMode) {
+      for (const soloStation of this.soloDirector.getSoloBonusSupplyStations(mission.id)) {
+        const groundY = this.collisionWorld.getGroundHeightAt(
+          soloStation.position.x,
+          soloStation.position.z
+        );
+        this.sustainment.registerStation({
+          id: soloStation.id,
+          kind: soloStation.kind,
+          position: new THREE.Vector3(
+            soloStation.position.x,
+            Number.isFinite(groundY) ? groundY : soloStation.position.y,
+            soloStation.position.z
+          ),
+          maxCharges: soloStation.maxCharges,
+          label: soloStation.label,
+        });
+      }
+    }
     if (restoredCheckpoint?.sustainmentSnapshot) {
       this.sustainment.restoreSnapshot(restoredCheckpoint.sustainmentSnapshot);
     }
 
     this.telemetry.reset();
     this.telemetry.setMissionId(mission.id);
-    this.encounterDirector.reset(mission.id, this.activeCampaignConsequences);
+    this.encounterDirector.reset(
+      mission.id,
+      this.activeCampaignConsequences,
+      this.activeDeploymentMode
+    );
     if (!restoredCheckpoint) {
       this.playtestTracker.reset();
       this.weaponKillsMap = {};
@@ -832,6 +894,7 @@ export class GameEngine {
     this.explosives.reset();
     this.coordinator.reset();
     this.coordinator.setDifficulty(difficulty);
+    this.coordinator.setSoloConstraints(this.soloDirector.getEngagementConstraints());
     this.enemies.setDifficulty(difficulty);
     this.vehicles.setDifficulty(difficulty);
     this.vehicles.setMapId(mission.mapId);
@@ -973,22 +1036,57 @@ export class GameEngine {
       }
     }
 
-    // Stage 7 TRN-37: Spawn coordinated player-controlled fireteam (with automatic reserve continuity)
-    this.friendlySquad.initializeForMission({
-      scene: this.renderer.scene,
-      resourceManager: this.resourceManager,
-      scope,
-      roster: saveSnapshot.squadRoster,
-      preferredSquadIds: activeLoadout.squadIds,
-      spawnOrigin: {
-        x: this.player.position.x,
-        y: this.player.position.y,
-        z: this.player.position.z,
-      },
-      difficulty,
-      bonusMedCharges: equipSpec.bonusSquadMedCharges,
-    });
+    // Stage 7 TRN-37 & Redesign: Respect Solo vs. Fireteam deployment mode strictly
     this.latestSquadHudSummary = undefined;
+    this.friendlySuppressorActiveThisTick = false;
+    this.squadDialogue.reset();
+    this.lastDialogueStageIndex = 1;
+    this.extractionLiveAnnounced = false;
+
+    if (this.activeDeploymentMode === 'solo') {
+      this.friendlySquad.dispose(this.renderer.scene);
+    } else {
+      this.friendlySquad.initializeForMission({
+        scene: this.renderer.scene,
+        resourceManager: this.resourceManager,
+        scope,
+        roster: saveSnapshot.squadRoster,
+        preferredSquadIds: activeLoadout.squadIds,
+        spawnOrigin: {
+          x: this.player.position.x,
+          y: this.player.position.y,
+          z: this.player.position.z,
+        },
+        difficulty,
+        bonusMedCharges: equipSpec.bonusSquadMedCharges,
+        initialFormation: activeLoadout.initialFormation ?? 'WEDGE',
+      });
+
+      const deployedOps = this.friendlySquad.getOperators();
+      const leadOp = deployedOps[0];
+      if (leadOp) {
+        this.emitSquadDialogue({
+          event: 'mission_deploy',
+          nowSec: 0,
+          operatorId: leadOp.id,
+          callsign: leadOp.record.callsign,
+          role: leadOp.role,
+          missionId: mission.id,
+        });
+      }
+      const firstConsequence = this.activeCampaignConsequences?.activeSummaries[0];
+      if (firstConsequence && deployedOps[1]) {
+        this.emitSquadDialogue({
+          event: 'campaign_consequence_ack',
+          nowSec: 4.5,
+          operatorId: deployedOps[1].id,
+          callsign: deployedOps[1].record.callsign,
+          role: deployedOps[1].role,
+          missionId: mission.id,
+          consequenceEventId: firstConsequence.eventId,
+        });
+      }
+    }
 
     // Immediately align camera with spawned player eye position before Frame 0 render/projection
     this.player.syncCamera(
@@ -1312,17 +1410,58 @@ export class GameEngine {
       this.explosives.cancelStrategicNuke();
     }
 
-    // Stage 7 TRN-37: Desktop Squad Quick Keys [F1]-[F4]
-    if (this.input.wasKeyPressed('F1')) {
-      this.issueSquadCommand('REGROUP', 'desktop_quick_key');
-    } else if (this.input.wasKeyPressed('F2')) {
-      this.issueSquadCommand('MOVE', 'desktop_quick_key');
-    } else if (this.input.wasKeyPressed('F3')) {
-      this.issueSquadCommand('ATTACK_TARGET', 'desktop_quick_key');
-    } else if (this.input.wasKeyPressed('F4')) {
-      this.issueSquadCommand('FLANK', 'desktop_quick_key');
+    // Solo Operator Emergency Trauma Self-Recovery on [F] while downed
+    if (
+      this.activeDeploymentMode === 'solo' &&
+      this.downedActive &&
+      this.input.wasKeyPressed('KeyF')
+    ) {
+      this.triggerSoloSelfRecovery();
+    }
+
+    // Stage 7 TRN-37: Desktop Squad Quick Keys [F1]-[F4] (Fireteam mode only)
+    if (this.activeDeploymentMode === 'fireteam') {
+      if (this.input.wasKeyPressed('F1')) {
+        this.issueSquadCommand('REGROUP', 'desktop_quick_key');
+      } else if (this.input.wasKeyPressed('F2')) {
+        this.issueSquadCommand('MOVE', 'desktop_quick_key');
+      } else if (this.input.wasKeyPressed('F3')) {
+        this.issueSquadCommand('ATTACK_TARGET', 'desktop_quick_key');
+      } else if (this.input.wasKeyPressed('F4')) {
+        this.issueSquadCommand('FLANK', 'desktop_quick_key');
+      }
     }
   };
+
+  /**
+   * Triggers the limited 1-charge Solo Operator emergency trauma self-recovery while downed.
+   */
+  public triggerSoloSelfRecovery(): boolean {
+    if (
+      this.activeDeploymentMode !== 'solo' ||
+      !this.activeMission ||
+      !this.downedActive ||
+      this.player.alive
+    ) {
+      return false;
+    }
+    const outcome = this.soloDirector.useTraumaSelfRecovery();
+    if (!outcome.ok) return false;
+
+    this.player.applyCheckpointVitals(outcome.restoredHealth, outcome.restoredArmor);
+    this.downedActive = false;
+    this.downedTimerSec = 0;
+    this.renderer.camera.rotation.z = 0;
+    gameSessionStore.getState().setDownedState(null);
+    this.coordinator.setSoloConstraints(this.soloDirector.getEngagementConstraints());
+    this.audio.play2D('ui_click', 5, 0.55);
+    this.missionDirector?.showAlert(
+      'EMERGENCY TRAUMA INJECTOR DEPLOYED — REPOSITION TO COVER',
+      3.0
+    );
+    this.publishHudSnapshot();
+    return true;
+  }
 
   /**
    * TRN-37 Public Squad Command Entry Point (used by Desktop Hold-Q Radial, F1-F4 Quick Keys,
@@ -1334,6 +1473,7 @@ export class GameEngine {
     operatorId?: string | null,
     explicitWorldPos?: { x: number; y: number; z: number } | null
   ): boolean {
+    if (this.activeDeploymentMode === 'solo') return false;
     if (!this.activeMission || !this.player.alive) return false;
     this.renderer.camera.getWorldPosition(this._squadRayOriginScratch);
     this.renderer.camera.getWorldDirection(this._squadRayDirScratch);
@@ -1432,6 +1572,23 @@ export class GameEngine {
     );
 
     if (res.accepted && res.intent) {
+      this.audio.play2D('squad_order_confirm', 6, 0.54, 0.02);
+      this.playtestTracker.recordSquadCommand(resolvedOrder);
+      const respondingOp =
+        (operatorId
+          ? this.friendlySquad.getOperators().find((o) => o.id === operatorId && o.alive)
+          : null) ??
+        this.friendlySquad.getOperators().find((o) => o.alive);
+      if (respondingOp) {
+        this.emitSquadDialogue({
+          event: 'order_ack',
+          nowSec: this.telemetry.getElapsedSec(),
+          operatorId: respondingOp.id,
+          callsign: respondingOp.record.callsign,
+          role: respondingOp.role,
+          order: resolvedOrder,
+        });
+      }
       this.missionDirector?.showSubtitle(`SQUAD: ${res.intent.label}`, 2.4);
       return true;
     }
@@ -1439,6 +1596,20 @@ export class GameEngine {
       this.missionDirector?.showAlert(res.reason, 1.8);
     }
     return false;
+  }
+
+  private emitSquadDialogue(input: DialogueTriggerInput): void {
+    const transmission = this.squadDialogue.trigger(input);
+    if (!transmission) return;
+    this.audio.playOperatorRadioVoice(
+      {
+        basePitchHz: transmission.voice.baseFreqHz,
+        formantPitchHz: transmission.voice.secondFreqHz,
+        cadenceMs: transmission.voice.cadenceMs,
+        radioClickHz: transmission.voice.squelchToneHz,
+      },
+      transmission.priority
+    );
   }
 
   /**
@@ -1901,6 +2072,26 @@ export class GameEngine {
     }
     this.audio.applyAdaptiveMusicMood(encounterOut.recommendedMood);
 
+    // Adaptive Solo Encounter Director evaluation (never nerfs enemy HP or weapon damage)
+    if (this.activeDeploymentMode === 'solo') {
+      const activeWepSolo = this.weapons.getActiveState();
+      const maxReserveRef = Math.max(1, activeWepSolo.magSize * 4);
+      const soloTick = this.soloDirector.update({
+        dt,
+        elapsedSec: this.missionDirector.elapsedSec,
+        playerHealthRatio: this.player.health / Math.max(1, this.player.maxHealth),
+        playerArmorRatio: this.player.armor / Math.max(1, this.player.maxArmor),
+        reserveAmmoRatio: Math.min(1, activeWepSolo.reserveAmmo / maxReserveRef),
+        rolling2sDamage: this.telemetry.getRollingDamage(2.0),
+        aliveEnemies: this.enemies.getActiveCount(),
+        activeAttackers: this.coordinator.getActiveDirectCount(),
+      });
+      this.coordinator.setSoloConstraints(soloTick.constraints);
+      if (soloTick.calloutText) {
+        this.missionDirector.showSubtitle(soloTick.calloutText, 3.6);
+      }
+    }
+
     // Dynamic anti-stall & mission-tailored reinforcement progression
     this.reinforcementTimer -= dt;
     const aliveEnemies = this.enemies.getActiveCount();
@@ -1911,7 +2102,9 @@ export class GameEngine {
       (waveProg.shouldSpawnReinforcements ||
         (this.reinforcementTimer <= 0 && aliveEnemies < 4))
     ) {
-      const intervalScale = this.activeCampaignConsequences?.reinforcementIntervalMult ?? 1.0;
+      const intervalScale =
+        (this.activeCampaignConsequences?.reinforcementIntervalMult ?? 1.0) *
+        this.soloDirector.getReinforcementIntervalMultiplier();
       this.reinforcementTimer = Math.round(24 * intervalScale);
       const countToSpawn = waveProg.shouldSpawnReinforcements ? waveProg.spawnCount : 3;
       const waveSpec = this.encounterDirector.selectReinforcementWave(
@@ -1945,9 +2138,13 @@ export class GameEngine {
     );
 
     if (!this.player.alive) {
+      const canUseSoloTraumaRevive =
+        this.activeDeploymentMode === 'solo' && this.soloDirector.canUseTraumaSelfRecovery();
+      const downedWindowSec = canUseSoloTraumaRevive ? 4.8 : 2.4;
+
       if (!this.downedActive) {
         this.downedActive = true;
-        this.downedTimerSec = 2.4;
+        this.downedTimerSec = downedWindowSec;
         this.input.clearAllInputs();
         this.releasePointerLockForDebug();
         this.telemetry.recordPlayerDeath();
@@ -1964,8 +2161,8 @@ export class GameEngine {
         this.downedTimerSec = Math.max(0, this.downedTimerSec - dt);
       }
 
-      // Gently lower and tilt camera during the ~2.4s downed / kill-cam phase
-      const downedProgress = Math.min(1, 1 - this.downedTimerSec / 2.4);
+      // Gently lower and tilt camera during the downed / kill-cam phase
+      const downedProgress = Math.min(1, 1 - this.downedTimerSec / downedWindowSec);
       this.renderer.camera.position.y = Math.max(
         this.player.position.y + 0.35,
         this.renderer.camera.position.y - downedProgress * 0.85
@@ -1980,6 +2177,7 @@ export class GameEngine {
         canRestartCheckpoint:
           !this.activeModifierEffects.disableCheckpoints &&
           this.activeCheckpointSnapshot !== null,
+        canUseSoloTraumaRevive,
       });
 
       if (this.downedTimerSec <= 0) {
@@ -2152,6 +2350,19 @@ export class GameEngine {
     this.airCombat.update(dt, this.player, this.collisionWorld);
 
     // Stage 7 TRN-37: Coordinated Friendly Fireteam Update & Player Rescue Step
+    // Solo Operator invariant: zero friendly squad ticks, zero squad nav solves
+    if (this.activeDeploymentMode === 'solo') {
+      this.latestSquadHudSummary = undefined;
+      this.friendlySuppressorActiveThisTick = false;
+      if (this.missionDirector) {
+        this.playtestTracker.recordEncounterStageTime(
+          this.missionDirector.getActiveStageIndex(),
+          dt
+        );
+      }
+      return;
+    }
+
     this.renderer.camera.getWorldDirection(this._squadForwardScratch);
     const enemyUnits = this.enemies.getUnits();
     this._squadEnemyViewsScratch.length = 0;
@@ -2183,6 +2394,98 @@ export class GameEngine {
     });
     this.latestSquadHudSummary = squadOut.hudSummary;
     this.friendlySuppressorActiveThisTick = squadOut.friendlySuppressorActive;
+    const elapsedNow = this.telemetry.getElapsedSec();
+
+    // Stage 8 TRN-48: Track squad responsiveness, formations, casualties & encounter stage pacing
+    this.playtestTracker.recordFormationTime(squadOut.hudSummary.activeFormation, dt);
+    if (this.missionDirector) {
+      const stageIdx = this.missionDirector.getActiveStageIndex();
+      this.playtestTracker.recordEncounterStageTime(stageIdx, dt);
+      if (stageIdx > this.lastDialogueStageIndex) {
+        this.lastDialogueStageIndex = stageIdx;
+        const aliveOp = this.friendlySquad.getOperators().find((o) => o.alive);
+        if (aliveOp) {
+          this.emitSquadDialogue({
+            event: 'stage_advance',
+            nowSec: elapsedNow,
+            operatorId: aliveOp.id,
+            callsign: aliveOp.record.callsign,
+            role: aliveOp.role,
+          });
+        }
+      }
+      if (
+        !this.extractionLiveAnnounced &&
+        this.missionDirector.getExtractionStatus() === 'available'
+      ) {
+        this.extractionLiveAnnounced = true;
+        const aliveOp = this.friendlySquad.getOperators().find((o) => o.alive);
+        this.emitSquadDialogue({
+          event: 'extraction_live',
+          nowSec: elapsedNow,
+          operatorId: aliveOp?.id ?? 'overwatch_hq',
+          callsign: aliveOp?.record.callsign ?? 'OVERWATCH HQ',
+          role: aliveOp?.role ?? 'recon',
+        });
+      }
+    }
+
+    const activeWepForCue = this.weapons.getActiveState();
+    if (
+      activeWepForCue.reserveAmmo > 0 &&
+      activeWepForCue.reserveAmmo <= activeWepForCue.magSize &&
+      activeWepForCue.ammoInMag <= Math.ceil(activeWepForCue.magSize * 0.25)
+    ) {
+      const supportOp =
+        this.friendlySquad.getOperators().find((o) => o.alive && o.role === 'support') ??
+        this.friendlySquad.getOperators().find((o) => o.alive);
+      if (supportOp) {
+        this.emitSquadDialogue({
+          event: 'low_ammo_warn',
+          nowSec: elapsedNow,
+          operatorId: supportOp.id,
+          callsign: supportOp.record.callsign,
+          role: supportOp.role,
+        });
+      }
+    }
+
+    const sqTel = squadOut.telemetryEvents;
+    for (let i = 0; i < sqTel.commandLatencySamplesMs.length; i++) {
+      this.playtestTracker.recordSquadCommandLatency(sqTel.commandLatencySamplesMs[i]);
+    }
+    if (sqTel.downedEventsThisTick.length > 0) {
+      this.playtestTracker.recordSquadDowned(sqTel.downedEventsThisTick.length);
+      this.audio.play2D('operator_downed_alarm', 8, 0.65, 0.01);
+      const firstDown = sqTel.downedEventsThisTick[0];
+      this.emitSquadDialogue({
+        event: 'operator_downed',
+        nowSec: elapsedNow,
+        operatorId: firstDown.operatorId,
+        callsign: firstDown.callsign,
+        role: firstDown.role,
+      });
+    }
+    if (sqTel.miaEventsThisTick.length > 0) {
+      this.playtestTracker.recordSquadMia(sqTel.miaEventsThisTick.length);
+    }
+    for (let i = 0; i < sqTel.medicRevivesThisTick; i++) {
+      this.playtestTracker.recordOperatorRescue(true);
+    }
+    for (let i = 0; i < sqTel.playerRevivesThisTick; i++) {
+      this.playtestTracker.recordOperatorRescue(false);
+    }
+    if (sqTel.revivedEventsThisTick.length > 0) {
+      const rev = sqTel.revivedEventsThisTick[0];
+      this.emitSquadDialogue({
+        event: rev.byMedic ? 'medic_revive' : 'player_revive',
+        nowSec: elapsedNow,
+        operatorId: rev.operatorId,
+        callsign: rev.byMedic ? rev.rescuerCallsign : rev.callsign,
+        role: rev.byMedic ? 'medic' : rev.role,
+      });
+    }
+
     if (squadOut.radioCallout) {
       this.missionDirector?.showSubtitle(`FIRETEAM: ${squadOut.radioCallout}`, 3.0);
     }
@@ -2192,10 +2495,26 @@ export class GameEngine {
       if (targetEnemy) {
         const killed = this.enemies.damageUnit(targetEnemy, req.damage, false);
         if (killed) {
+          const isHvt =
+            targetEnemy.archetype === 'heavy_armor' ||
+            targetEnemy.archetype === 'sniper' ||
+            targetEnemy.archetype === 'elite_assault';
           this.friendlySquad.recordOperatorKill(
             req.operatorId,
             targetEnemy.archetype === 'heavy_armor'
           );
+          if (isHvt) {
+            const killerOp = this.friendlySquad.getOperators().find((o) => o.id === req.operatorId);
+            if (killerOp) {
+              this.emitSquadDialogue({
+                event: 'high_value_kill',
+                nowSec: elapsedNow,
+                operatorId: killerOp.id,
+                callsign: killerOp.record.callsign,
+                role: killerOp.role,
+              });
+            }
+          }
           this.encounterDirector.intelBoard.notifyUnitEliminated(targetEnemy.id);
         }
       }
@@ -2345,6 +2664,7 @@ export class GameEngine {
     const sustainmentPrompt = this.activeMission
       ? this.sustainment.getPromptForContext(this.buildSustainmentContext())
       : null;
+    const activeRadio = this.squadDialogue.getActiveTransmission(this.telemetry.getElapsedSec());
     this.hudPublisher.publish({
       player: this.player,
       weapons: this.weapons,
@@ -2363,9 +2683,23 @@ export class GameEngine {
       optionalObjectivesCompleted: this.encounterDirector.getOptionalObjectivesCompletedCount(),
       activeModifiers: this.activeModifiers,
       camera: this.renderer.camera,
-      squadSummary: this.latestSquadHudSummary,
+      squadSummary: this.activeDeploymentMode === 'solo' ? undefined : this.latestSquadHudSummary,
       carriedWeaponIds: [...this.weapons.getCarriedMissionSlots()],
       nearSupplySwapStation: this.isPlayerNearSupplySwapStation(),
+      deploymentMode: this.activeDeploymentMode,
+      soloTraumaKit:
+        this.activeDeploymentMode === 'solo'
+          ? this.soloDirector.getTraumaKitStatus()
+          : undefined,
+      activeRadioSubtitle: activeRadio
+        ? {
+            id: activeRadio.id,
+            callsign: activeRadio.callsign,
+            roleBadge: SQUAD_ARCHETYPE_FLYWEIGHTS[activeRadio.role]?.shortBadge ?? 'CMD',
+            text: activeRadio.text,
+            priority: activeRadio.priority,
+          }
+        : null,
     });
   };
 
@@ -2390,7 +2724,8 @@ export class GameEngine {
     const difficulty = missionSelectionStore.getState().difficulty;
     const replayMode = missionSelectionStore.getState().replayMode;
     const optionalCompleted = this.encounterDirector.getOptionalObjectivesCompletedCount();
-    const squadReports = this.friendlySquad.buildMissionReports();
+    const squadReports =
+      this.activeDeploymentMode === 'solo' ? [] : this.friendlySquad.buildMissionReports();
     const campaignEventDrafts = buildMissionCampaignEventDrafts({
       missionId: this.activeMission.id,
       victory: summary.victory,
@@ -2417,6 +2752,8 @@ export class GameEngine {
       killsByWeapon: { ...this.weaponKillsMap },
       activeModifiers: [...this.activeModifiers],
       replayMode,
+      deploymentMode: this.activeDeploymentMode,
+      operationRunId: this.activeOperationRunId,
       campaignEventDrafts,
       squadReports,
     };
@@ -2430,6 +2767,8 @@ export class GameEngine {
     let committedCampaignEvents = 0;
     let stagedRebaseDiff: CampaignRebaseDiff | null = null;
     let pendingRebaseDrafts: typeof campaignEventDrafts = [];
+    let recoveredOperatorCallsigns: string[] = [];
+    let hqRecoveryProgressedCount = 0;
 
     if (victory) {
       this.pendingDefeatPayload = null;
@@ -2443,6 +2782,8 @@ export class GameEngine {
       committedCampaignEvents = outcome.committedCampaignEvents;
       stagedRebaseDiff = outcome.stagedRebaseDiff;
       pendingRebaseDrafts = outcome.pendingRebaseDrafts;
+      recoveredOperatorCallsigns = outcome.recoveredOperatorCallsigns;
+      hqRecoveryProgressedCount = outcome.hqRecoveryProgressedCount;
       this.audio.applyAdaptiveMusicMood('tactical_atmosphere', true);
     } else {
       // Defer defeat progression write until the player permanently aborts/replays instead of checkpoint-restarting
@@ -2475,6 +2816,8 @@ export class GameEngine {
       killsByWeapon: { ...this.weaponKillsMap },
       damageByDomain: telemetryMetrics.damageByDomain,
     });
+    const frictionFindings = diagnosePlaytestFriction(playtestReport);
+    hardwareReadinessHarness.setLatestPlaytestReport(playtestReport, frictionFindings);
 
     gameSessionStore.getState().setDebrief({
       missionId: this.activeMission.id,
@@ -2497,10 +2840,13 @@ export class GameEngine {
       checkpointDeathsCount: checkpointDeaths,
       playtestReport,
       replayMode,
+      deploymentMode: this.activeDeploymentMode,
       committedCampaignEvents,
       stagedRebaseDiff,
       pendingRebaseDrafts,
       squadReports,
+      recoveredOperatorCallsigns,
+      hqRecoveryProgressedCount,
     });
 
     this.lifecycle.send({ type: 'MISSION_ENDED' });

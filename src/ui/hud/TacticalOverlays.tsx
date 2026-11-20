@@ -112,6 +112,7 @@ export function TacticalOverviewDrawer({
 
 interface DownedActionOverlayProps {
   downedState: DownedState;
+  onTriggerSoloSelfRecovery?: () => boolean | void;
   onRestartCheckpoint?: () => void;
   onRestartMission?: () => void;
   onAbort?: () => void;
@@ -119,6 +120,7 @@ interface DownedActionOverlayProps {
 
 export function DownedActionOverlay({
   downedState,
+  onTriggerSoloSelfRecovery,
   onRestartCheckpoint,
   onRestartMission,
   onAbort,
@@ -144,6 +146,27 @@ export function DownedActionOverlay({
             {downedState.remainingSec.toFixed(1)}s
           </span>
         </div>
+
+        {downedState.canUseSoloTraumaRevive && onTriggerSoloSelfRecovery && (
+          <div className="bg-emerald-950/35 border border-emerald-500/70 p-3 rounded-sm flex flex-wrap items-center justify-between gap-2.5">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-wider text-emerald-300 font-bold">
+                Solo Emergency Trauma Charge Available
+              </div>
+              <div className="text-xs text-zinc-200 mt-0.5">
+                Inject emergency stabilizer (+55 HP / +25 Armor · 1 per operation).
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid="downed-solo-trauma-revive"
+              onClick={onTriggerSoloSelfRecovery}
+              className="min-h-[44px] px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer shrink-0"
+            >
+              [F] Deploy Trauma Self-Revive
+            </button>
+          </div>
+        )}
 
         {downedState.fatalSource ? (
           <div className="bg-[#141920] border border-red-500/40 p-3 rounded-sm font-mono text-xs space-y-1">
@@ -197,7 +220,7 @@ export function DownedActionOverlay({
               type="button"
               data-testid="downed-retry-checkpoint"
               onClick={onRestartCheckpoint}
-              className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
+              className="min-h-[44px] px-3 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
             >
               Retry Last Checkpoint
             </button>
@@ -207,7 +230,7 @@ export function DownedActionOverlay({
               type="button"
               data-testid="downed-restart-mission"
               onClick={onRestartMission}
-              className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-100 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
+              className="min-h-[44px] px-3 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-100 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
             >
               Restart Mission
             </button>
@@ -217,7 +240,7 @@ export function DownedActionOverlay({
               type="button"
               data-testid="downed-return-base"
               onClick={onAbort}
-              className="px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
+              className="min-h-[44px] px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-display text-xs font-bold uppercase tracking-wider rounded-sm cursor-pointer"
             >
               Return to Base
             </button>
