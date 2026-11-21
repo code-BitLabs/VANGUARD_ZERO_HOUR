@@ -73,6 +73,8 @@ export class CombatDamageResolver {
     normalZ: 0,
     collider: null,
   };
+  private readonly _preDestroyedSearchlightsScratch = new Set<string>();
+  private readonly _stationBlastOriginScratch = new THREE.Vector3();
 
   private readonly cachedExplosiveCallbacks: ExplosiveCallbacks;
 
@@ -175,10 +177,12 @@ export class CombatDamageResolver {
   readonly handleExplosionEvent = (ev: ExplosionEvent): void => {
     const t0 = performance.now();
     const settings = settingsStore.getState();
-    const preDestroyedSearchlights = new Set<string>();
-    for (const ent of this.deps.destruction.getAll()) {
+    this._preDestroyedSearchlightsScratch.clear();
+    const allDestructibles = this.deps.destruction.getAll();
+    for (let i = 0; i < allDestructibles.length; i++) {
+      const ent = allDestructibles[i];
       if (ent.kind === 'searchlight_tower' && ent.state === 'DESTROYED') {
-        preDestroyedSearchlights.add(ent.id);
+        this._preDestroyedSearchlightsScratch.add(ent.id);
       }
     }
     this.deps.explosives.resolveExplosion(
@@ -192,18 +196,20 @@ export class CombatDamageResolver {
       settings.accessibility.reducedMotion,
       this.cachedExplosiveCallbacks
     );
-    for (const ent of this.deps.destruction.getAll()) {
+    for (let i = 0; i < allDestructibles.length; i++) {
+      const ent = allDestructibles[i];
       if (
         ent.kind === 'searchlight_tower' &&
         ent.state === 'DESTROYED' &&
-        !preDestroyedSearchlights.has(ent.id)
+        !this._preDestroyedSearchlightsScratch.has(ent.id)
       ) {
         this.deps.onNonObjectiveDestructibleDestroyed?.(ent.id, ent.kind);
       }
     }
     if (this.deps.sustainment && ev.damage > 0 && ev.radius > 0) {
+      this._stationBlastOriginScratch.set(ev.x, ev.y, ev.z);
       const destroyedStations = this.deps.sustainment.damageStationsInRadius(
-        new THREE.Vector3(ev.x, ev.y, ev.z),
+        this._stationBlastOriginScratch,
         ev.radius,
         ev.damage
       );
@@ -329,7 +335,7 @@ export class CombatDamageResolver {
   };
 
   readonly onWeaponApplyDestructionDamage = (colliderId: string, dmg: number): void => {
-    const entBefore = this.deps.destruction.getAll().find((e) => e.id === colliderId);
+    const entBefore = this.deps.destruction.getById(colliderId);
     const wasDestroyed = entBefore?.state === 'DESTROYED';
     const destroyedNow = this.deps.destruction.applyDamage(
       colliderId,
@@ -427,7 +433,7 @@ export class CombatDamageResolver {
     } else if (hitWall) {
       const wallHit = this._turretRayHit as RayHit;
       if (wallHit.collider && wallHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) {
-        const entBefore = this.deps.destruction.getAll().find((e) => e.id === wallHit.collider!.id);
+        const entBefore = this.deps.destruction.getById(wallHit.collider.id);
         const wasDestroyed = entBefore?.state === 'DESTROYED';
         const destroyedNow = this.deps.destruction.applyDamage(
           wallHit.collider.id,

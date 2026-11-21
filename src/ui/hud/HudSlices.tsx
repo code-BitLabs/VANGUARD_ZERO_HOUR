@@ -98,13 +98,12 @@ export const HudWorldObjectiveMarker = React.memo(function HudWorldObjectiveMark
   return (
     <div
       data-testid="hud-world-objective-marker"
-      className="absolute z-15 -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-75"
+      className="absolute inset-0 z-15 pointer-events-none transition-transform duration-75 will-change-transform"
       style={{
-        left: `${Math.round(activeObjective.screenX * 1000) / 10}%`,
-        top: `${Math.round(activeObjective.screenY * 1000) / 10}%`,
+        transform: `translate3d(${Math.round(activeObjective.screenX * 1000) / 10}%, ${Math.round(activeObjective.screenY * 1000) / 10}%, 0)`,
       }}
     >
-      <div className="flex flex-col items-center">
+      <div className="inline-flex flex-col items-center -translate-x-1/2 -translate-y-1/2">
         <div
           className={`w-3.5 h-3.5 rotate-45 border-2 flex items-center justify-center shadow-[0_0_8px_rgba(0,0,0,0.9)] ${
             activeObjective.onScreen
@@ -1106,9 +1105,9 @@ const HudPerfReadout = React.memo(function HudPerfReadout({
   qualityTelemetry: DirectorTelemetrySnapshot | null;
   getQualityTelemetry?: () => DirectorTelemetrySnapshot | null;
 }) {
-  const liveFps = useGameSessionStore(
-    (s) => s.combatDebug?.performance.fps ?? s.diagnostics.fps
-  );
+  const diagnostics = useGameSessionStore((s) => s.diagnostics);
+  const debugFps = useGameSessionStore((s) => s.combatDebug?.performance.fps);
+  const liveFps = debugFps ?? diagnostics.fps;
   const [liveTelemetry, setLiveTelemetry] = useState<DirectorTelemetrySnapshot | null>(
     qualityTelemetry
   );
@@ -1119,14 +1118,9 @@ const HudPerfReadout = React.memo(function HudPerfReadout({
 
   useEffect(() => {
     if (!showPerformanceTelemetry || !getQualityTelemetry) return;
-    const poll = () => {
-      const next = getQualityTelemetry();
-      if (next) setLiveTelemetry(next);
-    };
-    poll();
-    const id = window.setInterval(poll, 500);
-    return () => window.clearInterval(id);
-  }, [showPerformanceTelemetry, getQualityTelemetry]);
+    const next = getQualityTelemetry();
+    if (next) setLiveTelemetry(next);
+  }, [showPerformanceTelemetry, getQualityTelemetry, diagnostics]);
 
   const activeTelemetry = liveTelemetry ?? qualityTelemetry;
 

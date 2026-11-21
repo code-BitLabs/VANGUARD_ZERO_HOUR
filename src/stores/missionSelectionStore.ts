@@ -7,6 +7,7 @@ import {
   ReplayModeSchema,
 } from '@/src/schemas/campaign.schema';
 import { Difficulty, DifficultySchema } from '@/src/schemas/common.schema';
+import { safeGetItem, safeSetItem } from '@/src/storage/safeStorage';
 
 const CAMPAIGN_PREF_KEY = 'vanguard_zero_hour_campaign_pref_v1';
 
@@ -38,7 +39,7 @@ const DEFAULT_PERSISTED_PREF: PersistedCampaignPref = {
 
 function loadPersistedPref(): PersistedCampaignPref {
   try {
-    const raw = localStorage.getItem(CAMPAIGN_PREF_KEY);
+    const raw = safeGetItem(CAMPAIGN_PREF_KEY);
     if (!raw) {
       return {
         ...DEFAULT_PERSISTED_PREF,
@@ -106,7 +107,7 @@ function loadPersistedPref(): PersistedCampaignPref {
 
 function savePersistedPref(pref: PersistedCampaignPref): void {
   try {
-    localStorage.setItem(CAMPAIGN_PREF_KEY, JSON.stringify(pref));
+    safeSetItem(CAMPAIGN_PREF_KEY, JSON.stringify(pref));
   } catch {
     // Ignore storage failures
   }

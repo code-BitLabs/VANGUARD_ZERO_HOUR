@@ -9,7 +9,7 @@ import { PlayerController } from '@/src/gameplay/PlayerController';
 import { TacticalGuidanceSystem } from '@/src/gameplay/TacticalGuidanceSystem';
 import { VehicleEntity, VehicleManager } from '@/src/gameplay/VehicleManager';
 import { WeaponSystem } from '@/src/gameplay/WeaponSystem';
-import { HudSnapshot, MiniMapBlip } from '@/src/schemas/events.schema';
+import { HudSnapshot, MiniMapBlip, ObjectiveStatus } from '@/src/schemas/events.schema';
 import { MissionConfig } from '@/src/schemas/mission.schema';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
 import { missionSelectionStore } from '@/src/stores/missionSelectionStore';
@@ -46,6 +46,48 @@ export interface HudPublishContext {
   readonly activeRadioSubtitle?: HudSnapshot['activeRadioSubtitle'];
 }
 
+function blipsMatch(prev: readonly MiniMapBlip[], next: readonly MiniMapBlip[]): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < next.length; i++) {
+    const a = prev[i];
+    const b = next[i];
+    if (
+      a.id !== b.id ||
+      a.kind !== b.kind ||
+      Math.abs(a.x - b.x) > 0.05 ||
+      Math.abs(a.z - b.z) > 0.05
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function objectivesMatch(prev: readonly ObjectiveStatus[], next: readonly ObjectiveStatus[]): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < next.length; i++) {
+    const a = prev[i];
+    const b = next[i];
+    if (
+      a.id !== b.id ||
+      a.current !== b.current ||
+      a.target !== b.target ||
+      a.completed !== b.completed ||
+      a.bypassed !== b.bypassed ||
+      a.isPrimary !== b.isPrimary ||
+      a.status !== b.status ||
+      a.blockedReason !== b.blockedReason ||
+      a.screenX !== b.screenX ||
+      a.screenY !== b.screenY ||
+      a.onScreen !== b.onScreen ||
+      a.elevationDeltaM !== b.elevationDeltaM
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * TRN-02B & Stage 4B: Dedicated zero-allocation HUD snapshot assembler and publisher.
  * Owns contextual interaction prompt resolution, minimap blip aggregation,
@@ -54,6 +96,8 @@ export interface HudPublishContext {
  */
 export class HudSnapshotPublisher {
   private readonly _blipsScratch: MiniMapBlip[] = [];
+  private _cachedBlips: MiniMapBlip[] = [];
+  private _cachedObjectives: ObjectiveStatus[] = [];
   private readonly _projScratch = new THREE.Vector3();
   private readonly _camFwdScratch = new THREE.Vector3();
   private readonly _toMarkerScratch = new THREE.Vector3();
@@ -62,6 +106,8 @@ export class HudSnapshotPublisher {
 
   reset(): void {
     this._blipsScratch.length = 0;
+    this._cachedBlips = [];
+    this._cachedObjectives = [];
     this.hudDecayAccum = 0;
     this.guidance.reset();
   }
@@ -244,7 +290,15 @@ export class HudSnapshotPublisher {
     ctx.airCombat.fillMiniMapBlips(this._blipsScratch);
     ctx.vehicles.fillMiniMapBlips(this._blipsScratch);
     missionDirector.fillObjectiveBlips(this._blipsScratch);
-    const blips = this._blipsScratch.slice();
+    if (!blipsMatch(this._cachedBlips, this._blipsScratch)) {
+      this._cachedBlips = this._blipsScratch.map((b) => ({ ...b }));
+    }
+    const blips = this._cachedBlips;
+
+    if (!objectivesMatch(this._cachedObjectives, objStatuses)) {
+      this._cachedObjectives = objStatuses;
+    }
+    const stableObjectives = this._cachedObjectives;
 
     const rpgState = ctx.weapons.getWeaponState('rocket_launcher');
     const rpgAmmoInMag = rpgState?.ammoInMag ?? 0;
@@ -379,7 +433,7 @@ export class HudSnapshotPublisher {
       shotsFired: ctx.weapons.shotsFired,
       shotsHit: ctx.weapons.shotsHit,
       lockOn: lockState,
-      objectives: objStatuses,
+      objectives: stableObjectives,
       blips,
       activeBossLabel: boss?.label ?? null,
       activeBossHealthPct: boss?.healthPct ?? 0,

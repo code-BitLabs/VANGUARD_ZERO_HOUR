@@ -8,6 +8,7 @@ import {
   ProgressionSave,
   ProgressionSaveSchema,
 } from '@/src/schemas/save.schema';
+import { safeGetItem, safeRemoveItem, safeSetItem } from './safeStorage';
 
 export const SAVE_KEY = 'vanguard_zero_hour_progression_v2';
 export const STAGING_KEY = 'vanguard_zero_hour_progression_staging';
@@ -67,9 +68,9 @@ function encodeEnvelope(save: ProgressionSave): string {
 
 export class SaveManager {
   static loadProgression(): SaveLoadResult {
-    const primaryStr = localStorage.getItem(SAVE_KEY);
-    const stagingStr = localStorage.getItem(STAGING_KEY);
-    const backupStr = localStorage.getItem(BACKUP_KEY);
+    const primaryStr = safeGetItem(SAVE_KEY);
+    const stagingStr = safeGetItem(STAGING_KEY);
+    const backupStr = safeGetItem(BACKUP_KEY);
 
     // 1. Primary slot check
     const primaryDecoded = tryDecodeStoredSlot(primaryStr);
@@ -78,11 +79,7 @@ export class SaveManager {
       if (!result.recoveredFromCorruption) {
         // Clear any stale staging residue if primary is healthy
         if (stagingStr) {
-          try {
-            localStorage.removeItem(STAGING_KEY);
-          } catch {
-            // Ignore cleanup failure
-          }
+          safeRemoveItem(STAGING_KEY);
         }
         return result;
       }
@@ -90,7 +87,7 @@ export class SaveManager {
 
     // 2. If no primary existed at all, check legacy v1 key before recovery path
     if (!primaryStr && !stagingStr) {
-      const legacyStr = localStorage.getItem('vanguard_zero_hour_progression_v1');
+      const legacyStr = safeGetItem('vanguard_zero_hour_progression_v1');
       if (legacyStr) {
         try {
           const parsedLegacy = JSON.parse(legacyStr);
@@ -162,21 +159,37 @@ export class SaveManager {
     try {
       const encoded = encodeEnvelope(validated.data);
       // Phase 1: Stage new snapshot
-      localStorage.setItem(STAGING_KEY, encoded);
+      const staged = safeSetItem(STAGING_KEY, encoded);
+      if (!staged.ok && staged.quotaExceeded) {
+        // Shed optional backup/staging slots to recover disk budget for primary save
+        safeRemoveItem(BACKUP_KEY);
+        safeRemoveItem(STAGING_KEY);
+        const directRetry = safeSetItem(SAVE_KEY, encoded);
+        return directRetry.ok;
+      }
 
-      // Phase 2: Preserve previous verified primary in backup
-      const prev = localStorage.getItem(SAVE_KEY);
+      // Phase 2: Preserve previous verified primary in backup (non-fatal if backup quota is tight)
+      const prev = safeGetItem(SAVE_KEY);
       if (prev) {
         const prevCheck = tryDecodeStoredSlot(prev);
         if (prevCheck && prevCheck.validEnvelope && prevCheck.parsed) {
-          localStorage.setItem(BACKUP_KEY, prev);
+          const backupRes = safeSetItem(BACKUP_KEY, prev);
+          if (!backupRes.ok && backupRes.quotaExceeded) {
+            safeRemoveItem(BACKUP_KEY);
+          }
         }
       }
 
       // Phase 3: Promote staged payload to primary & clean staging
-      localStorage.setItem(SAVE_KEY, encoded);
-      localStorage.removeItem(STAGING_KEY);
-      return true;
+      let primaryRes = safeSetItem(SAVE_KEY, encoded);
+      if (!primaryRes.ok && primaryRes.quotaExceeded) {
+        safeRemoveItem(BACKUP_KEY);
+        safeRemoveItem(STAGING_KEY);
+        primaryRes = safeSetItem(SAVE_KEY, encoded);
+      } else {
+        safeRemoveItem(STAGING_KEY);
+      }
+      return primaryRes.ok;
     } catch {
       return false;
     }
@@ -184,13 +197,9 @@ export class SaveManager {
 
   static resetProgression(): ProgressionSave {
     const fresh = ProgressionSaveSchema.parse({});
-    try {
-      localStorage.removeItem(SAVE_KEY);
-      localStorage.removeItem(STAGING_KEY);
-      localStorage.removeItem(BACKUP_KEY);
-    } catch {
-      // Ignore storage failures
-    }
+    safeRemoveItem(SAVE_KEY);
+    safeRemoveItem(STAGING_KEY);
+    safeRemoveItem(BACKUP_KEY);
     return fresh;
   }
 

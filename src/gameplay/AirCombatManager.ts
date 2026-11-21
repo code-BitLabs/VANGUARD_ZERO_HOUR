@@ -126,6 +126,7 @@ export class AirCombatManager {
   private readonly _lockPool: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> = [];
   private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
   private readonly _blipPool: MiniMapBlip[] = [];
+  private onObjectAddedToScene?: (obj: THREE.Object3D) => void;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -136,6 +137,10 @@ export class AirCombatManager {
     private readonly ballistics?: BallisticSolver,
     private readonly telemetry?: CombatTelemetryRecorder
   ) {}
+
+  setOnObjectAddedToScene(cb?: (obj: THREE.Object3D) => void): void {
+    this.onObjectAddedToScene = cb;
+  }
 
   setDifficulty(difficulty: Difficulty): void {
     this.difficulty = difficulty;
@@ -161,6 +166,7 @@ export class AirCombatManager {
 
     rig.root.position.set(x, altitude, z);
     this.scene.add(rig.root);
+    this.onObjectAddedToScene?.(rig.root);
     this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
 
     const id = `air_${++this.seq}`;

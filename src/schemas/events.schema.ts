@@ -270,7 +270,7 @@ export const HudSnapshotSchema = z.object({
       ),
     })
     .optional(),
-  carriedWeaponIds: z.array(WeaponIdSchema).optional(),
+  carriedWeaponIds: z.array(WeaponIdSchema).readonly().optional(),
   nearSupplySwapStation: z.boolean().optional(),
   deploymentMode: z.enum(['solo', 'fireteam']).optional(),
   soloTraumaKit: z

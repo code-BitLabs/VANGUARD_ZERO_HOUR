@@ -107,10 +107,12 @@ export class TacticalLightBudgetManager {
 
   constructor(private readonly scene: THREE.Scene, initialTier: QualityTier = 'high') {
     this.setQualityTier(initialTier);
-    // Preallocate max possible (8) lights, kept invisible & intensity=0 when inactive
+    // Preallocate max possible (8) lights, kept permanently visible with intensity=0 when inactive
+    // so toggling transient flashes never changes NUM_POINT_LIGHTS and triggers mid-combat shader recompiles.
     for (let i = 0; i < 8; i++) {
       const pt = new THREE.PointLight(0xffa744, 0, 14, 1.8);
-      pt.visible = false;
+      pt.visible = true;
+      pt.position.set(0, -9999, 0);
       pt.castShadow = false;
       this.scene.add(pt);
       this.pool.push({
@@ -166,7 +168,7 @@ export class TacticalLightBudgetManager {
         slot.active = false;
         slot.remainingSec = 0;
         slot.light.intensity = 0;
-        slot.light.visible = false;
+        slot.light.position.set(0, -9999, 0);
       }
     }
 
@@ -239,7 +241,6 @@ export class TacticalLightBudgetManager {
     targetSlot.light.intensity = params.intensity;
     targetSlot.light.distance = params.distance;
     targetSlot.light.position.set(params.x, params.y, params.z);
-    targetSlot.light.visible = true;
     return true;
   }
 
@@ -252,7 +253,7 @@ export class TacticalLightBudgetManager {
         s.active = false;
         s.remainingSec = 0;
         s.light.intensity = 0;
-        s.light.visible = false;
+        s.light.position.set(0, -9999, 0);
       } else {
         const alpha = s.remainingSec / s.maxDurationSec;
         s.light.intensity = s.peakIntensity * alpha * alpha;

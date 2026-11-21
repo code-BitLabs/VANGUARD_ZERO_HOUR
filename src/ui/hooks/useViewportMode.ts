@@ -91,13 +91,17 @@ function syncViewportSnapshot(): void {
 }
 
 function scheduleViewportUpdate(): void {
-  syncViewportSnapshot();
   if (typeof window === 'undefined') return;
-  if (rafId) window.cancelAnimationFrame(rafId);
-  rafId = window.requestAnimationFrame(() => {
-    rafId = 0;
-    syncViewportSnapshot();
-  });
+  if (!rafId) {
+    if (typeof window.requestAnimationFrame === 'function') {
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        syncViewportSnapshot();
+      });
+    } else {
+      syncViewportSnapshot();
+    }
+  }
   window.clearTimeout(settleTimer);
   settleTimer = window.setTimeout(() => {
     settleTimer = 0;

@@ -125,8 +125,17 @@ export const SquadCommandHud = React.memo(function SquadCommandHud({
       }
     };
 
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [compactHud, downedActive, isSoloMode, swapOpen]);
+
+  useEffect(() => {
+    if (!radialOpen || compactHud || downedActive || isSoloMode) return;
     const onMouseMove = (e: MouseEvent) => {
-      if (!radialOpenRef.current) return;
       const cx = window.innerWidth / 2;
       const cy = window.innerHeight / 2;
       const dx = e.clientX - cx;
@@ -148,16 +157,11 @@ export const SquadCommandHud = React.memo(function SquadCommandHud({
       }
       setHoveredOrder(best.order);
     };
-
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('mousemove', onMouseMove);
     };
-  }, [compactHud, downedActive, isSoloMode, swapOpen]);
+  }, [radialOpen, compactHud, downedActive, isSoloMode]);
 
   const squad = isSoloMode ? undefined : hud.squad;
   if (downedActive) return null;

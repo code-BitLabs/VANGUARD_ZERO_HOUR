@@ -38,7 +38,11 @@ export interface DestructibleEntity {
 
 export class DestructionSystem {
   private entities = new Map<string, DestructibleEntity>();
+  private cachedEntitiesList: DestructibleEntity[] = [];
+  private entitiesDirty = false;
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
+  private prewarmProbeMesh: THREE.Mesh | null = null;
+  private prewarmProbeScene: THREE.Scene | null = null;
   private onColliderRegionChanged?: (box: SpatialAABB) => void;
 
   constructor(
@@ -46,6 +50,44 @@ export class DestructionSystem {
     private readonly vfx: VFXPool,
     private readonly audio: AudioManager
   ) {}
+
+  private ensureCharredMaterial(): THREE.MeshStandardMaterial {
+    if (!this.charredMaterial) {
+      this.charredMaterial = new THREE.MeshStandardMaterial({
+        color: 0x1f2428,
+        emissive: 0x3a1204,
+        emissiveIntensity: 0.4,
+        roughness: 0.85,
+        metalness: 0.25,
+      });
+    }
+    return this.charredMaterial;
+  }
+
+  public prewarm(scene?: THREE.Scene): THREE.MeshStandardMaterial {
+    const mat = this.ensureCharredMaterial();
+    if (scene && !this.prewarmProbeMesh) {
+      const geo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+      const probe = new THREE.Mesh(geo, mat);
+      probe.position.set(0, -1000, 0);
+      probe.frustumCulled = false;
+      probe.matrixAutoUpdate = false;
+      probe.updateMatrix();
+      scene.add(probe);
+      this.prewarmProbeMesh = probe;
+      this.prewarmProbeScene = scene;
+    }
+    return mat;
+  }
+
+  private removePrewarmProbe(): void {
+    if (this.prewarmProbeMesh) {
+      this.prewarmProbeScene?.remove(this.prewarmProbeMesh);
+      this.prewarmProbeMesh.geometry.dispose();
+      this.prewarmProbeMesh = null;
+      this.prewarmProbeScene = null;
+    }
+  }
 
   setOnColliderRegionChanged(cb?: (box: SpatialAABB) => void): void {
     this.onColliderRegionChanged = cb;
@@ -78,6 +120,7 @@ export class DestructionSystem {
 
   register(entity: DestructibleEntity): void {
     this.entities.set(entity.id, entity);
+    this.entitiesDirty = true;
     this.insertCollider(entity.collider);
   }
 
@@ -140,16 +183,7 @@ export class DestructionSystem {
         this.removeSyncedCollider(ent.collider);
         this.onColliderRegionChanged?.(ent.collider);
         ent.meshGroup.scale.set(1.05, 0.28, 1.05);
-        if (!this.charredMaterial) {
-          this.charredMaterial = new THREE.MeshStandardMaterial({
-            color: 0x1f2428,
-            emissive: 0x3a1204,
-            emissiveIntensity: 0.4,
-            roughness: 0.85,
-            metalness: 0.25,
-          });
-        }
-        const charredMat = this.charredMaterial;
+        const charredMat = this.ensureCharredMaterial();
         ent.meshGroup.traverse((c) => {
           if (c instanceof THREE.Mesh && c.material instanceof THREE.MeshStandardMaterial) {
             c.material = charredMat;
@@ -198,16 +232,7 @@ export class DestructionSystem {
       ent.meshGroup.scale.y = 0.25;
     } else {
       ent.meshGroup.scale.set(1.05, 0.28, 1.05);
-      if (!this.charredMaterial) {
-        this.charredMaterial = new THREE.MeshStandardMaterial({
-          color: 0x1f2428,
-          emissive: 0x3a1204,
-          emissiveIntensity: 0.4,
-          roughness: 0.85,
-          metalness: 0.25,
-        });
-      }
-      const charredMat = this.charredMaterial;
+      const charredMat = this.ensureCharredMaterial();
       ent.meshGroup.traverse((c) => {
         if (c instanceof THREE.Mesh && c.material instanceof THREE.MeshStandardMaterial) {
           c.material = charredMat;
@@ -217,12 +242,31 @@ export class DestructionSystem {
     return true;
   }
 
-  getAll(): DestructibleEntity[] {
-    return Array.from(this.entities.values());
+  getById(id: string): DestructibleEntity | undefined {
+    return this.entities.get(id);
+  }
+
+  getAll(): readonly DestructibleEntity[] {
+    if (this.entitiesDirty) {
+      this.cachedEntitiesList.length = 0;
+      for (const ent of this.entities.values()) {
+        this.cachedEntitiesList.push(ent);
+      }
+      this.entitiesDirty = false;
+    }
+    return this.cachedEntitiesList;
   }
 
   getByKind(kind: DestructibleKind): DestructibleEntity[] {
-    return Array.from(this.entities.values()).filter((e) => e.kind === kind && e.state !== 'DESTROYED');
+    const out: DestructibleEntity[] = [];
+    const all = this.getAll();
+    for (let i = 0; i < all.length; i++) {
+      const e = all[i];
+      if (e.kind === kind && e.state !== 'DESTROYED') {
+        out.push(e);
+      }
+    }
+    return out;
   }
 
   clear(): void {
@@ -230,6 +274,9 @@ export class DestructionSystem {
       this.removeSyncedCollider(ent.collider);
     }
     this.entities.clear();
+    this.cachedEntitiesList.length = 0;
+    this.entitiesDirty = false;
+    this.removePrewarmProbe();
   }
 
   dispose(): void {

@@ -143,6 +143,14 @@ export class WorkerBridge {
     }
   >();
   private healthy = true;
+  private workerRecoveryAttempts = 0;
+  private static readonly MAX_RECOVERY_ATTEMPTS = 2;
+  private static readonly MAX_PENDING_JOBS = 64;
+  private pendingRegionDirty = false;
+  private pendingMinX = Infinity;
+  private pendingMinZ = Infinity;
+  private pendingMaxX = -Infinity;
+  private pendingMaxZ = -Infinity;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -164,12 +172,26 @@ export class WorkerBridge {
       worker.onerror = () => {
         this.healthy = false;
         this.flushPendingWithFallback();
+        if (this.worker) {
+          this.worker.terminate();
+          this.worker = null;
+        }
       };
       this.worker = worker;
+      this.healthy = true;
       this.resourceManager.registerWorker(worker, this.scope, `nav_worker_${this.scope}`);
     } catch {
       this.healthy = false;
     }
+  }
+
+  public tryRecoverWorker(): boolean {
+    if (this.healthy && this.worker) return true;
+    if (typeof Worker === 'undefined') return false;
+    if (this.workerRecoveryAttempts >= WorkerBridge.MAX_RECOVERY_ATTEMPTS) return false;
+    this.workerRecoveryAttempts++;
+    this.initWorker();
+    return this.healthy && this.worker !== null;
   }
 
   uploadCollisionGrid(
@@ -233,6 +255,9 @@ export class WorkerBridge {
       this.portalIdByKey.set(p.portalKey, p.portalId);
     }
 
+    if (!this.worker || !this.healthy) {
+      if (!this.tryRecoverWorker()) return;
+    }
     if (!this.worker || !this.healthy) return;
 
     const gridWidth = NAV_GRID_DEFAULTS.width;
@@ -400,6 +425,45 @@ export class WorkerBridge {
   }
 
   /**
+   * Queues an obstacle AABB update to be coalesced with any other chain-explosion
+   * updates during the current frame and flushed once via flushCollisionRegionUpdates().
+   */
+  scheduleCollisionRegionUpdate(minX: number, minZ: number, maxX: number, maxZ: number): void {
+    if (!this.worker || !this.healthy) return;
+    if (!this.pendingRegionDirty) {
+      this.pendingRegionDirty = true;
+      this.pendingMinX = minX;
+      this.pendingMinZ = minZ;
+      this.pendingMaxX = maxX;
+      this.pendingMaxZ = maxZ;
+    } else {
+      if (minX < this.pendingMinX) this.pendingMinX = minX;
+      if (minZ < this.pendingMinZ) this.pendingMinZ = minZ;
+      if (maxX > this.pendingMaxX) this.pendingMaxX = maxX;
+      if (maxZ > this.pendingMaxZ) this.pendingMaxZ = maxZ;
+    }
+  }
+
+  hasPendingCollisionRegionUpdate(): boolean {
+    return this.pendingRegionDirty;
+  }
+
+  flushCollisionRegionUpdates(spatialHash: SpatialHash): boolean {
+    if (!this.pendingRegionDirty) return false;
+    const minX = this.pendingMinX;
+    const minZ = this.pendingMinZ;
+    const maxX = this.pendingMaxX;
+    const maxZ = this.pendingMaxZ;
+    this.pendingRegionDirty = false;
+    this.pendingMinX = Infinity;
+    this.pendingMinZ = Infinity;
+    this.pendingMaxX = -Infinity;
+    this.pendingMaxZ = -Infinity;
+    this.updateCollisionRegion(spatialHash, minX, minZ, maxX, maxZ);
+    return true;
+  }
+
+  /**
    * Re-rasterizes only the grid cells overlapping a modified/destroyed collider region
    * and pushes compact [cellIndex, blockedFlag] pairs to the worker.
    */
@@ -463,6 +527,9 @@ export class WorkerBridge {
     if (!this.worker || !this.healthy || queries.length === 0) {
       return Promise.resolve(null);
     }
+    if (this.pendingResolvers.size >= WorkerBridge.MAX_PENDING_JOBS) {
+      this.flushPendingWithFallback();
+    }
 
     const jobId = this.nextJobId++;
     const jobVersion = this.currentVersion;
@@ -503,6 +570,9 @@ export class WorkerBridge {
   requestPaths3D(queries: PathQuery3D[]): Promise<PathWaypoint3D[] | null> {
     if (!this.worker || !this.healthy || queries.length === 0) {
       return Promise.resolve(null);
+    }
+    if (this.pendingResolvers.size >= WorkerBridge.MAX_PENDING_JOBS) {
+      this.flushPendingWithFallback();
     }
 
     const jobId = this.nextJobId++;
@@ -575,6 +645,7 @@ export class WorkerBridge {
 
   dispose(): void {
     this.flushPendingWithFallback();
+    this.pendingRegionDirty = false;
     this.groundHeightFn = undefined;
     this.portalMetaById.clear();
     this.portalIdByKey.clear();

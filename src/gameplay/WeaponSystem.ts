@@ -8,6 +8,8 @@ import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import { LockOnState } from '@/src/schemas/events.schema';
 import { MissionConfig, ObjectiveActionMetadata, ObjectiveType } from '@/src/schemas/mission.schema';
 import { FireMode, WeaponConfig, WeaponId } from '@/src/schemas/weapon.schema';
+
+const ALL_WEAPON_SLOTS: readonly WeaponId[] = WEAPON_CATALOG.map((w) => w.id);
 import { progressionStore } from '@/src/stores/progressionStore';
 import {
   isWeaponRelevantForCheckpointAmmoFloor,
@@ -248,7 +250,7 @@ export class WeaponSystem {
   }
 
   getCarriedMissionSlots(): readonly WeaponId[] {
-    return this.carriedMissionSlots ?? WEAPON_CATALOG.map((w) => w.id);
+    return this.carriedMissionSlots ?? ALL_WEAPON_SLOTS;
   }
 
   isWeaponEquippedInMissionKit(id: WeaponId): boolean {

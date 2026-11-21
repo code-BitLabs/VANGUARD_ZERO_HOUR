@@ -163,10 +163,13 @@ export class ProjectileManager {
     resourceManager.registerMaterial(bombMat, 'shared', 'proj_bomb_mat');
     resourceManager.registerMaterial(nukeMat, 'shared', 'proj_nuke_mat');
 
+    const initialProjMats = [rocketMat, grenadeMat, bombMat, nukeMat];
+    let poolCreateIdx = 0;
     this.pool = new ObjectPool<PooledProjectile>(
       POOL_CAPACITY,
       () => {
-        const mesh = new THREE.Mesh(rocketGeo, rocketMat);
+        const initMat = initialProjMats[poolCreateIdx++ % initialProjMats.length];
+        const mesh = new THREE.Mesh(rocketGeo, initMat);
         mesh.visible = false;
         this.root.add(mesh);
         return {

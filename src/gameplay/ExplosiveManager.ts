@@ -105,6 +105,10 @@ export class ExplosiveManager {
   private readonly _upAxis = new THREE.Vector3(0, 1, 0);
   private readonly _scratchVec = new THREE.Vector3();
   private readonly _blastOrigin = new THREE.Vector3();
+  private readonly _strikeLaunchOriginScratch = new THREE.Vector3();
+  private readonly _strikeDirScratch = new THREE.Vector3();
+  private readonly _groundTargetScratch = new THREE.Vector3();
+  private readonly _damagedIdSetPool: Set<string>[] = [new Set<string>(), new Set<string>()];
   private readonly _rayHit: RayHit = {
     hit: false,
     distance: 0,
@@ -507,14 +511,14 @@ export class ExplosiveManager {
 
     const dirX = Math.cos(0.45);
     const dirZ = Math.sin(0.45);
-    const releaseOrigin = new THREE.Vector3(target.x - dirX * 22, target.y + 82, target.z - dirZ * 22);
-    const dir = target.clone().sub(releaseOrigin).normalize();
+    this._strikeLaunchOriginScratch.set(target.x - dirX * 22, target.y + 82, target.z - dirZ * 22);
+    this._strikeDirScratch.copy(target).sub(this._strikeLaunchOriginScratch).normalize();
 
     this.projectiles.spawn({
       kind: bombId,
       fromPlayer: true,
-      origin: releaseOrigin,
-      direction: dir,
+      origin: this._strikeLaunchOriginScratch,
+      direction: this._strikeDirScratch,
       targetPoint: target,
       sourceUnitId: 'air_support',
       sourceSquadId: 'player',
@@ -620,11 +624,15 @@ export class ExplosiveManager {
       this._rayHit
     );
     if (hit) {
-      return new THREE.Vector3(this._rayHit.pointX, this._rayHit.pointY, this._rayHit.pointZ);
+      return this._groundTargetScratch.set(
+        this._rayHit.pointX,
+        this._rayHit.pointY,
+        this._rayHit.pointZ
+      );
     }
     const tx = THREE.MathUtils.clamp(camera.position.x + this._rayDir.x * 55, -96, 96);
     const tz = THREE.MathUtils.clamp(camera.position.z + this._rayDir.z * 55, -96, 96);
-    return new THREE.Vector3(tx, collision.getGroundHeightAt(tx, tz), tz);
+    return this._groundTargetScratch.set(tx, collision.getGroundHeightAt(tx, tz), tz);
   }
 
   private spawnStrikeMarker(pos: THREE.Vector3, durationSec: number, scope: ResourceScope | null): void {
@@ -756,13 +764,17 @@ export class ExplosiveManager {
       }
 
       if (this.nukeCountdownSec <= 0) {
-        const launchOrigin = new THREE.Vector3(this.nukeTarget.x - 16, this.nukeTarget.y + 92, this.nukeTarget.z - 16);
-        const dir = this.nukeTarget.clone().sub(launchOrigin).normalize();
+        this._strikeLaunchOriginScratch.set(
+          this.nukeTarget.x - 16,
+          this.nukeTarget.y + 92,
+          this.nukeTarget.z - 16
+        );
+        this._strikeDirScratch.copy(this.nukeTarget).sub(this._strikeLaunchOriginScratch).normalize();
         this.projectiles.spawn({
           kind: 'strategic_nuclear_weapon',
           fromPlayer: true,
-          origin: launchOrigin,
-          direction: dir,
+          origin: this._strikeLaunchOriginScratch,
+          direction: this._strikeDirScratch,
           targetPoint: this.nukeTarget,
           sourceUnitId: 'strategic_command',
           sourceSquadId: 'player',
@@ -842,7 +854,9 @@ export class ExplosiveManager {
     callbacks: ExplosiveCallbacks
   ): number {
     const explosionId = this.telemetry?.nextExplosionId() ?? Math.floor(Math.random() * 1e6);
-    const damagedIds = new Set<string>();
+    const damagedIds = this._damagedIdSetPool.pop() ?? new Set<string>();
+    damagedIds.clear();
+    try {
     const isStrategic = ev.explosiveId === 'strategic_nuclear_weapon';
 
     let entitiesHit = 0;
@@ -1160,5 +1174,11 @@ export class ExplosiveManager {
     });
 
     return explosionId;
+    } finally {
+      damagedIds.clear();
+      if (this._damagedIdSetPool.length < 6) {
+        this._damagedIdSetPool.push(damagedIds);
+      }
+    }
   }
 }

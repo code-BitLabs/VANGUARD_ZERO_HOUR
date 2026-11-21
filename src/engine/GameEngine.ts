@@ -74,7 +74,7 @@ import { buildSupplyCrate } from '@/src/world/builders/WorldPropsAndLandmarks';
 import { PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
 import { DIFFICULTY_COMBAT_PROFILES } from '@/src/schemas/combat.schema';
-import { Difficulty, MapId, MissionGrade } from '@/src/schemas/common.schema';
+import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
 import { EXPLOSIVE_BY_ID } from '@/src/schemas/explosive.schema';
 import { AirUnitType, MissionConfig } from '@/src/schemas/mission.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
@@ -86,21 +86,18 @@ import { settingsStore } from '@/src/stores/settingsStore';
 import { uiStore } from '@/src/stores/uiStore';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
 import { DestructionSystem } from '@/src/world/DestructionSystem';
-import { SceneLights, setupLightingRig } from '@/src/world/LightingRig';
-import {
-  BuiltWorldData,
-  createWorldShell,
-  loadMapPopulator,
-  MapPopulator,
-  populateCommonWorldAndFinalize,
-} from '@/src/world/MapBuilderAsync';
+import type { SceneLights } from '@/src/world/LightingRig';
+import type { BuiltWorldData, MapPopulator } from '@/src/world/MapBuilderAsync';
 import { WorldChunkManager } from '@/src/world/WorldChunkManager';
 import { CombatDebugRenderer } from './CombatDebugRenderer';
+import { DebugTelemetryPublisher } from './DebugTelemetryPublisher';
 import { engineLifecycleMachine } from './EngineLifecycle';
 import { GameLoop } from './GameLoop';
-import { detectGpuCapability, GpuCapabilityReport } from './GpuCapabilityDetector';
+import type { GpuCapabilityReport } from './GpuCapabilityDetector';
+import { GraphicsAdaptiveCoordinator } from './GraphicsAdaptiveCoordinator';
 import { HudSnapshotPublisher } from './HudSnapshotPublisher';
 import { InputManager } from './InputManager';
+import { MissionLifecycleLoader } from './MissionLifecycleLoader';
 import { PerformanceGovernor } from './PerformanceGovernor';
 import { PerformanceMonitor } from './PerformanceMonitor';
 import { PbrMaterialLibrary } from '@/src/assets/PbrMaterialLibrary';
@@ -111,12 +108,8 @@ import {
   ImpactSurfaceMaterial,
   SurfaceDecalManager,
 } from '@/src/effects/SurfaceDecalManager';
-import {
-  buildMissionEnvironmentEnhancement,
-  getMissionAtmosphereDirective,
-  MissionEnhancementHandle,
-} from '@/src/world/MissionEnvironmentEnhancer';
-import { DirectorTelemetrySnapshot } from './RenderingQualityDirector';
+import type { MissionEnhancementHandle } from '@/src/world/MissionEnvironmentEnhancer';
+import type { DirectorTelemetrySnapshot } from './RenderingQualityDirector';
 import { EngineRenderer } from './Renderer';
 
 export class GameEngine {
@@ -187,10 +180,13 @@ export class GameEngine {
   private readonly tmpUpVec = new THREE.Vector3(0, 1, 0);
   private missionEnhancement: MissionEnhancementHandle | null = null;
 
+  private readonly graphicsCoordinator: GraphicsAdaptiveCoordinator;
+  private readonly telemetryPublisher: DebugTelemetryPublisher;
+  private readonly missionLoader: MissionLifecycleLoader;
+
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
   private worldData: BuiltWorldData | null = null;
-  private readonly mapPopulatorCache = new Map<MapId, MapPopulator>();
   private missionDirector: MissionDirector | null = null;
   private activeMission: MissionConfig | null = null;
   private activeScope: ResourceScope | null = null;
@@ -201,11 +197,7 @@ export class GameEngine {
   private dioramaAngle = 0;
   private dioramaLoaded = false;
   private reinforcementTimer = 28;
-  private debugPublishAccum = 0;
   private suppressAutoPauseOnUnlock = false;
-  private gpuReport: GpuCapabilityReport | null = null;
-  private initialProbeFrames: number[] = [];
-  private initialProbeSettled = false;
   private downedTimerSec = 0;
   private downedActive = false;
   private readonly _audioDir = new THREE.Vector3();
@@ -234,41 +226,20 @@ export class GameEngine {
       this.renderer.registerMaterialForShadows(mat);
     });
 
-    this.gpuReport = detectGpuCapability(this.renderer.renderer);
-    this.renderer.qualityDirector.setHardwareProfile(this.gpuReport.hardwareProfile);
     const initialGraphics = settingsStore.getState().graphics;
-    if (!initialGraphics.autoDetectedPresetApplied && initialGraphics.qualityMode === 'auto') {
-      settingsStore.getState().applyAutoDetectedGraphics(this.gpuReport.recommendedSettings);
-    }
-
-    const settings = settingsStore.getState();
-    this.renderer.qualityDirector.syncFromGraphicsSettings(settings.graphics);
-    this.renderer.applyDirectorDimensions(
-      settings.graphics.maxDpr,
-      this.lights,
-      settings.graphics.shadowsEnabled
-    );
     this.battlefieldVfx = new BattlefieldVfxSystem(this.renderer.scene, this.renderer.isSoftwareGl);
     this.surfaceDecals = new SurfaceDecalManager(
       this.renderer.scene,
-      settings.graphics.decalBudget
+      initialGraphics.decalBudget
     );
     this.spatialAcoustics.configure({
       spatialEnabled: audioSettings.spatialAudioEnabled,
       reverbEnabled: audioSettings.environmentalReverbEnabled,
       dynamicRange: audioSettings.dynamicRange,
     });
-    const initDims = this.renderer.qualityDirector.getActiveDimensions();
-    this.battlefieldVfx.setDensityScales(initDims.particleDensityScale, initDims.rainDensityScale);
-
-    this.governor = new PerformanceGovernor(settings.graphics.quality, settings.graphics.adaptiveGovernor);
-    this.governor.configureFromSettings(settings.graphics);
-    this.assetManager.setTextureQuality(settings.graphics.textureQuality);
-    this.renderer.applyGovernorProfile(
-      this.governor.getProfile(),
-      settings.graphics.shadowsEnabled,
-      settings.graphics.bloomEnabled,
-      this.lights
+    this.governor = new PerformanceGovernor(
+      initialGraphics.quality,
+      initialGraphics.adaptiveGovernor
     );
 
     this.audio = new AudioManager(this.resourceManager, audioSettings, (prefs) => {
@@ -284,7 +255,7 @@ export class GameEngine {
     });
     this.input = new InputManager(
       this.resourceManager,
-      settings.input,
+      settingsStore.getState().input,
       (locked) => {
         const wasLocked = uiStore.getState().pointerLocked;
         uiStore.getState().setPointerLocked(locked);
@@ -333,8 +304,7 @@ export class GameEngine {
     );
     this.destruction = new DestructionSystem(this.collisionWorld.physicsWorld, this.vfx, this.audio);
     this.destruction.setOnColliderRegionChanged((box) => {
-      this.workerBridge?.updateCollisionRegion(
-        this.collisionWorld.spatialHash,
+      this.workerBridge?.scheduleCollisionRegionUpdate(
         box.minX - 1,
         box.minZ - 1,
         box.maxX + 1,
@@ -392,6 +362,7 @@ export class GameEngine {
       this.ballistics,
       this.telemetry
     );
+    this.enemies.setOnObjectAddedToScene((obj) => this.renderer.registerObjectForShadows(obj));
     this.vehicles = new VehicleManager(
       this.renderer.scene,
       this.resourceManager,
@@ -410,6 +381,7 @@ export class GameEngine {
       this.ballistics,
       this.telemetry
     );
+    this.airCombat.setOnObjectAddedToScene((obj) => this.renderer.registerObjectForShadows(obj));
     this.healthPickups = new HealthPickupManager(
       this.renderer.scene,
       this.resourceManager,
@@ -517,8 +489,54 @@ export class GameEngine {
       publishUiSnapshot: this.publishHudSnapshot,
       onFrameMeasured: this.onFrameMeasured,
     });
-    this.loop.setFpsCap(settings.graphics.fpsCap);
+    this.graphicsCoordinator = new GraphicsAdaptiveCoordinator({
+      renderer: this.renderer,
+      governor: this.governor,
+      assetManager: this.assetManager,
+      battlefieldVfx: this.battlefieldVfx,
+      surfaceDecals: this.surfaceDecals,
+      vfx: this.vfx,
+      loop: this.loop,
+      getLights: () => this.lights,
+    });
+    this.graphicsCoordinator.initializeInitialProfile();
+    const resolvedSettings = settingsStore.getState();
+    this.loop.setFpsCap(resolvedSettings.graphics.fpsCap);
     this.loop.setSoftwareGlPacing(this.renderer.isSoftwareGl);
+
+    this.telemetryPublisher = new DebugTelemetryPublisher({
+      renderer: this.renderer,
+      resourceManager: this.resourceManager,
+      monitor: this.monitor,
+      telemetry: this.telemetry,
+      rulesEngine: this.rulesEngine,
+      coordinator: this.coordinator,
+      debugRenderer: this.debugRenderer,
+      collisionWorld: this.collisionWorld,
+      player: this.player,
+      weapons: this.weapons,
+      enemies: this.enemies,
+      vehicles: this.vehicles,
+      airCombat: this.airCombat,
+      projectiles: this.projectiles,
+      explosives: this.explosives,
+      vfx: this.vfx,
+      audio: this.audio,
+    });
+    this.missionLoader = new MissionLifecycleLoader({
+      renderer: this.renderer,
+      assetManager: this.assetManager,
+      resourceManager: this.resourceManager,
+      collisionWorld: this.collisionWorld,
+      chunkManager: this.chunkManager,
+      destruction: this.destruction,
+      vehicles: this.vehicles,
+      pbrLibrary: this.pbrLibrary,
+      surfaceDecals: this.surfaceDecals,
+      battlefieldVfx: this.battlefieldVfx,
+      spatialAcoustics: this.spatialAcoustics,
+      governor: this.governor,
+    });
 
     this.bindReactiveSettings();
 
@@ -537,23 +555,15 @@ export class GameEngine {
   }
 
   getGpuCapabilityReport(): GpuCapabilityReport | null {
-    return this.gpuReport;
+    return this.graphicsCoordinator.getGpuCapabilityReport();
   }
 
   reapplyAutoGraphics(): GpuCapabilityReport {
-    const probeAvg =
-      this.initialProbeFrames.length > 8
-        ? this.initialProbeFrames.slice(5).reduce((a, b) => a + b, 0) /
-          Math.max(1, this.initialProbeFrames.length - 5)
-        : null;
-    const report = detectGpuCapability(this.renderer.renderer, probeAvg);
-    this.gpuReport = report;
-    settingsStore.getState().applyAutoDetectedGraphics(report.recommendedSettings);
-    return report;
+    return this.graphicsCoordinator.reapplyAutoGraphics();
   }
 
   getQualityTelemetry(): DirectorTelemetrySnapshot {
-    return this.renderer.qualityDirector.getTelemetry();
+    return this.graphicsCoordinator.getQualityTelemetry();
   }
 
   private bindReactiveSettings(): void {
@@ -567,36 +577,7 @@ export class GameEngine {
         }
         if (state.graphics !== prevGraphics) {
           prevGraphics = state.graphics;
-          const isPlaying = uiStore.getState().screen === 'playing';
-          this.governor.configureFromSettings(state.graphics);
-          this.governor.setTargetRefreshRate(state.graphics.targetRefreshRate ?? 60);
-          this.renderer.setRendererBackendPreference(state.graphics.rendererBackend ?? 'auto');
-          this.renderer.qualityDirector.syncFromGraphicsSettings(state.graphics);
-          this.renderer.applyDirectorDimensions(
-            state.graphics.maxDpr,
-            this.lights,
-            state.graphics.shadowsEnabled,
-            { allowCsmRebuild: true, deferResize: isPlaying }
-          );
-          const activeDims = this.renderer.qualityDirector.getActiveDimensions();
-          this.battlefieldVfx.setDensityScales(
-            activeDims.particleDensityScale,
-            activeDims.rainDensityScale
-          );
-          this.surfaceDecals.setBudget(activeDims.decalBudget);
-          this.assetManager.setTextureQuality(state.graphics.textureQuality);
-          this.loop.setFpsCap(state.graphics.fpsCap);
-          const effProf = this.governor.getProfile();
-          this.vfx.setBudgetRatio(effProf.particleBudgetRatio);
-          if (state.graphics.qualityProfile !== 'auto_adaptive') {
-            this.renderer.applyGovernorProfile(
-              effProf,
-              state.graphics.shadowsEnabled,
-              state.graphics.bloomEnabled,
-              this.lights,
-              { deferResize: isPlaying }
-            );
-          }
+          this.graphicsCoordinator.applyGraphicsSettings(state.graphics, true);
         }
       }),
       audioSettingsStore.subscribe((state) => {
@@ -733,31 +714,6 @@ export class GameEngine {
     this.dioramaLoaded = false;
   }
 
-  private yieldToFrame(): Promise<void> {
-    return new Promise((resolve) => {
-      if (
-        typeof window !== 'undefined' &&
-        typeof window.requestAnimationFrame === 'function' &&
-        typeof document !== 'undefined' &&
-        !document.hidden
-      ) {
-        window.requestAnimationFrame(() => resolve());
-      } else {
-        setTimeout(resolve, 0);
-      }
-    });
-  }
-
-  private reportLoadStage(loaded: number, total: number, currentAsset: string): void {
-    gameSessionStore.getState().setLoadProgress({
-      loaded,
-      total,
-      currentAsset,
-      percent: Math.round((loaded / total) * 100),
-      usedFallbackCount: this.assetManager.getFallbackCount(),
-    });
-  }
-
   async startMission(
     missionId: number,
     difficulty: Difficulty,
@@ -799,29 +755,25 @@ export class GameEngine {
 
     try {
       const totalStages = 4;
-      this.reportLoadStage(1, totalStages, 'Streaming Terrain & Architecture');
-      let populator = this.mapPopulatorCache.get(mission.mapId);
-      if (!populator) {
-        populator = await loadMapPopulator(mission.mapId);
-        this.mapPopulatorCache.set(mission.mapId, populator);
-      }
+      this.missionLoader.reportLoadStage(1, totalStages, 'Streaming Terrain & Architecture');
+      const populator = await this.missionLoader.resolvePopulator(mission.mapId);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
-      await this.yieldToFrame();
+      await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
-      this.reportLoadStage(2, totalStages, 'Building Vertical Structures & Collision BVH');
+      this.missionLoader.reportLoadStage(2, totalStages, 'Building Vertical Structures & Collision BVH');
       this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
-      await this.yieldToFrame();
+      await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
-      this.reportLoadStage(3, totalStages, 'Deploying Squad, Vehicles & Navigation Grid');
+      this.missionLoader.reportLoadStage(3, totalStages, 'Deploying Squad, Vehicles & Navigation Grid');
       this.populateEntitiesAndPlayerStep(mission, difficulty, scope, preferredWeapon);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
-      await this.yieldToFrame();
+      await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
-      this.reportLoadStage(4, totalStages, 'Compiling Shaders & Spatial Acoustics');
+      this.missionLoader.reportLoadStage(4, totalStages, 'Compiling Shaders & Spatial Acoustics');
       this.lifecycle.send({ type: 'ASSETS_LOADED' });
       this.finalizeMissionLoadStep(mission, difficulty);
 
@@ -895,33 +847,6 @@ export class GameEngine {
     return snapshot;
   }
 
-  private reconstructCompletedDestructibles(
-    mission: MissionConfig,
-    completedIds: ReadonlySet<string>,
-    destroyedTargetIds: ReadonlySet<string>
-  ): void {
-    const completedTypes = new Set(
-      mission.objectives.filter((o) => completedIds.has(o.id)).map((o) => o.type)
-    );
-
-    for (const ent of this.destruction.getAll()) {
-      if (ent.state === 'DESTROYED') continue;
-      if (destroyedTargetIds.has(ent.id)) {
-        this.destruction.markDestroyedSilently(ent.id);
-        continue;
-      }
-      if (!ent.isObjectiveTarget) continue;
-      if (completedTypes.has('plant_charge') && ent.kind === 'weapons_cache') {
-        this.destruction.markDestroyedSilently(ent.id);
-      } else if (
-        completedTypes.has('destroy_targets') &&
-        (ent.kind === 'radar_relay' || ent.kind === 'fuel_tank')
-      ) {
-        this.destruction.markDestroyedSilently(ent.id);
-      }
-    }
-  }
-
   private populateMissionWorld(
     mission: MissionConfig,
     difficulty: Difficulty,
@@ -929,10 +854,7 @@ export class GameEngine {
     preferredWeapon?: WeaponId,
     restoredCheckpoint?: MissionCheckpointSnapshot
   ): void {
-    const populator = this.mapPopulatorCache.get(mission.mapId);
-    if (!populator) {
-      throw new Error(`Map module not loaded for ${mission.mapId}`);
-    }
+    const populator = this.missionLoader.getCachedPopulator(mission.mapId);
     this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
     this.populateEntitiesAndPlayerStep(
       mission,
@@ -959,71 +881,11 @@ export class GameEngine {
       };
     }
 
-    const profile = this.governor.getProfile();
-    const gSettings = settingsStore.getState().graphics;
-    this.lights = setupLightingRig(
-      this.renderer.scene,
-      mission.lighting,
-      profile.shadowMapSize,
-      profile.shadowDistance,
-      this.resourceManager,
-      mission.id
-    );
-    this.renderer.applyGovernorProfile(
-      profile,
-      gSettings.shadowsEnabled,
-      gSettings.bloomEnabled,
-      this.lights
-    );
-
-    const shell = createWorldShell(
-      mission.mapId,
-      mission.id,
-      this.renderer.scene,
-      this.assetManager,
-      this.resourceManager,
-      this.collisionWorld,
-      this.chunkManager,
-      this.destruction
-    );
-    populator(shell.ctx);
-    this.worldData = populateCommonWorldAndFinalize(shell);
-
-    // Frontier Masterplan V3: distinct mission environment, localized wetness, weather, acoustics, CSM
-    const directive = getMissionAtmosphereDirective(mission.id);
-    this.renderer.setExposure(directive.exposure);
     this.missionEnhancement?.dispose();
-    this.missionEnhancement = buildMissionEnvironmentEnhancement(
-      this.renderer.scene,
-      mission.id,
-      this.pbrLibrary,
-      this.collisionWorld.getGroundHeightAt
-    );
-    this.surfaceDecals.clearMissionDecals();
-    this.battlefieldVfx.clearAll();
-    this.battlefieldVfx.clearIndoorShelters();
-    for (const surf of this.worldData.elevatedSurfaces) {
-      if (surf.elevationY >= 2.2) {
-        this.battlefieldVfx.registerIndoorShelter({
-          minX: surf.minX,
-          maxX: surf.maxX,
-          minZ: surf.minZ,
-          maxZ: surf.maxZ,
-          ceilingY: surf.elevationY,
-        });
-      }
-    }
-    this.battlefieldVfx.setEnvironmentWeather(
-      directive.weatherMode,
-      directive.windX,
-      directive.windZ
-    );
-    this.spatialAcoustics.setAcousticSpace(directive.acousticSpace);
-    this.renderer.applyDirectorDimensions(
-      gSettings.maxDpr,
-      this.lights,
-      gSettings.shadowsEnabled
-    );
+    const res = this.missionLoader.populateWorldArchitecture(mission, difficulty, scope, populator);
+    this.lights = res.lights;
+    this.worldData = res.worldData;
+    this.missionEnhancement = res.missionEnhancement;
   }
 
   private populateEntitiesAndPlayerStep(
@@ -1041,7 +903,11 @@ export class GameEngine {
     ]);
     const destroyedTargetSet = new Set(restoredCheckpoint?.destroyedTargetIds ?? []);
     if (restoredCheckpoint && (completedSet.size > 0 || destroyedTargetSet.size > 0)) {
-      this.reconstructCompletedDestructibles(mission, completedSet, destroyedTargetSet);
+      this.missionLoader.reconstructCompletedDestructibles(
+        mission,
+        completedSet,
+        destroyedTargetSet
+      );
     }
 
     this.cargoLiftManager.clear();
@@ -1359,10 +1225,8 @@ export class GameEngine {
     this.reinforcementTimer = 28;
     this.dioramaLoaded = false;
 
-    // PERF-01: Prewarm decal textures/materials, register world + entity materials with CSM,
-    // and precompile all shaders synchronously during mission load (zero mid-combat compile stalls).
-    this.surfaceDecals.prewarm();
-    this.renderer.registerSceneShadowsAndPrecompile();
+    // PERF-01 & AUD-02: Prewarm decal/destruction/vehicle/projectile shaders and register CSM during load
+    this.missionLoader.prewarmCombatShaders();
   }
 
   getLifecycleState(): string {
@@ -1553,7 +1417,7 @@ export class GameEngine {
     this.telemetry.reset();
     this.rulesEngine.reset();
     this.hudPublisher.reset();
-    this.debugRenderer.setVisible(false);
+    this.telemetryPublisher.reset();
 
     this.resourceManager.unloadScope('mission:lights');
     this.resourceManager.unloadScope('mission:audio');
@@ -2271,6 +2135,7 @@ export class GameEngine {
         if (pod) {
           podMesh.position.copy(pod.position);
           this.renderer.scene.add(podMesh);
+          this.renderer.registerObjectForShadows(podMesh);
           this.resourceManager.register('object3d', this.activeScope, () => {
             this.renderer.scene.remove(podMesh);
           });
@@ -2310,6 +2175,7 @@ export class GameEngine {
       settings.accessibility.reducedMotion,
       explosiveCallbacks
     );
+    this.workerBridge?.flushCollisionRegionUpdates(this.collisionWorld.spatialHash);
     this.monitor.recordPhase('explosions', performance.now() - tExp0);
 
     // Extraction Beacon check for Mission 5
@@ -2555,125 +2421,7 @@ export class GameEngine {
       this.vehicles.hasAnyHostileWithLos();
     this.telemetry.tickExposure(dt, anyEnemyHasLos);
 
-    const devActive = isDeveloperModeActiveForSetting(settings.developer.devModeEnabled);
-    const uiState = uiStore.getState();
-    const debugOpen = devActive && uiState.combatDebugOpen;
-    const debugCollapsed = uiState.combatDebugCollapsed;
-    const any3DGizmoEnabled =
-      settings.developer.debugShow3DGizmos ||
-      settings.developer.debugShowFlightPaths ||
-      settings.developer.debugShowPhysicsColliders;
-    this.collisionWorld.physicsWorld.debugSystem.setDetailedRecordingEnabled(
-      debugOpen && (!debugCollapsed || settings.developer.debugShowPhysicsColliders)
-    );
-    if (debugOpen) {
-      this.debugPublishAccum += dt;
-      // 5 Hz when expanded, 2 Hz when collapsed into the compact pill to minimize React & GPU buffer churn
-      const publishPeriod = debugCollapsed ? 0.5 : 0.2;
-      if (this.debugPublishAccum >= publishPeriod) {
-        this.debugPublishAccum = 0;
-        const groundRows = this.enemies.getDebugInspectorRows(this.player);
-        const airRows = this.airCombat.getDebugInspectorRows(this.player);
-        const vehRows = this.vehicles.getDebugInspectorRows(this.player);
-        const allDebugUnits = [...groundRows, ...airRows, ...vehRows];
-        const drawInfo = this.renderer.getDrawInfo();
-        const resSnap = this.resourceManager.getSnapshot();
-        const audit = this.resourceManager.getLastUnloadAudit();
-
-        this.telemetry.setPlayerMovementTelemetry(
-          this.player.getMovementTelemetry(
-            weaponCfg.shortName,
-            this.weapons.getEquipTimerSec(),
-            this.weapons.getReloadStage(),
-            this.weapons.getReloadProgress()
-          )
-        );
-        this.telemetry.setFlightSamples([
-          ...this.projectiles.getFlightTelemetrySamples(),
-          ...this.airCombat.getFlightTelemetrySamples(),
-        ]);
-        this.telemetry.setOrdnanceSummary(this.explosives.getTelemetrySummary());
-        this.telemetry.setPerformanceTelemetry(this.monitor.getLatestTelemetry());
-        this.telemetry.setResourceTelemetry({
-          geometries: drawInfo.geometries,
-          materials: resSnap.byCategory.material,
-          textures: drawInfo.textures,
-          renderTargets: resSnap.byCategory.renderTarget,
-          listeners: resSnap.byCategory.listener,
-          timers: resSnap.byCategory.timer,
-          audioVoices: this.audio.getActiveVoiceCount(),
-          activePooledVfx: this.vfx.getActiveCount(),
-          poolCapacityVfx: this.vfx.getPoolCapacity(),
-          activePooledProjectiles: this.projectiles.getActiveCount(),
-          poolCapacityProjectiles: this.projectiles.getPoolCapacity(),
-          activeC4Count: this.explosives.getActiveC4Count(),
-          totalCreated: resSnap.totalCreated,
-          totalDisposed: resSnap.totalDisposed,
-          sharedCount: resSnap.sharedCount,
-          missionCount: resSnap.missionCount,
-          hasMissionLeak: audit.hasMissionLeak,
-          missionRemaining: audit.missionRemaining,
-          sharedDelta: audit.sharedDelta,
-        });
-
-        const dynamicPhysicsBodies = [
-          this.player.getPhysicsInspectorRow(),
-          ...this.enemies.getPhysicsInspectorRows(),
-          ...this.vehicles.getPhysicsInspectorRows(),
-          ...this.airCombat.getPhysicsInspectorRows(),
-          ...this.projectiles.getPhysicsInspectorRows(),
-        ];
-        const physSnap = this.collisionWorld.physicsWorld.buildDiagnosticsSnapshot(
-          dynamicPhysicsBodies
-        );
-        this.telemetry.setPhysicsDiagnostics(physSnap);
-
-        const coordSnap = this.coordinator.getSnapshot();
-        const prelimSnap = this.telemetry.buildSnapshot(
-          coordSnap,
-          allDebugUnits,
-          this.projectiles.getActiveCount()
-        );
-        const warnings = this.rulesEngine.evaluate(prelimSnap);
-        this.telemetry.setWarnings(warnings);
-        prelimSnap.warnings = warnings;
-        gameSessionStore.getState().updateCombatDebug(prelimSnap);
-
-        if (!debugCollapsed || any3DGizmoEnabled) {
-          const cap = this.player.getActiveCapsuleDimensions();
-          const lastMove = this.player.getLastMoveResult();
-          this.debugRenderer.update(
-            settings.developer.debugShow3DGizmos,
-            allDebugUnits,
-            prelimSnap.recentShots,
-            this.player.position,
-            settings.developer.debugShowFlightPaths,
-            prelimSnap.flightSamples,
-            prelimSnap.recentExplosions,
-            settings.developer.debugShowPhysicsColliders,
-            prelimSnap.physics,
-            this.vehicles.getCameraDebugRay(),
-            {
-              radius: cap.radius,
-              height: cap.height,
-              velocityX: this.player.velocity.x,
-              velocityY: this.player.velocity.y,
-              velocityZ: this.player.velocity.z,
-              groundNormalX: lastMove?.groundNormalX ?? 0,
-              groundNormalY: lastMove?.groundNormalY ?? 1,
-              groundNormalZ: lastMove?.groundNormalZ ?? 0,
-              grounded: this.player.grounded,
-              climbing: this.player.isClimbingLadder,
-            }
-          );
-        } else {
-          this.debugRenderer.setVisible(false);
-        }
-      }
-    } else {
-      this.debugPublishAccum = 0;
-      this.debugRenderer.setVisible(false);
-    }
+    this.telemetryPublisher.stepAndPublish(dt, settings, weaponCfg.shortName);
 
     this.monitor.recordPhase('physics', tGame0 - tPhys0);
     this.monitor.recordPhase('gameplay', performance.now() - tGame0);
@@ -2689,6 +2437,7 @@ export class GameEngine {
   private onScheduleAI = (dt: number): void => {
     if (uiStore.getState().screen !== 'playing' || !this.activeScope || !this.workerBridge) return;
     const t0 = performance.now();
+    this.workerBridge.flushCollisionRegionUpdates(this.collisionWorld.spatialHash);
 
     this.enemies.update(
       dt,
@@ -2939,56 +2688,7 @@ export class GameEngine {
   private onFrameMeasured = (frameMs: number): void => {
     if (uiStore.getState().screen !== 'playing') return;
     const dt = 1 / 60;
-
-    if (!this.initialProbeSettled) {
-      this.initialProbeFrames.push(frameMs);
-      if (this.initialProbeFrames.length >= 45) {
-        this.initialProbeSettled = true;
-        const steady = this.initialProbeFrames.slice(5);
-        const avgProbeMs = steady.reduce((a, b) => a + b, 0) / Math.max(1, steady.length);
-        // Record refined GPU capability report for diagnostics without triggering a
-        // mid-combat settings reset / CSM shader rebuild / canvas blink while playing.
-        this.gpuReport = detectGpuCapability(this.renderer.renderer, avgProbeMs);
-      }
-    }
-
-    const drawInfo = this.renderer.getDrawInfo();
-    const graphicsSettings = settingsStore.getState().graphics;
-    const directorChanged = this.renderer.qualityDirector.recordFrame({
-      cpuFrameMs: frameMs,
-      drawCalls: drawInfo.calls,
-      triangles: drawInfo.triangles,
-      geometriesCount: drawInfo.geometries,
-      texturesCount: drawInfo.textures,
-    });
-    if (directorChanged) {
-      const dims = this.renderer.qualityDirector.getActiveDimensions();
-      this.renderer.applyDirectorDimensions(
-        dims.maxDpr,
-        this.lights,
-        graphicsSettings.shadowsEnabled,
-        { allowCsmRebuild: false, deferResize: true }
-      );
-      this.battlefieldVfx.setDensityScales(dims.particleDensityScale, dims.rainDensityScale);
-      this.surfaceDecals.setBudget(dims.decalBudget);
-    }
-
-    const changed = this.governor.recordSample(frameMs, this.monitor.getCpuTimeMs(), dt);
-    if (changed) {
-      const prof = this.governor.getProfile();
-      this.vfx.setBudgetRatio(prof.particleBudgetRatio);
-      // In auto_adaptive mode, RenderingQualityDirector owns renderer visual scaling so
-      // PerformanceGovernor does not fight it or trigger redundant resizes/blinks.
-      if (graphicsSettings.qualityProfile !== 'auto_adaptive') {
-        this.renderer.applyGovernorProfile(
-          prof,
-          graphicsSettings.shadowsEnabled,
-          graphicsSettings.bloomEnabled,
-          this.lights,
-          { deferResize: true, allowShadowToggle: false }
-        );
-      }
-    }
+    this.graphicsCoordinator.recordFrameAndAdapt(frameMs, this.monitor, dt);
 
     this.monitor.tick(
       dt,
@@ -3062,7 +2762,7 @@ export class GameEngine {
       activeModifiers: this.activeModifiers,
       camera: this.renderer.camera,
       squadSummary: this.activeDeploymentMode === 'solo' ? undefined : this.latestSquadHudSummary,
-      carriedWeaponIds: [...this.weapons.getCarriedMissionSlots()],
+      carriedWeaponIds: this.weapons.getCarriedMissionSlots(),
       nearSupplySwapStation: this.isPlayerNearSupplySwapStation(),
       deploymentMode: this.activeDeploymentMode,
       soloTraumaKit:

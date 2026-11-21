@@ -148,6 +148,9 @@ export interface EnemyUnit {
   lastProgressZ: number;
   shotsFiredSinceRelocate: number;
   squadOrder: SquadTacticalOrder | null;
+  losProbeCooldownSec?: number;
+  outOfFovProbeCooldownSec?: number;
+  lastExposedPoint?: THREE.Vector3;
 }
 
 function mapArchetypeToWeapon(archetype: EnemyArchetype, index: number): EnemyWeaponClass {
@@ -228,8 +231,33 @@ export class EnemyManager {
   private readonly _proxPool: Array<{ position: THREE.Vector3; radius: number }> = [];
   private readonly _blipPool: MiniMapBlip[] = [];
   private readonly _liftProxyPool: CargoLiftOccupantProxy[] = [];
+  private readonly _squadEvalInputsScratch: Array<{
+    id: string;
+    squadId: string;
+    archetype: EnemyArchetype;
+    role: SquadRole;
+    alive: boolean;
+    healthRatio: number;
+    hasLos: boolean;
+    isSuppressedOrHit: boolean;
+    distanceToPlayer: number;
+    elevationDelta: number;
+    shotsFiredSinceRelocate: number;
+  }> = [];
+  private readonly _pathActiveUnitsScratch: EnemyUnit[] = [];
+  private readonly _pathQueriesScratch: Array<{
+    sx: number;
+    sy: number;
+    sz: number;
+    tx: number;
+    ty: number;
+    tz: number;
+    profileId: AgentProfileId;
+  }> = [];
   private cargoLiftManager: CargoLiftManager | null = null;
   private activeWorkerBridge: WorkerBridge | null = null;
+  private detailedTelemetryActive = false;
+  private onObjectAddedToScene?: (obj: THREE.Object3D) => void;
   private sniperLaserLine: THREE.Line | null = null;
   private sniperLaserPositions: Float32Array | null = null;
 
@@ -278,6 +306,14 @@ export class EnemyManager {
 
   setWorkerBridge(bridge: WorkerBridge | null): void {
     this.activeWorkerBridge = bridge;
+  }
+
+  setDetailedTelemetryActive(active: boolean): void {
+    this.detailedTelemetryActive = active;
+  }
+
+  setOnObjectAddedToScene(cb?: (obj: THREE.Object3D) => void): void {
+    this.onObjectAddedToScene = cb;
   }
 
   fillLiftOccupantProxies(player: PlayerController, out: CargoLiftOccupantProxy[]): void {
@@ -470,6 +506,7 @@ export class EnemyManager {
       const rig = buildSoldierRig(cfg.accentColor, archetype, scope, this.resourceManager);
       rig.root.position.copy(spawnPos);
       this.scene.add(rig.root);
+      this.onObjectAddedToScene?.(rig.root);
       this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
 
       const hp = Math.round(cfg.maxHealth * (0.85 + 0.15 * this.difficultyMult));
@@ -794,21 +831,47 @@ export class EnemyManager {
     this.squadEvalAccum += dt;
     if (this.squadEvalAccum >= 0.35) {
       this.squadEvalAccum = 0;
-      const anyLos = this.enemies.some((e) => e.alive && e.hasLos);
+      let anyLos = false;
+      this._squadEvalInputsScratch.length = this.enemies.length;
+      for (let i = 0; i < this.enemies.length; i++) {
+        const e = this.enemies[i];
+        if (e.alive && e.hasLos) anyLos = true;
+        let slot = this._squadEvalInputsScratch[i];
+        const hpRatio = e.maxHealth > 0 ? e.health / e.maxHealth : 0;
+        const distP = Math.hypot(e.position.x - px, e.position.z - pz);
+        const elevDelta = e.position.y - py;
+        const suppressedOrHit = e.state === 'RETREATING' || e.isReloading;
+        if (!slot) {
+          slot = {
+            id: e.id,
+            squadId: e.squadId,
+            archetype: e.archetype,
+            role: e.role,
+            alive: e.alive,
+            healthRatio: hpRatio,
+            hasLos: e.hasLos,
+            isSuppressedOrHit: suppressedOrHit,
+            distanceToPlayer: distP,
+            elevationDelta: elevDelta,
+            shotsFiredSinceRelocate: e.shotsFiredSinceRelocate,
+          };
+          this._squadEvalInputsScratch[i] = slot;
+        } else {
+          slot.id = e.id;
+          slot.squadId = e.squadId;
+          slot.archetype = e.archetype;
+          slot.role = e.role;
+          slot.alive = e.alive;
+          slot.healthRatio = hpRatio;
+          slot.hasLos = e.hasLos;
+          slot.isSuppressedOrHit = suppressedOrHit;
+          slot.distanceToPlayer = distP;
+          slot.elevationDelta = elevDelta;
+          slot.shotsFiredSinceRelocate = e.shotsFiredSinceRelocate;
+        }
+      }
       const orders = this.squadTactics.evaluateSquads(
-        this.enemies.map((e) => ({
-          id: e.id,
-          squadId: e.squadId,
-          archetype: e.archetype,
-          role: e.role,
-          alive: e.alive,
-          healthRatio: e.maxHealth > 0 ? e.health / e.maxHealth : 0,
-          hasLos: e.hasLos,
-          isSuppressedOrHit: e.state === 'RETREATING' || e.isReloading,
-          distanceToPlayer: Math.hypot(e.position.x - px, e.position.z - pz),
-          elevationDelta: e.position.y - py,
-          shotsFiredSinceRelocate: e.shotsFiredSinceRelocate,
-        })),
+        this._squadEvalInputsScratch,
         player.isOccupyingVehicle(),
         !anyLos
       );
@@ -822,19 +885,19 @@ export class EnemyManager {
     this.pathSyncAccum += dt;
     if (this.pathSyncAccum >= 0.45) {
       this.pathSyncAccum = 0;
-      const activeToRoute = this.enemies
-        .filter(
-          (e) =>
-            e.alive &&
-            !e.isRidingLift &&
-            e.state !== 'DEAD' &&
-            e.state !== 'UNAWARE' &&
-            e.state !== 'SUSPICIOUS' &&
-            (e.coverTarget !== null || e.lastKnownPosition !== null)
-        )
-        .slice(0, 8);
-      if (activeToRoute.length > 0 && workerBridge.isHealthy()) {
-        const queries3D = activeToRoute.map((e) => {
+      this._pathActiveUnitsScratch.length = 0;
+      this._pathQueriesScratch.length = 0;
+      for (let i = 0; i < this.enemies.length && this._pathActiveUnitsScratch.length < 8; i++) {
+        const e = this.enemies[i];
+        if (
+          e.alive &&
+          !e.isRidingLift &&
+          e.state !== 'DEAD' &&
+          e.state !== 'UNAWARE' &&
+          e.state !== 'SUSPICIOUS' &&
+          (e.coverTarget !== null || e.lastKnownPosition !== null)
+        ) {
+          this._pathActiveUnitsScratch.push(e);
           const target =
             e.coverTarget && (e.state === 'REPOSITIONING' || e.state === 'RETREATING')
               ? e.coverTarget
@@ -845,7 +908,7 @@ export class EnemyManager {
               : e.lastKnownPosition
                 ? Math.max(0, e.lastKnownPosition.y - 1.0)
                 : e.patrolOrigin.y;
-          return {
+          this._pathQueriesScratch.push({
             sx: e.position.x,
             sy: e.position.y,
             sz: e.position.z,
@@ -853,12 +916,15 @@ export class EnemyManager {
             ty: Number.isFinite(targetY) ? targetY : py,
             tz: target.z,
             profileId: e.agentProfile,
-          };
-        });
-        void workerBridge.requestPaths3D(queries3D).then((waypoints) => {
+          });
+        }
+      }
+      if (this._pathActiveUnitsScratch.length > 0 && workerBridge.isHealthy()) {
+        const dispatchedUnits = this._pathActiveUnitsScratch.slice();
+        void workerBridge.requestPaths3D(this._pathQueriesScratch).then((waypoints) => {
           if (!waypoints || this.enemies.length === 0) return;
-          for (let i = 0; i < Math.min(waypoints.length, activeToRoute.length); i++) {
-            const u = activeToRoute[i];
+          for (let i = 0; i < Math.min(waypoints.length, dispatchedUnits.length); i++) {
+            const u = dispatchedUnits[i];
             const wp = waypoints[i];
             if (u.alive && !u.isRidingLift) {
               u.waypoint.set(wp.wx, wp.wy, wp.wz);
@@ -1004,33 +1070,56 @@ export class EnemyManager {
     const halfFovRad = ((activeFovDeg * 0.5) * Math.PI) / 180;
     const withinVisionCone = player.alive && dist <= cfg.detectionRange && yawDiff <= halfFovRad;
 
-    let rawLos = false;
-    let exposedTargetPoint = player.position;
-    let blockerId: string | null = null;
+    let rawLos = u.hasLos;
+    let exposedTargetPoint = u.lastExposedPoint ?? player.position;
+    let blockerId: string | null = u.losBlockerId;
+
+    u.losProbeCooldownSec = Math.max(0, (u.losProbeCooldownSec ?? 0) - dt);
+    u.outOfFovProbeCooldownSec = Math.max(0, (u.outOfFovProbeCooldownSec ?? 0) - dt);
 
     if (withinVisionCone && this.ballistics) {
-      const losRes = this.ballistics.checkLineOfSight(
-        u.position.x,
-        u.position.y + 1.56,
-        u.position.z,
-        player,
-        collision,
-        cfg.detectionRange
-      );
-      rawLos = losRes.visible;
-      exposedTargetPoint = losRes.exposedPoint;
-      blockerId = losRes.blockerId;
-    } else if (player.alive && dist <= cfg.detectionRange && this.ballistics) {
-      // Check if blocked by cover for telemetry even when out of FOV
-      const losRes = this.ballistics.checkLineOfSight(
-        u.position.x,
-        u.position.y + 1.56,
-        u.position.z,
-        player,
-        collision,
-        cfg.detectionRange
-      );
-      blockerId = losRes.blockerId;
+      if (u.losProbeCooldownSec <= 0) {
+        const losRes = this.ballistics.checkLineOfSight(
+          u.position.x,
+          u.position.y + 1.56,
+          u.position.z,
+          player,
+          collision,
+          cfg.detectionRange
+        );
+        rawLos = losRes.visible;
+        if (!u.lastExposedPoint) u.lastExposedPoint = new THREE.Vector3();
+        u.lastExposedPoint.copy(losRes.exposedPoint);
+        exposedTargetPoint = u.lastExposedPoint;
+        blockerId = losRes.blockerId;
+        const activeCombatProbe =
+          (u.state === 'ENGAGING' || u.state === 'ALERTED' || u.state === 'SUPPRESSING') &&
+          dist < 42;
+        u.losProbeCooldownSec = activeCombatProbe ? 0.048 : 0.11;
+      }
+    } else {
+      rawLos = false;
+      if (
+        this.detailedTelemetryActive &&
+        player.alive &&
+        dist <= cfg.detectionRange &&
+        this.ballistics
+      ) {
+        if (u.outOfFovProbeCooldownSec <= 0) {
+          const losRes = this.ballistics.checkLineOfSight(
+            u.position.x,
+            u.position.y + 1.56,
+            u.position.z,
+            player,
+            collision,
+            cfg.detectionRange
+          );
+          blockerId = losRes.blockerId;
+          u.outOfFovProbeCooldownSec = 0.25;
+        }
+      } else {
+        blockerId = null;
+      }
     }
 
     const prevLos = u.hasLos;

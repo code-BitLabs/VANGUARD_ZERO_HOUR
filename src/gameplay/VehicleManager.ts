@@ -128,6 +128,7 @@ export class VehicleManager {
     collider: null,
   };
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
+  private prewarmProbeMesh: THREE.Mesh | null = null;
   private readonly _hitscanPool: Array<{
     target: HitscanTarget;
     veh: VehicleEntity | null;
@@ -156,6 +157,40 @@ export class VehicleManager {
 
   cycleCameraMode(): VehicleCameraMode {
     return this.cameraRig.cycleMode();
+  }
+
+  private ensureCharredMaterial(): THREE.MeshStandardMaterial {
+    if (!this.charredMaterial) {
+      this.charredMaterial = new THREE.MeshStandardMaterial({
+        color: 0x1f2428,
+        roughness: 0.85,
+        metalness: 0.3,
+      });
+    }
+    return this.charredMaterial;
+  }
+
+  public prewarm(): THREE.MeshStandardMaterial {
+    const mat = this.ensureCharredMaterial();
+    if (!this.prewarmProbeMesh) {
+      const geo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+      const probe = new THREE.Mesh(geo, mat);
+      probe.position.set(0, -1000, 0);
+      probe.frustumCulled = false;
+      probe.matrixAutoUpdate = false;
+      probe.updateMatrix();
+      this.scene.add(probe);
+      this.prewarmProbeMesh = probe;
+    }
+    return mat;
+  }
+
+  private removePrewarmProbe(): void {
+    if (this.prewarmProbeMesh) {
+      this.scene.remove(this.prewarmProbeMesh);
+      this.prewarmProbeMesh.geometry.dispose();
+      this.prewarmProbeMesh = null;
+    }
   }
 
   getCameraDebugRay(): CameraSpringDebugRay {
@@ -610,14 +645,7 @@ export class VehicleManager {
       this.coordinator?.notifyUnitDisabled(veh.id, veh.squadId, 'vehicle', 'death');
       this.vfx.spawnExplosion(veh.position.x, veh.position.y + 1.2, veh.position.z, 1.8);
       this.audio.playSpatial('explosion', veh.position.x, veh.position.y + 1, veh.position.z, 9, 0.95);
-      if (!this.charredMaterial) {
-        this.charredMaterial = new THREE.MeshStandardMaterial({
-          color: 0x1f2428,
-          roughness: 0.85,
-          metalness: 0.3,
-        });
-      }
-      const charredMat = this.charredMaterial;
+      const charredMat = this.ensureCharredMaterial();
       veh.meshRoot.traverse((c) => {
         if (
           c instanceof THREE.Mesh &&
@@ -1277,6 +1305,7 @@ export class VehicleManager {
   }
 
   clear(): void {
+    this.removePrewarmProbe();
     this.cameraRig.onVehicleExit(this.getPlayerVehicle());
     this.vehicles = [];
     for (let i = 0; i < this._hitscanPool.length; i++) {
@@ -1332,6 +1361,7 @@ export class VehicleManager {
   }
 
   dispose(): void {
+    this.removePrewarmProbe();
     this.clear();
     this.charredMaterial?.dispose();
     this.charredMaterial = null;

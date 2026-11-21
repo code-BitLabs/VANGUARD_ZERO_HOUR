@@ -129,6 +129,51 @@ function getCategoryConcurrencyLimit(category: VoiceCategory): number {
   }
 }
 
+const CORE_PREWARM_SOUND_IDS: readonly SoundId[] = [
+  'shot_rifle',
+  'shot_pistol',
+  'shot_smg',
+  'shot_lmg',
+  'shot_shotgun',
+  'shot_sniper',
+  'shot_grenade_launcher',
+  'shot_rocket',
+  'shot_missile',
+  'hit_marker',
+  'headshot',
+  'empty_click',
+  'mag_out',
+  'mag_in',
+  'chamber',
+  'bolt_cycle',
+  'pump_cycle',
+  'drum_index',
+  'reload',
+  'footstep',
+  'jump',
+  'hurt',
+  'explosion',
+  'explosion_heavy',
+  'c4_place',
+  'c4_plant',
+  'c4_beep',
+  'bomb_whistle',
+  'bomb_drop',
+  'lock_beep',
+  'lock_ready',
+  'enemy_callout',
+  'objective_complete',
+  'pickup_health',
+  'squad_order_confirm',
+  'operator_downed_alarm',
+  'ui_click',
+  'engine',
+  'nuke_alarm',
+  'nuke_siren',
+  'explosion_nuke',
+  'nuke_detonation',
+];
+
 /**
  * TRN-08: Hybrid Layered Tactical Audio Pipeline.
  * - 4-layer stereo weapon & ordnance synthesis (Mechanical transient, Mid body, Sub-bass punch, Stereo tail)
@@ -158,6 +203,8 @@ export class AudioManager {
 
   private activeLoopNodes: Array<{ stop: () => void }> = [];
   private radioVoiceCueCount = 0;
+  private prewarmQueue: SoundId[] = [];
+  private prewarmTimerId: number | null = null;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -225,6 +272,7 @@ export class AudioManager {
       this.setupSharedReverbBus();
       this.applySettings(this.settings);
       this.unlocked = true;
+      this.schedulePrewarm();
     } catch {
       // Headless / blocked audio gracefully falls back to silent no-op
     }
@@ -451,6 +499,78 @@ export class AudioManager {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  public hasCachedBuffer(id: SoundId): boolean {
+    return this.buffers.has(id);
+  }
+
+  public getCachedBufferCount(): number {
+    return this.buffers.size;
+  }
+
+  public schedulePrewarm(prioritySounds: readonly SoundId[] = CORE_PREWARM_SOUND_IDS): void {
+    if (!this.ctx) return;
+    const queued = new Set(this.prewarmQueue);
+    for (let i = 0; i < prioritySounds.length; i++) {
+      const sid = prioritySounds[i];
+      if (!this.buffers.has(sid) && !queued.has(sid)) {
+        this.prewarmQueue.push(sid);
+        queued.add(sid);
+      }
+    }
+    if (this.prewarmQueue.length === 0 || this.prewarmTimerId !== null) return;
+    if (typeof window === 'undefined') {
+      this.pumpPrewarmSlice(4.0);
+      return;
+    }
+    this.prewarmTimerId = window.setTimeout(this.runPrewarmSlice, 16);
+  }
+
+  public prewarmBuffersSync(ids: readonly SoundId[] = CORE_PREWARM_SOUND_IDS): number {
+    if (!this.ctx) return 0;
+    let built = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const sid = ids[i];
+      if (!this.buffers.has(sid)) {
+        this.getOrCreateBuffer(sid);
+        built++;
+      }
+    }
+    return built;
+  }
+
+  private cancelScheduledPrewarm(): void {
+    if (this.prewarmTimerId !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.prewarmTimerId);
+    }
+    this.prewarmTimerId = null;
+    this.prewarmQueue.length = 0;
+  }
+
+  private readonly runPrewarmSlice = (): void => {
+    this.prewarmTimerId = null;
+    if (!this.ctx || this.prewarmQueue.length === 0) return;
+    this.pumpPrewarmSlice(3.5);
+    if (this.prewarmQueue.length > 0 && typeof window !== 'undefined') {
+      this.prewarmTimerId = window.setTimeout(this.runPrewarmSlice, 16);
+    }
+  };
+
+  private pumpPrewarmSlice(budgetMs: number): void {
+    if (!this.ctx) {
+      this.prewarmQueue.length = 0;
+      return;
+    }
+    const startMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    while (this.prewarmQueue.length > 0) {
+      const sid = this.prewarmQueue.shift()!;
+      if (!this.buffers.has(sid)) {
+        this.getOrCreateBuffer(sid);
+      }
+      const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startMs;
+      if (elapsed >= budgetMs) break;
     }
   }
 
@@ -886,6 +1006,29 @@ export class AudioManager {
       reverbSendGain.connect(this.reverbNode);
     }
 
+    let cleaned = false;
+    const disconnectNodes = () => {
+      if (cleaned) return;
+      cleaned = true;
+      try {
+        src.disconnect();
+      } catch {
+        // already disconnected
+      }
+      try {
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+      if (reverbSendGain) {
+        try {
+          reverbSendGain.disconnect();
+        } catch {
+          // already disconnected
+        }
+      }
+    };
+
     const voice: ActiveVoice = {
       id: voiceId,
       soundId: id,
@@ -896,12 +1039,10 @@ export class AudioManager {
       stop: () => {
         try {
           src.stop();
-          src.disconnect();
-          gain.disconnect();
-          reverbSendGain?.disconnect();
         } catch {
           // already stopped
         }
+        disconnectNodes();
       },
     };
 
@@ -909,6 +1050,7 @@ export class AudioManager {
     src.onended = () => {
       const idx = this.voices.indexOf(voice);
       if (idx !== -1) this.voices.splice(idx, 1);
+      disconnectNodes();
     };
     src.start(0);
   }
@@ -946,7 +1088,8 @@ export class AudioManager {
     src.playbackRate.value = 0.96 + Math.random() * 0.08;
 
     const panner = this.ctx.createPanner();
-    panner.panningModel = 'HRTF';
+    // Use full binaural HRTF for close tactical cues and lightweight equalpower stereo beyond 35m
+    panner.panningModel = dist < 35 ? 'HRTF' : 'equalpower';
     panner.distanceModel = 'inverse';
     panner.refDistance = 5.0;
     panner.maxDistance = maxDist;
@@ -975,6 +1118,34 @@ export class AudioManager {
       reverbSendGain.connect(this.reverbNode);
     }
 
+    let cleaned = false;
+    const disconnectNodes = () => {
+      if (cleaned) return;
+      cleaned = true;
+      try {
+        src.disconnect();
+      } catch {
+        // already disconnected
+      }
+      try {
+        panner.disconnect();
+      } catch {
+        // already disconnected
+      }
+      try {
+        gain.disconnect();
+      } catch {
+        // already disconnected
+      }
+      if (reverbSendGain) {
+        try {
+          reverbSendGain.disconnect();
+        } catch {
+          // already disconnected
+        }
+      }
+    };
+
     const voice: ActiveVoice = {
       id: voiceId,
       soundId: id,
@@ -985,13 +1156,10 @@ export class AudioManager {
       stop: () => {
         try {
           src.stop();
-          src.disconnect();
-          panner.disconnect();
-          gain.disconnect();
-          reverbSendGain?.disconnect();
         } catch {
           // already stopped
         }
+        disconnectNodes();
       },
     };
 
@@ -999,6 +1167,7 @@ export class AudioManager {
     src.onended = () => {
       const idx = this.voices.indexOf(voice);
       if (idx !== -1) this.voices.splice(idx, 1);
+      disconnectNodes();
     };
     src.start(0);
   }
@@ -1025,6 +1194,7 @@ export class AudioManager {
 
   public startMissionAmbienceAndMusic(mood?: MusicMood): void {
     this.stopMissionLoops();
+    this.schedulePrewarm();
     // Multi-track background music system (single-source guarantee, zero duplication on restart)
     if (this.settings.musicEnabled) {
       void this.musicController.startForMission(mood, false);
@@ -1110,6 +1280,7 @@ export class AudioManager {
   }
 
   public dispose(): void {
+    this.cancelScheduledPrewarm();
     this.stopMissionLoops();
     this.musicController.dispose();
     if (AudioManager.activeInstance === this) {
