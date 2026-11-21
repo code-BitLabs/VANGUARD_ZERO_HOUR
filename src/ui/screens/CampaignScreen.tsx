@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -57,6 +57,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
 
   const [activeStep, setActiveStep] = useState<CampaignStep>(1);
   const [secondaryDrawerTab, setSecondaryDrawerTab] = useState<SecondaryDrawerTab | null>(null);
+  const [, startCampaignTransition] = useTransition();
   const [workbenchState, setWorkbenchState] = useState<{
     open: boolean;
     weaponId: WeaponId;
@@ -103,7 +104,9 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
     if (nextStep >= 3 && !hasConfirmedDeploymentMode) {
       confirmDeploymentMode(activeMode, selectedMissionId);
     }
-    setActiveStep(nextStep);
+    startCampaignTransition(() => {
+      setActiveStep(nextStep);
+    });
   };
 
   const handleDeployNow = () => {
@@ -293,7 +296,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                 data-testid="campaign-step-back"
                 onClick={() => {
                   onUiClick();
-                  setActiveStep((activeStep - 1) as CampaignStep);
+                  handleGoToStep((activeStep - 1) as CampaignStep);
                 }}
                 className="min-h-[44px] sm:min-h-[38px]"
               >
@@ -399,7 +402,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
         openTab={secondaryDrawerTab}
         missionId={selectedMissionId}
         deploymentMode={activeMode}
-        onSelectTab={(tab) => setSecondaryDrawerTab(tab)}
+        onSelectTab={(tab) => startCampaignTransition(() => setSecondaryDrawerTab(tab))}
         onClose={() => setSecondaryDrawerTab(null)}
         onUiClick={onUiClick}
       />

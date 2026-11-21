@@ -1,3 +1,4 @@
+import { TraversalIntegrityFlag } from '@/src/engine/physics/PhysicsTypes';
 import { CargoLiftDefinition } from '@/src/gameplay/CargoLiftManager';
 import { CollisionWorld } from '@/src/physics/CollisionWorld';
 import { ElevatedNavSurfaceDescriptor } from '@/src/workers/WorkerBridge';
@@ -42,6 +43,7 @@ export interface MissionGeometryReconciliationReport {
   totalCargoLifts: number;
   watchtowerDeckElevationsVerifiedM: number[];
   discrepancies: string[];
+  traversalIntegrityFlags: TraversalIntegrityFlag[];
   records: ReconciledStructureRecord[];
 }
 
@@ -90,6 +92,7 @@ export class StructureReconciliationRegistry {
   ): MissionGeometryReconciliationReport {
     const records = this.recordsByMission.get(missionId) ?? [];
     const discrepancies: string[] = [];
+    const traversalIntegrityFlags: TraversalIntegrityFlag[] = [];
     const watchtowerDeckElevationsVerifiedM: number[] = [];
 
     const surfaceById = new Map<number, ElevatedNavSurfaceDescriptor>();
@@ -141,7 +144,11 @@ export class StructureReconciliationRegistry {
       }
     }
 
-    // 2. Verify every NavPortal connects valid surfaces and has matching entry/exit elevations
+    const staticBoxes = collisionWorld.getStaticBoxes();
+    const staticBoxIds = new Set<string>(staticBoxes.map((b) => b.id));
+    const parapetBoxes = staticBoxes.filter((b) => b.tag === 'parapet');
+
+    // 2. Verify every NavPortal connects valid surfaces, has matching elevations, and has unobstructed parapet exits
     for (const p of navPortals) {
       if (p.fromSurfaceId > 0 && !surfaceById.has(p.fromSurfaceId)) {
         discrepancies.push(`Portal ${p.portalKey} references missing fromSurfaceId=${p.fromSurfaceId}`);
@@ -155,9 +162,40 @@ export class StructureReconciliationRegistry {
           `Portal ${p.portalKey} toY=${p.toY.toFixed(2)}m mismatches destination surface ${toSurf.name} (${toSurf.elevationY.toFixed(2)}m)`
         );
       }
+      // PHYS-10: Check stair/ramp top exit corridor against roof parapets (must not pass through a parapet wall)
+      if ((p.kind === 'stair' || p.kind === 'ramp') && toSurf) {
+        const surfCenterX = (toSurf.minX + toSurf.maxX) * 0.5;
+        const exitEdgeX = p.toX > surfCenterX ? toSurf.maxX - 0.21 : toSurf.minX + 0.21;
+        const exitMinX = Math.min(p.toX, exitEdgeX) - 0.2;
+        const exitMaxX = Math.max(p.toX, exitEdgeX) + 0.2;
+        const exitMinZ = p.toZ - 0.42;
+        const exitMaxZ = p.toZ + 0.42;
+        for (const par of parapetBoxes) {
+          if (par.maxY <= p.toY + 0.1 || par.minY >= p.toY + 1.5) continue;
+          if (
+            par.maxX > exitMinX &&
+            par.minX < exitMaxX &&
+            par.maxZ > exitMinZ &&
+            par.minZ < exitMaxZ
+          ) {
+            const msg = `Portal ${p.portalKey} top exit (${p.toX.toFixed(1)}, ${p.toY.toFixed(1)}, ${p.toZ.toFixed(1)}) blocked by parapet ${par.id}`;
+            discrepancies.push(msg);
+            traversalIntegrityFlags.push({
+              id: `blocked_${p.portalKey}`,
+              severity: 'ERROR',
+              code: 'BLOCKED_PARAPET_EXIT',
+              x: exitEdgeX,
+              y: p.toY + 0.6,
+              z: p.toZ,
+              message: msg,
+            });
+            break;
+          }
+        }
+      }
     }
 
-    // 3. Verify CargoLifts have valid floor stops and landing elevations
+    // 3. Verify CargoLifts have valid floor stops, landing elevations, and terrain-anchored ground stops
     for (const lift of cargoLifts) {
       if (lift.stops.length < 2) {
         discrepancies.push(`CargoLift ${lift.id} has fewer than 2 floor stops`);
@@ -173,6 +211,22 @@ export class StructureReconciliationRegistry {
             discrepancies.push(
               `CargoLift ${lift.id} floor ${stop.label} elevationY=${stop.elevationY}m != surface elevationY=${surf.elevationY}m`
             );
+          }
+        } else {
+          const groundY = collisionWorld.getTerrainHeightOnly(lift.centerX, lift.centerZ);
+          const delta = Math.abs(stop.elevationY - groundY);
+          if (delta > 0.2) {
+            const msg = `CargoLift ${lift.id} ground stop ${stop.elevationY.toFixed(2)}m floats ${delta.toFixed(2)}m off terrain (${groundY.toFixed(2)}m)`;
+            discrepancies.push(msg);
+            traversalIntegrityFlags.push({
+              id: `lift_ground_${lift.id}`,
+              severity: 'ERROR',
+              code: 'FLOATING_LIFT_BASE',
+              x: lift.centerX,
+              y: stop.elevationY,
+              z: lift.centerZ,
+              message: msg,
+            });
           }
         }
       }
@@ -190,6 +244,102 @@ export class StructureReconciliationRegistry {
       }
     }
 
+    // 5. PHYS-10: Verify every ground-entry OrientedSlopeRegion is anchored within 0.18m of actual terrain
+    for (const slope of collisionWorld.getSlopes()) {
+      if (slope.id.endsWith('_flight2')) continue;
+      const startX = slope.centerX - slope.dirX * slope.halfLength;
+      const startZ = slope.centerZ - slope.dirZ * slope.halfLength;
+      const terrainY = collisionWorld.getTerrainHeightOnly(startX, startZ);
+      const gap = Math.abs(slope.startY - terrainY);
+      if (gap > 0.18) {
+        const msg = `Slope ${slope.id} entryY=${slope.startY.toFixed(2)}m differs from terrain ${terrainY.toFixed(2)}m by ${gap.toFixed(2)}m`;
+        discrepancies.push(msg);
+        traversalIntegrityFlags.push({
+          id: `floating_slope_${slope.id}`,
+          severity: 'ERROR',
+          code: 'FLOATING_ENTRY',
+          x: startX,
+          y: slope.startY,
+          z: startZ,
+          message: msg,
+        });
+      }
+    }
+
+    // 6. PHYS-10: Verify every switchback mid-landing has a registered physical support pillar collider
+    for (const box of staticBoxes) {
+      if (box.tag === 'stair_landing' && box.id.endsWith('_mid_landing')) {
+        const expectedPilId = box.id.replace(/_mid_landing$/, '_pil');
+        if (!staticBoxIds.has(expectedPilId)) {
+          const cx = (box.minX + box.maxX) * 0.5;
+          const cz = (box.minZ + box.maxZ) * 0.5;
+          const msg = `Mid-landing ${box.id} is missing solid support pillar collider ${expectedPilId}`;
+          discrepancies.push(msg);
+          traversalIntegrityFlags.push({
+            id: `missing_pil_${box.id}`,
+            severity: 'WARN',
+            code: 'MISSING_PILLAR_COLLIDER',
+            x: cx,
+            y: box.minY,
+            z: cz,
+            message: msg,
+          });
+        }
+      }
+    }
+
+    // 7. PHYS-10: Verify every registered ClimbableLadder is terrain-anchored and has a clear top exit
+    for (const ladder of collisionWorld.getLadders()) {
+      if (ladder.fromSurfaceId === 0) {
+        const terrainY = collisionWorld.getTerrainHeightOnly(
+          ladder.x + ladder.normalX * 0.45,
+          ladder.z + ladder.normalZ * 0.45
+        );
+        const gap = Math.abs(ladder.bottomY - terrainY);
+        if (gap > 0.25) {
+          const msg = `Ladder ${ladder.id} bottomY=${ladder.bottomY.toFixed(2)}m floats ${gap.toFixed(2)}m off terrain (${terrainY.toFixed(2)}m)`;
+          discrepancies.push(msg);
+          traversalIntegrityFlags.push({
+            id: `floating_ladder_${ladder.id}`,
+            severity: 'ERROR',
+            code: 'FLOATING_ENTRY',
+            x: ladder.x,
+            y: ladder.bottomY,
+            z: ladder.z,
+            message: msg,
+          });
+        }
+      }
+      const stepMinX = Math.min(ladder.x, ladder.topExitX) - 0.3;
+      const stepMaxX = Math.max(ladder.x, ladder.topExitX) + 0.3;
+      const stepMinZ = Math.min(ladder.z, ladder.topExitZ) - 0.3;
+      const stepMaxZ = Math.max(ladder.z, ladder.topExitZ) + 0.3;
+      for (const par of parapetBoxes) {
+        if (par.maxY <= ladder.topY + 0.1 || par.minY >= ladder.topY + 1.5) continue;
+        if (
+          par.maxX > stepMinX &&
+          par.minX < stepMaxX &&
+          par.maxZ > stepMinZ &&
+          par.minZ < stepMaxZ
+        ) {
+          const msg = `Ladder ${ladder.id} top exit (${ladder.topExitX.toFixed(1)}, ${ladder.topY.toFixed(1)}, ${ladder.topExitZ.toFixed(1)}) blocked by parapet ${par.id}`;
+          discrepancies.push(msg);
+          traversalIntegrityFlags.push({
+            id: `blocked_ladder_${ladder.id}`,
+            severity: 'ERROR',
+            code: 'BLOCKED_PARAPET_EXIT',
+            x: ladder.topExitX,
+            y: ladder.topY + 0.6,
+            z: ladder.topExitZ,
+            message: msg,
+          });
+          break;
+        }
+      }
+    }
+
+    collisionWorld.physicsWorld.setTraversalIntegrityFlags(traversalIntegrityFlags);
+
     return {
       missionId,
       valid: discrepancies.length === 0,
@@ -199,6 +349,7 @@ export class StructureReconciliationRegistry {
       totalCargoLifts: cargoLifts.length,
       watchtowerDeckElevationsVerifiedM,
       discrepancies,
+      traversalIntegrityFlags,
       records,
     };
   }

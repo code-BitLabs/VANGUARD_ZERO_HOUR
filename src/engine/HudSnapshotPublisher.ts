@@ -128,7 +128,16 @@ export class HudSnapshotPublisher {
         }
       }
     }
-    return liftPrompt;
+    if (liftPrompt) {
+      return liftPrompt;
+    }
+    if (player.isClimbingLadder) {
+      return '[E] Dismount Ladder';
+    }
+    if (player.canClimbLadder) {
+      return '[E] Climb Ladder';
+    }
+    return null;
   }
 
   private projectObjectiveStatuses(

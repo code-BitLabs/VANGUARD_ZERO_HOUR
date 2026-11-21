@@ -24,7 +24,8 @@ export type CollisionTag =
   | 'destructible'
   | 'vehicle'
   | 'enemy'
-  | 'player';
+  | 'player'
+  | 'ladder';
 
 export interface SpatialAABB {
   id: string;
@@ -64,6 +65,7 @@ export const COLLISION_LAYER = {
 export class SpatialHash {
   private cells = new Map<number, SpatialAABB[]>();
   private allBoxes = new Map<string, SpatialAABB>();
+  private boxCells = new Map<string, number[]>();
   private visitedStamp = new Map<string, number>();
   private stamp = 0;
 
@@ -76,12 +78,7 @@ export class SpatialHash {
 
   insert(box: SpatialAABB): void {
     if (this.allBoxes.has(box.id)) {
-      const existing = this.allBoxes.get(box.id)!;
-      if (existing !== box) {
-        this.remove(existing);
-      } else {
-        this.removeFromCells(box);
-      }
+      this.removeById(box.id);
     }
     this.allBoxes.set(box.id, box);
 
@@ -90,9 +87,11 @@ export class SpatialHash {
     const minCz = Math.floor(box.minZ / this.cellSize);
     const maxCz = Math.floor(box.maxZ / this.cellSize);
 
+    const occupiedKeys: number[] = [];
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cz = minCz; cz <= maxCz; cz++) {
         const key = this.hashCell(cx, cz);
+        occupiedKeys.push(key);
         let list = this.cells.get(key);
         if (!list) {
           list = [];
@@ -101,37 +100,66 @@ export class SpatialHash {
         list.push(box);
       }
     }
+    this.boxCells.set(box.id, occupiedKeys);
   }
 
-  private removeFromCells(box: SpatialAABB): void {
+  private removeById(id: string): void {
+    const existing = this.allBoxes.get(id);
+    const keys = this.boxCells.get(id);
+    if (keys && existing) {
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const list = this.cells.get(key);
+        if (!list) continue;
+        const idx = list.indexOf(existing);
+        if (idx !== -1) {
+          // Swap-remove in O(1) since broadphase cell order is irrelevant
+          const last = list.length - 1;
+          if (idx !== last) {
+            list[idx] = list[last];
+          }
+          list.pop();
+        }
+        if (list.length === 0) {
+          this.cells.delete(key);
+        }
+      }
+    }
+    this.boxCells.delete(id);
+    this.allBoxes.delete(id);
+  }
+
+  remove(box: SpatialAABB): void {
+    this.removeById(box.id);
+  }
+
+  update(box: SpatialAABB): void {
+    // O(k) local-cell update using tracked reverse index (never sweeps all map cells)
     const minCx = Math.floor(box.minX / this.cellSize);
     const maxCx = Math.floor(box.maxX / this.cellSize);
     const minCz = Math.floor(box.minZ / this.cellSize);
     const maxCz = Math.floor(box.maxZ / this.cellSize);
 
-    for (let cx = minCx; cx <= maxCx; cx++) {
-      for (let cz = minCz; cz <= maxCz; cz++) {
-        const key = this.hashCell(cx, cz);
-        const list = this.cells.get(key);
-        if (!list) continue;
-        const idx = list.indexOf(box);
-        if (idx !== -1) list.splice(idx, 1);
+    const existing = this.allBoxes.get(box.id);
+    const prevKeys = this.boxCells.get(box.id);
+    if (existing === box && prevKeys) {
+      const expectedCount = (maxCx - minCx + 1) * (maxCz - minCz + 1);
+      if (expectedCount === prevKeys.length) {
+        let same = true;
+        let idx = 0;
+        for (let cx = minCx; cx <= maxCx && same; cx++) {
+          for (let cz = minCz; cz <= maxCz; cz++) {
+            if (prevKeys[idx++] !== this.hashCell(cx, cz)) {
+              same = false;
+              break;
+            }
+          }
+        }
+        if (same) return;
       }
     }
-  }
 
-  remove(box: SpatialAABB): void {
-    this.removeFromCells(box);
-    this.allBoxes.delete(box.id);
-  }
-
-  update(box: SpatialAABB): void {
-    // Since minX/maxX may have changed since insertion, sweep any cell containing box if bounds shifted
-    for (const list of this.cells.values()) {
-      const idx = list.indexOf(box);
-      if (idx !== -1) list.splice(idx, 1);
-    }
-    this.allBoxes.delete(box.id);
+    this.removeById(box.id);
     this.insert(box);
   }
 
@@ -188,6 +216,7 @@ export class SpatialHash {
   clear(): void {
     this.cells.clear();
     this.allBoxes.clear();
+    this.boxCells.clear();
     this.visitedStamp.clear();
     this.stamp = 0;
   }

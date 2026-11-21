@@ -73,7 +73,7 @@ export class GameLoop {
         if (this.running) {
           this.rafId = requestAnimationFrame(this.tick);
         }
-      }, 4);
+      }, 28);
     } else {
       this.rafId = requestAnimationFrame(this.tick);
     }
@@ -98,40 +98,42 @@ export class GameLoop {
     const rawDt = Math.min(Math.max((nowMs - this.lastTimeMs) * 0.001, 0), this.maxRawDt);
     this.lastTimeMs = nowMs;
 
-    if (!this.paused) {
-      this.callbacks.sampleInput();
+    try {
+      if (!this.paused) {
+        this.callbacks.sampleInput();
 
-      this.accumulator += rawDt;
-      let substeps = 0;
-      while (this.accumulator >= this.fixedDt && substeps < this.maxSubsteps) {
-        this.callbacks.fixedStep(this.fixedDt);
-        this.accumulator -= this.fixedDt;
-        substeps++;
+        this.accumulator += rawDt;
+        let substeps = 0;
+        while (this.accumulator >= this.fixedDt && substeps < this.maxSubsteps) {
+          this.callbacks.fixedStep(this.fixedDt);
+          this.accumulator -= this.fixedDt;
+          substeps++;
+        }
+        if (substeps === this.maxSubsteps) {
+          this.accumulator = 0;
+        }
+
+        this.callbacks.scheduleAI(rawDt);
+
+        const alpha = this.accumulator / this.fixedDt;
+        this.callbacks.updateAnimationAndVfx(rawDt, alpha);
+        this.callbacks.updateAudio(rawDt);
+
+        this.uiAccumulator += rawDt;
+        if (this.uiAccumulator >= this.uiInterval) {
+          this.uiAccumulator = 0;
+          this.callbacks.publishUiSnapshot();
+        }
       }
-      if (substeps === this.maxSubsteps) {
-        this.accumulator = 0;
+
+      this.callbacks.render(rawDt);
+
+      const elapsedMs = performance.now() - frameStart;
+      this.callbacks.onFrameMeasured(elapsedMs);
+    } finally {
+      if (this.softwareGlPacing && this.running) {
+        this.scheduleNext();
       }
-
-      this.callbacks.scheduleAI(rawDt);
-
-      const alpha = this.accumulator / this.fixedDt;
-      this.callbacks.updateAnimationAndVfx(rawDt, alpha);
-      this.callbacks.updateAudio(rawDt);
-
-      this.uiAccumulator += rawDt;
-      if (this.uiAccumulator >= this.uiInterval) {
-        this.uiAccumulator = 0;
-        this.callbacks.publishUiSnapshot();
-      }
-    }
-
-    this.callbacks.render(rawDt);
-
-    const elapsedMs = performance.now() - frameStart;
-    this.callbacks.onFrameMeasured(elapsedMs);
-
-    if (this.softwareGlPacing) {
-      this.scheduleNext();
     }
   };
 }

@@ -13,7 +13,7 @@ interface TacticalMiniMapProps {
   compactHud: boolean;
 }
 
-export function TacticalMiniMap({
+export const TacticalMiniMap = React.memo(function TacticalMiniMap({
   blips,
   playerX,
   playerZ,
@@ -24,6 +24,8 @@ export function TacticalMiniMap({
   threatColor,
   compactHud,
 }: TacticalMiniMapProps) {
+  const cos = Math.cos(playerYaw);
+  const sin = Math.sin(playerYaw);
   return (
     <div
       data-testid="hud-radar-minimap"
@@ -40,8 +42,6 @@ export function TacticalMiniMap({
       {blips.slice(0, 28).map((b) => {
         const dx = b.x - playerX;
         const dz = b.z - playerZ;
-        const cos = Math.cos(playerYaw);
-        const sin = Math.sin(playerYaw);
         const rx = dx * cos - dz * sin;
         const rz = dx * sin + dz * cos;
         const px = Math.max(4, Math.min(radarSizePx - 4, radarCenter + (rx / 95) * radarRadius));
@@ -98,4 +98,4 @@ export function TacticalMiniMap({
       })}
     </div>
   );
-}
+});

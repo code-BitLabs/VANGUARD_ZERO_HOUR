@@ -3,48 +3,81 @@ import { useStore } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import {
   AccessibilitySettings,
+  AccessibilitySettingsSchema,
+  applyBindingWithSwap,
   cloneVehicleControlLayoutMap,
   ControlBindings,
   DEFAULT_VEHICLE_CONTROL_MAP,
   DeveloperSettings,
+  DisplaySettings,
+  DisplaySettingsSchema,
+  GameplaySettings,
+  GameplaySettingsSchema,
   GraphicsSettings,
+  GraphicsSettingsSchema,
+  HudSettings,
+  HudSettingsSchema,
   InputSettings,
+  InputSettingsSchema,
   LEFT_HANDED_VEHICLE_CONTROL_MAP,
+  QualityPresetProfile,
   SettingsBundle,
   SettingsBundleSchema,
+  SettingsCategoryId,
 } from '@/src/schemas/settings.schema';
 import { SettingsManager } from '@/src/storage/SettingsManager';
 
 export interface SettingsStoreState {
+  display: DisplaySettings;
   graphics: GraphicsSettings;
   input: InputSettings;
+  gameplay: GameplaySettings;
+  hud: HudSettings;
   accessibility: AccessibilitySettings;
   developer: DeveloperSettings;
+  updateDisplay: (patch: Partial<DisplaySettings>) => void;
   updateGraphics: (patch: Partial<GraphicsSettings>, options?: { preserveAutoMode?: boolean }) => void;
+  applyQualityProfile: (profile: QualityPresetProfile) => void;
   applyAutoDetectedGraphics: (patch: Partial<GraphicsSettings>) => void;
   updateInput: (patch: Partial<InputSettings>) => void;
-  updateBinding: (action: keyof ControlBindings, keyCode: string) => void;
+  updateBinding: (
+    action: keyof ControlBindings,
+    keyCode: string,
+    options?: { swapOnConflict?: boolean }
+  ) => { swappedWith: keyof ControlBindings | null };
+  updateGameplay: (patch: Partial<GameplaySettings>) => void;
+  updateHud: (patch: Partial<HudSettings>) => void;
   updateAccessibility: (patch: Partial<AccessibilitySettings>) => void;
   updateDeveloper: (patch: Partial<DeveloperSettings>) => void;
   applyFullSettings: (
     bundle: Pick<SettingsBundle, 'graphics' | 'input' | 'accessibility'> & {
+      display?: DisplaySettings;
+      gameplay?: GameplaySettings;
+      hud?: HudSettings;
       developer?: DeveloperSettings;
     }
   ) => void;
+  resetCategory: (category: SettingsCategoryId) => void;
   resetDefaults: () => void;
 }
 
 const initial = SettingsManager.load();
 
 function persistCurrent(
-  state: Pick<SettingsStoreState, 'graphics' | 'input' | 'accessibility' | 'developer'>
+  state: Pick<
+    SettingsStoreState,
+    'display' | 'graphics' | 'input' | 'gameplay' | 'hud' | 'accessibility' | 'developer'
+  >
 ) {
   const current = SettingsManager.load();
   SettingsManager.save({
-    version: 1,
+    version: 2,
+    display: state.display,
     audio: current.audio,
     graphics: state.graphics,
     input: state.input,
+    gameplay: state.gameplay,
+    hud: state.hud,
     accessibility: state.accessibility,
     developer: state.developer,
   });
@@ -53,6 +86,15 @@ function persistCurrent(
 const MANUAL_GRAPHICS_OVERRIDE_KEYS: Array<keyof GraphicsSettings> = [
   'quality',
   'shadowsEnabled',
+  'csmCascades',
+  'shadowMapSize',
+  'ambientOcclusion',
+  'volumetricFog',
+  'wetReflections',
+  'decalBudget',
+  'foliageDensity',
+  'colorGrading',
+  'maxDpr',
   'bloomEnabled',
   'renderScale',
   'textureQuality',
@@ -62,56 +104,191 @@ const MANUAL_GRAPHICS_OVERRIDE_KEYS: Array<keyof GraphicsSettings> = [
   'fpsCap',
 ];
 
+export const QUALITY_PROFILE_PRESETS: Record<
+  Exclude<QualityPresetProfile, 'manual' | 'custom'>,
+  Partial<GraphicsSettings>
+> = {
+  auto_adaptive: {
+    qualityMode: 'auto',
+    qualityProfile: 'auto_adaptive',
+    adaptiveGovernor: true,
+    quality: 'high',
+    shadowsEnabled: true,
+    csmCascades: 3,
+    shadowMapSize: 1024,
+    ambientOcclusion: true,
+    volumetricFog: true,
+    wetReflections: true,
+    decalBudget: 128,
+    foliageDensity: 'high',
+    colorGrading: true,
+    bloomEnabled: true,
+    renderScale: 1.0,
+    maxDpr: 1.75,
+    textureQuality: 'high',
+    effectsQuality: 'high',
+    antialiasing: true,
+    drawDistance: 'auto',
+  },
+  cinematic: {
+    qualityMode: 'manual',
+    qualityProfile: 'cinematic',
+    adaptiveGovernor: false,
+    quality: 'ultra',
+    shadowsEnabled: true,
+    csmCascades: 4,
+    shadowMapSize: 2048,
+    ambientOcclusion: true,
+    volumetricFog: true,
+    wetReflections: true,
+    decalBudget: 224,
+    foliageDensity: 'high',
+    colorGrading: true,
+    bloomEnabled: true,
+    renderScale: 1.0,
+    maxDpr: 2.0,
+    textureQuality: 'high',
+    effectsQuality: 'high',
+    antialiasing: true,
+    drawDistance: 'ultra',
+  },
+  balanced: {
+    qualityMode: 'manual',
+    qualityProfile: 'balanced',
+    adaptiveGovernor: false,
+    quality: 'high',
+    shadowsEnabled: true,
+    csmCascades: 3,
+    shadowMapSize: 1024,
+    ambientOcclusion: true,
+    volumetricFog: true,
+    wetReflections: true,
+    decalBudget: 128,
+    foliageDensity: 'medium',
+    colorGrading: true,
+    bloomEnabled: true,
+    renderScale: 0.95,
+    maxDpr: 1.5,
+    textureQuality: 'high',
+    effectsQuality: 'medium',
+    antialiasing: true,
+    drawDistance: 'long',
+  },
+  performance: {
+    qualityMode: 'manual',
+    qualityProfile: 'performance',
+    adaptiveGovernor: false,
+    quality: 'low',
+    shadowsEnabled: true,
+    csmCascades: 1,
+    shadowMapSize: 512,
+    ambientOcclusion: false,
+    volumetricFog: false,
+    wetReflections: false,
+    decalBudget: 48,
+    foliageDensity: 'low',
+    colorGrading: true,
+    bloomEnabled: false,
+    renderScale: 0.8,
+    maxDpr: 1.0,
+    textureQuality: 'low',
+    effectsQuality: 'low',
+    antialiasing: false,
+    drawDistance: 'short',
+  },
+};
+
 export const settingsStore = createStore<SettingsStoreState>()(
   subscribeWithSelector((set, get) => ({
+    display: initial.display,
     graphics: initial.graphics,
     input: initial.input,
+    gameplay: initial.gameplay,
+    hud: initial.hud,
     accessibility: initial.accessibility,
     developer: initial.developer,
+
+    updateDisplay: (patch) => {
+      const nextDisplay = { ...get().display, ...patch };
+      const nextAccessibility =
+        patch.uiScale !== undefined
+          ? { ...get().accessibility, uiScale: patch.uiScale }
+          : get().accessibility;
+      set({ display: nextDisplay, accessibility: nextAccessibility });
+      persistCurrent({
+        ...get(),
+        display: nextDisplay,
+        accessibility: nextAccessibility,
+      });
+    },
+
     updateGraphics: (patch, options) => {
       const current = get().graphics;
       const setsManualOverride =
         !options?.preserveAutoMode &&
         patch.qualityMode === undefined &&
+        patch.qualityProfile === undefined &&
         MANUAL_GRAPHICS_OVERRIDE_KEYS.some((k) => patch[k] !== undefined);
+      const nextQualityMode =
+        patch.qualityMode !== undefined
+          ? patch.qualityMode
+          : setsManualOverride
+            ? 'manual'
+            : current.qualityMode;
+      const nextQualityProfile =
+        patch.qualityProfile !== undefined
+          ? patch.qualityProfile
+          : setsManualOverride
+            ? 'custom'
+            : current.qualityProfile;
       const next: GraphicsSettings = {
         ...current,
         ...patch,
-        qualityMode:
-          patch.qualityMode !== undefined
-            ? patch.qualityMode
-            : setsManualOverride
-              ? 'manual'
-              : current.qualityMode,
+        qualityMode: nextQualityMode,
+        qualityProfile: nextQualityProfile,
       };
       set({ graphics: next });
-      persistCurrent({
-        graphics: next,
-        input: get().input,
-        accessibility: get().accessibility,
-        developer: get().developer,
-      });
+      persistCurrent({ ...get(), graphics: next });
     },
+
+    applyQualityProfile: (profile) => {
+      const current = get().graphics;
+      if (profile === 'manual' || profile === 'custom') {
+        const next: GraphicsSettings = {
+          ...current,
+          qualityMode: 'manual',
+          qualityProfile: profile,
+          adaptiveGovernor: false,
+        };
+        set({ graphics: next });
+        persistCurrent({ ...get(), graphics: next });
+        return;
+      }
+      const preset = QUALITY_PROFILE_PRESETS[profile];
+      const next: GraphicsSettings = {
+        ...current,
+        ...preset,
+      };
+      set({ graphics: next });
+      persistCurrent({ ...get(), graphics: next });
+    },
+
     applyAutoDetectedGraphics: (patch) => {
       const next: GraphicsSettings = {
         ...get().graphics,
         ...patch,
         qualityMode: 'auto',
+        qualityProfile: 'auto_adaptive',
         autoDetectedPresetApplied: true,
       };
       set({ graphics: next });
-      persistCurrent({
-        graphics: next,
-        input: get().input,
-        accessibility: get().accessibility,
-        developer: get().developer,
-      });
+      persistCurrent({ ...get(), graphics: next });
     },
+
     updateInput: (patch) => {
       const prev = get().input;
       const next: InputSettings = { ...prev, ...patch };
 
-      // When switching to Two-Finger or Three-Finger profile, apply recommended Left/Right Fire defaults unless explicitly specified
       if (patch.touchControlProfile === 'two_finger') {
         if (patch.leftFireEnabled === undefined) next.leftFireEnabled = false;
         if (patch.rightFireEnabled === undefined) next.rightFireEnabled = true;
@@ -128,7 +305,6 @@ export const settingsStore = createStore<SettingsStoreState>()(
         );
       }
 
-      // Synchronize legacy per-profile fire/ads positions into touchCustomLayout so all custom edits and presets stay coherent
       const baseCustom = { ...(prev.touchCustomLayout ?? {}) };
       if (patch.touchFirePosTwoFinger) {
         baseCustom.fire_right = {
@@ -162,7 +338,6 @@ export const settingsStore = createStore<SettingsStoreState>()(
         next.touchCustomLayout = baseCustom as InputSettings['touchCustomLayout'];
       }
 
-      // Safety invariant: always keep at least one Fire button active for normal gameplay
       if (!next.leftFireEnabled && !next.rightFireEnabled) {
         if (patch.rightFireEnabled === false && prev.rightFireEnabled) {
           next.leftFireEnabled = true;
@@ -172,64 +347,161 @@ export const settingsStore = createStore<SettingsStoreState>()(
       }
 
       set({ input: next });
-      persistCurrent({
-        graphics: get().graphics,
-        input: next,
-        accessibility: get().accessibility,
-        developer: get().developer,
-      });
+      persistCurrent({ ...get(), input: next });
     },
-    updateBinding: (action, keyCode) => {
-      const nextBindings = { ...get().input.bindings, [action]: keyCode };
-      const nextInput = { ...get().input, bindings: nextBindings };
+
+    updateBinding: (action, keyCode, options) => {
+      const swapOnConflict = options?.swapOnConflict ?? true;
+      const result = applyBindingWithSwap(get().input.bindings, action, keyCode, swapOnConflict);
+      const nextInput = { ...get().input, bindings: result.bindings };
       set({ input: nextInput });
+      persistCurrent({ ...get(), input: nextInput });
+      return { swappedWith: result.swappedWith };
+    },
+
+    updateGameplay: (patch) => {
+      const nextGameplay = { ...get().gameplay, ...patch };
+      const nextAccessibility =
+        patch.tacticalGuidanceHints !== undefined
+          ? { ...get().accessibility, tacticalHints: patch.tacticalGuidanceHints }
+          : get().accessibility;
+      set({ gameplay: nextGameplay, accessibility: nextAccessibility });
       persistCurrent({
-        graphics: get().graphics,
-        input: nextInput,
-        accessibility: get().accessibility,
-        developer: get().developer,
+        ...get(),
+        gameplay: nextGameplay,
+        accessibility: nextAccessibility,
       });
     },
+
+    updateHud: (patch) => {
+      const nextHud = { ...get().hud, ...patch };
+      const nextAccessibility: AccessibilitySettings = {
+        ...get().accessibility,
+        ...(patch.opacity !== undefined ? { hudOpacity: patch.opacity } : {}),
+        ...(patch.showRadar !== undefined ? { showRadar: patch.showRadar } : {}),
+        ...(patch.showCompass !== undefined ? { showCompass: patch.showCompass } : {}),
+        ...(patch.preset !== undefined
+          ? {
+              hudMode:
+                patch.preset === 'immersive'
+                  ? 'minimal'
+                  : patch.preset === 'full_tactical'
+                    ? 'expanded'
+                    : 'adaptive',
+            }
+          : {}),
+      };
+      set({ hud: nextHud, accessibility: nextAccessibility });
+      persistCurrent({
+        ...get(),
+        hud: nextHud,
+        accessibility: nextAccessibility,
+      });
+    },
+
     updateAccessibility: (patch) => {
       const next = { ...get().accessibility, ...patch };
-      set({ accessibility: next });
-      persistCurrent({
-        graphics: get().graphics,
-        input: get().input,
+      const nextDisplay =
+        patch.uiScale !== undefined ? { ...get().display, uiScale: patch.uiScale } : get().display;
+      const nextHud: HudSettings = {
+        ...get().hud,
+        ...(patch.hudOpacity !== undefined ? { opacity: patch.hudOpacity } : {}),
+        ...(patch.showRadar !== undefined ? { showRadar: patch.showRadar } : {}),
+        ...(patch.showCompass !== undefined ? { showCompass: patch.showCompass } : {}),
+      };
+      const nextGameplay: GameplaySettings =
+        patch.tacticalHints !== undefined
+          ? { ...get().gameplay, tacticalGuidanceHints: patch.tacticalHints }
+          : get().gameplay;
+      set({
         accessibility: next,
-        developer: get().developer,
+        display: nextDisplay,
+        hud: nextHud,
+        gameplay: nextGameplay,
+      });
+      persistCurrent({
+        ...get(),
+        accessibility: next,
+        display: nextDisplay,
+        hud: nextHud,
+        gameplay: nextGameplay,
       });
     },
+
     updateDeveloper: (patch) => {
       const next = { ...get().developer, ...patch };
       set({ developer: next });
-      persistCurrent({
-        graphics: get().graphics,
-        input: get().input,
-        accessibility: get().accessibility,
-        developer: next,
-      });
+      persistCurrent({ ...get(), developer: next });
     },
+
     applyFullSettings: (bundle) => {
+      const nextDisplay = bundle.display ?? get().display;
+      const nextGameplay = bundle.gameplay ?? get().gameplay;
+      const nextHud = bundle.hud ?? get().hud;
       const nextDev = bundle.developer ?? get().developer;
       set({
+        display: nextDisplay,
         graphics: bundle.graphics,
         input: bundle.input,
+        gameplay: nextGameplay,
+        hud: nextHud,
         accessibility: bundle.accessibility,
         developer: nextDev,
       });
       persistCurrent({
+        display: nextDisplay,
         graphics: bundle.graphics,
         input: bundle.input,
+        gameplay: nextGameplay,
+        hud: nextHud,
         accessibility: bundle.accessibility,
         developer: nextDev,
       });
     },
+
+    resetCategory: (category) => {
+      const state = get();
+      if (category === 'display') {
+        const display = DisplaySettingsSchema.parse({});
+        set({ display, accessibility: { ...state.accessibility, uiScale: display.uiScale } });
+      } else if (category === 'graphics') {
+        set({ graphics: GraphicsSettingsSchema.parse({}) });
+      } else if (category === 'controls') {
+        set({ input: InputSettingsSchema.parse({}) });
+      } else if (category === 'gameplay') {
+        const gameplay = GameplaySettingsSchema.parse({});
+        set({
+          gameplay,
+          accessibility: {
+            ...state.accessibility,
+            tacticalHints: gameplay.tacticalGuidanceHints,
+          },
+        });
+      } else if (category === 'hud') {
+        const hud = HudSettingsSchema.parse({});
+        set({
+          hud,
+          accessibility: {
+            ...state.accessibility,
+            hudOpacity: hud.opacity,
+            showRadar: hud.showRadar,
+            showCompass: hud.showCompass,
+          },
+        });
+      } else if (category === 'accessibility') {
+        set({ accessibility: AccessibilitySettingsSchema.parse({}) });
+      }
+      persistCurrent(get());
+    },
+
     resetDefaults: () => {
       const def = SettingsBundleSchema.parse({});
       set({
+        display: def.display,
         graphics: def.graphics,
         input: def.input,
+        gameplay: def.gameplay,
+        hud: def.hud,
         accessibility: def.accessibility,
         developer: def.developer,
       });

@@ -64,7 +64,7 @@ export function HowToPlayModal({ onBack }: { onBack: () => void }) {
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-3">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500">
-              Field Manual // Tier 3 Tactical Mechanics Reference
+              Field Manual // Tactical Mechanics Reference
             </p>
             <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
               Combat Controls &amp; Tactical Systems

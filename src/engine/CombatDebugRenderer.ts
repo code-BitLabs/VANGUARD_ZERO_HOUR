@@ -11,7 +11,21 @@ import type { CameraSpringDebugRay } from '@/src/gameplay/VehicleCameraRig';
 
 const MAX_DEBUG_UNITS = 36;
 const MAX_LINE_VERTICES = 1024;
-const MAX_COLLIDER_VERTICES = 4096;
+const MAX_COLLIDER_VERTICES = 32768;
+const MAX_TRAVERSAL_VERTICES = 4096;
+
+export interface PlayerPhysicsDebugState {
+  radius: number;
+  height: number;
+  velocityX: number;
+  velocityY: number;
+  velocityZ: number;
+  groundNormalX: number;
+  groundNormalY: number;
+  groundNormalZ: number;
+  grounded: boolean;
+  climbing: boolean;
+}
 
 export class CombatDebugRenderer {
   private readonly root = new THREE.Group();
@@ -24,6 +38,10 @@ export class CombatDebugRenderer {
   private readonly flightVecGeo: THREE.BufferGeometry;
   private readonly blastRingGeo: THREE.BufferGeometry;
   private readonly colliderWireGeo: THREE.BufferGeometry;
+  private readonly slopeWireGeo: THREE.BufferGeometry;
+  private readonly ladderWireGeo: THREE.BufferGeometry;
+  private readonly playerCapsuleGeo: THREE.BufferGeometry;
+  private readonly integrityFlagGeo: THREE.BufferGeometry;
   private readonly contactNormalGeo: THREE.BufferGeometry;
   private readonly blockedMoveGeo: THREE.BufferGeometry;
   private readonly cameraRayGeo: THREE.BufferGeometry;
@@ -51,6 +69,10 @@ export class CombatDebugRenderer {
     this.flightVecGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.blastRingGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.colliderWireGeo = this.createDynamicLineGeo(MAX_COLLIDER_VERTICES);
+    this.slopeWireGeo = this.createDynamicLineGeo(MAX_TRAVERSAL_VERTICES);
+    this.ladderWireGeo = this.createDynamicLineGeo(MAX_TRAVERSAL_VERTICES);
+    this.playerCapsuleGeo = this.createDynamicLineGeo(512);
+    this.integrityFlagGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.contactNormalGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.blockedMoveGeo = this.createDynamicLineGeo(MAX_LINE_VERTICES);
     this.cameraRayGeo = this.createDynamicLineGeo(16);
@@ -63,7 +85,11 @@ export class CombatDebugRenderer {
     const shotCoverMat = new THREE.LineBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.8 });
     const flightVecMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.88 });
     const blastRingMat = new THREE.LineBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.65 });
-    const colliderWireMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.55 });
+    const colliderWireMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.48 });
+    const slopeWireMat = new THREE.LineBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.92 });
+    const ladderWireMat = new THREE.LineBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.96 });
+    const playerCapsuleMat = new THREE.LineBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.95 });
+    const integrityFlagMat = new THREE.LineBasicMaterial({ color: 0xff1e42, transparent: true, opacity: 0.98 });
     const contactNormalMat = new THREE.LineBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.95 });
     const blockedMoveMat = new THREE.LineBasicMaterial({ color: 0xfb7185, transparent: true, opacity: 0.95 });
     const cameraRayMat = new THREE.LineBasicMaterial({ color: 0xfacc15, transparent: true, opacity: 0.95 });
@@ -78,6 +104,10 @@ export class CombatDebugRenderer {
       flightVecMat,
       blastRingMat,
       colliderWireMat,
+      slopeWireMat,
+      ladderWireMat,
+      playerCapsuleMat,
+      integrityFlagMat,
       contactNormalMat,
       blockedMoveMat,
       cameraRayMat,
@@ -92,6 +122,10 @@ export class CombatDebugRenderer {
     this.root.add(new THREE.LineSegments(this.flightVecGeo, flightVecMat));
     this.root.add(new THREE.LineSegments(this.blastRingGeo, blastRingMat));
     this.root.add(new THREE.LineSegments(this.colliderWireGeo, colliderWireMat));
+    this.root.add(new THREE.LineSegments(this.slopeWireGeo, slopeWireMat));
+    this.root.add(new THREE.LineSegments(this.ladderWireGeo, ladderWireMat));
+    this.root.add(new THREE.LineSegments(this.playerCapsuleGeo, playerCapsuleMat));
+    this.root.add(new THREE.LineSegments(this.integrityFlagGeo, integrityFlagMat));
     this.root.add(new THREE.LineSegments(this.contactNormalGeo, contactNormalMat));
     this.root.add(new THREE.LineSegments(this.blockedMoveGeo, blockedMoveMat));
     this.root.add(new THREE.LineSegments(this.cameraRayGeo, cameraRayMat));
@@ -154,7 +188,8 @@ export class CombatDebugRenderer {
     recentExplosions: ExplosionTelemetryRecord[] = [],
     showPhysicsColliders = false,
     physicsSnap?: PhysicsWorldDiagnosticsSnapshot,
-    cameraSpringRay?: CameraSpringDebugRay
+    cameraSpringRay?: CameraSpringDebugRay,
+    playerDebug?: PlayerPhysicsDebugState
   ): void {
     if (!enabled && !showFlightPaths && !showPhysicsColliders) {
       if (this.root.visible) {
@@ -173,6 +208,10 @@ export class CombatDebugRenderer {
     const flightVerts: number[] = [];
     const blastVerts: number[] = [];
     const colliderVerts: number[] = [];
+    const slopeVerts: number[] = [];
+    const ladderVerts: number[] = [];
+    const playerCapsuleVerts: number[] = [];
+    const integrityFlagVerts: number[] = [];
     const contactNormalVerts: number[] = [];
     const blockedMoveVerts: number[] = [];
     const cameraRayVerts: number[] = [];
@@ -308,9 +347,10 @@ export class CombatDebugRenderer {
       }
     }
 
-    // 7. 3D Physics Collider Wireframes, Contact Surface Normals, Camera Spring Ray & Blocked Movement Vectors
+    // 7. 3D Physics Collider Wireframes, Oriented Slopes, Ladders, Player Capsule, Integrity Beacons, Contact Normals & Camera Ray
     if (showPhysicsColliders && physicsSnap) {
-      for (const box of physicsSnap.staticColliderBoxes.slice(0, 140)) {
+      for (const box of physicsSnap.staticColliderBoxes) {
+        if (colliderVerts.length + 72 > MAX_COLLIDER_VERTICES * 3) break;
         const y0 = box.minY;
         const y1 = box.maxY;
         if (
@@ -327,7 +367,6 @@ export class CombatDebugRenderer {
           const hx = box.halfExtX;
           const hz = box.halfExtZ;
 
-          // Local corners transformed by Y-axis rotation: worldX = cx + lx*cos + lz*sin, worldZ = cz - lx*sin + lz*cos
           const xA = cx - hx * cos - hz * sin;
           const zA = cz + hx * sin - hz * cos;
           const xB = cx + hx * cos - hz * sin;
@@ -357,21 +396,132 @@ export class CombatDebugRenderer {
           const x1 = box.maxX;
           const z1 = box.maxZ;
           colliderVerts.push(
-            // Bottom face
             x0, y0, z0, x1, y0, z0,
             x1, y0, z0, x1, y0, z1,
             x1, y0, z1, x0, y0, z1,
             x0, y0, z1, x0, y0, z0,
-            // Top face
             x0, y1, z0, x1, y1, z0,
             x1, y1, z0, x1, y1, z1,
             x1, y1, z1, x0, y1, z1,
             x0, y1, z1, x0, y1, z0,
-            // Vertical pillars
             x0, y0, z0, x0, y1, z0,
             x1, y0, z0, x1, y1, z0,
             x1, y0, z1, x1, y1, z1,
             x0, y0, z1, x0, y1, z1
+          );
+        }
+      }
+
+      // 7b. OrientedSlopeRegion tilted deck & underside prism wireframes (Green)
+      if (physicsSnap.slopeWireframes) {
+        for (const s of physicsSnap.slopeWireframes) {
+          const startX = s.centerX - s.dirX * s.halfLength;
+          const startZ = s.centerZ - s.dirZ * s.halfLength;
+          const endX = s.centerX + s.dirX * s.halfLength;
+          const endZ = s.centerZ + s.dirZ * s.halfLength;
+          const rx = -s.dirZ * s.halfWidth;
+          const rz = s.dirX * s.halfWidth;
+
+          // 4 top corners
+          const sLx = startX - rx, sLz = startZ - rz;
+          const sRx = startX + rx, sRz = startZ + rz;
+          const eRx = endX + rx, eRz = endZ + rz;
+          const eLx = endX - rx, eLz = endZ - rz;
+          const syT = s.startY, syB = s.startY - s.thickness;
+          const eyT = s.endY, eyB = s.endY - s.thickness;
+
+          slopeVerts.push(
+            // Top walkable deck
+            sLx, syT, sLz, sRx, syT, sRz,
+            sRx, syT, sRz, eRx, eyT, eRz,
+            eRx, eyT, eRz, eLx, eyT, eLz,
+            eLx, eyT, eLz, sLx, syT, sLz,
+            // Underside slab plane
+            sLx, syB, sLz, sRx, syB, sRz,
+            sRx, syB, sRz, eRx, eyB, eRz,
+            eRx, eyB, eRz, eLx, eyB, eLz,
+            eLx, eyB, eLz, sLx, syB, sLz,
+            // Vertical corner edges
+            sLx, syB, sLz, sLx, syT, sLz,
+            sRx, syB, sRz, sRx, syT, sRz,
+            eRx, eyB, eRz, eRx, eyT, eRz,
+            eLx, eyB, eLz, eLx, eyT, eLz
+          );
+        }
+      }
+
+      // 7c. ClimbableLadder volumes & top step-over exit markers (Bright Cyan)
+      if (physicsSnap.ladderWireframes) {
+        for (const l of physicsSnap.ladderWireframes) {
+          const halfW = l.width * 0.5;
+          const tx = -l.normalZ * halfW;
+          const tz = l.normalX * halfW;
+          const lx = l.x - tx, lz = l.z - tz;
+          const rx = l.x + tx, rz = l.z + tz;
+          ladderVerts.push(
+            // Left and right rails
+            lx, l.bottomY, lz, lx, l.topY + 0.9, lz,
+            rx, l.bottomY, rz, rx, l.topY + 0.9, rz,
+            // Bottom and top bars
+            lx, l.bottomY, lz, rx, l.bottomY, rz,
+            lx, l.topY, lz, rx, l.topY, rz,
+            // Top exit vector + cross marker
+            l.x, l.topY + 0.1, l.z, l.topExitX, l.topY + 0.1, l.topExitZ,
+            l.topExitX - 0.35, l.topY + 0.1, l.topExitZ, l.topExitX + 0.35, l.topY + 0.1, l.topExitZ,
+            l.topExitX, l.topY + 0.1, l.topExitZ - 0.35, l.topExitX, l.topY + 0.1, l.topExitZ + 0.35
+          );
+        }
+      }
+
+      // 7d. Player collision capsule wireframe + velocity vector + ground/slope normal
+      if (playerDebug) {
+        const px = playerPos.x;
+        const py = playerPos.y;
+        const pz = playerPos.z;
+        const r = playerDebug.radius;
+        const h = playerDebug.height;
+        const segs = 12;
+        for (let i = 0; i < segs; i++) {
+          const a0 = (i / segs) * Math.PI * 2;
+          const a1 = ((i + 1) / segs) * Math.PI * 2;
+          const c0 = Math.cos(a0) * r, s0 = Math.sin(a0) * r;
+          const c1 = Math.cos(a1) * r, s1 = Math.sin(a1) * r;
+          playerCapsuleVerts.push(
+            px + c0, py + 0.04, pz + s0, px + c1, py + 0.04, pz + s1,
+            px + c0, py + h, pz + s0, px + c1, py + h, pz + s1
+          );
+          if (i % 3 === 0) {
+            playerCapsuleVerts.push(px + c0, py + 0.04, pz + s0, px + c0, py + h, pz + s0);
+          }
+        }
+        // Velocity vector from torso
+        playerCapsuleVerts.push(
+          px, py + h * 0.5, pz,
+          px + playerDebug.velocityX * 0.35,
+          py + h * 0.5 + playerDebug.velocityY * 0.35,
+          pz + playerDebug.velocityZ * 0.35
+        );
+        // Active ground/slope normal from feet
+        contactNormalVerts.push(
+          px, py + 0.05, pz,
+          px + playerDebug.groundNormalX * 1.4,
+          py + 0.05 + playerDebug.groundNormalY * 1.4,
+          pz + playerDebug.groundNormalZ * 1.4
+        );
+      }
+
+      // 7e. Structure Reconciliation / Traversal Integrity Violation Beacons (Crimson Red)
+      if (physicsSnap.traversalIntegrityFlags) {
+        for (const f of physicsSnap.traversalIntegrityFlags) {
+          const s = 0.65;
+          integrityFlagVerts.push(
+            f.x, f.y, f.z, f.x, f.y + 4.0, f.z,
+            f.x - s, f.y + 0.8, f.z, f.x + s, f.y + 0.8, f.z,
+            f.x, f.y + 0.8, f.z - s, f.x, f.y + 0.8, f.z + s,
+            f.x - s, f.y + 0.8, f.z, f.x, f.y + 1.8, f.z,
+            f.x + s, f.y + 0.8, f.z, f.x, f.y + 1.8, f.z,
+            f.x, f.y + 0.8, f.z - s, f.x, f.y + 1.8, f.z,
+            f.x, f.y + 0.8, f.z + s, f.x, f.y + 1.8, f.z
           );
         }
       }
@@ -421,6 +571,10 @@ export class CombatDebugRenderer {
     this.uploadLines(this.flightVecGeo, flightVerts);
     this.uploadLines(this.blastRingGeo, blastVerts);
     this.uploadLines(this.colliderWireGeo, colliderVerts);
+    this.uploadLines(this.slopeWireGeo, slopeVerts);
+    this.uploadLines(this.ladderWireGeo, ladderVerts);
+    this.uploadLines(this.playerCapsuleGeo, playerCapsuleVerts);
+    this.uploadLines(this.integrityFlagGeo, integrityFlagVerts);
     this.uploadLines(this.contactNormalGeo, contactNormalVerts);
     this.uploadLines(this.blockedMoveGeo, blockedMoveVerts);
     this.uploadLines(this.cameraRayGeo, cameraRayVerts);

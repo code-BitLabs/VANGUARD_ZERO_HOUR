@@ -18,6 +18,7 @@ import {
 import { QualityTier } from '@/src/schemas/common.schema';
 import { ENEMY_CATALOG } from '@/src/data/enemies';
 import { WEAPON_CATALOG } from '@/src/data/weapons';
+import { stripCsmMaterialPatches } from '@/src/engine/ShadowCascadeController';
 
 /**
  * Deterministic SHA-256-like hex digest for build-time/runtime content addressing.
@@ -826,11 +827,13 @@ export class AssetRuntimeLease {
           if (Array.isArray(node.material)) {
             node.material = node.material.map((m) => {
               const cm = m.clone();
+              stripCsmMaterialPatches(cm);
               clonedMaterials.push(cm);
               return cm;
             });
           } else {
             const cm = node.material.clone();
+            stripCsmMaterialPatches(cm);
             clonedMaterials.push(cm);
             node.material = cm;
           }

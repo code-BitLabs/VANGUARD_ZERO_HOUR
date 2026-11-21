@@ -44,6 +44,7 @@ export interface CombatDamageDependencies {
   readonly onWeaponKill?: (weaponId: WeaponId) => void;
   readonly onNonObjectiveDestructibleDestroyed?: (id: string, kind: string) => void;
   readonly onHostileVehicleDestroyed?: (veh: VehicleEntity) => void;
+  readonly onExplosionVfx?: (x: number, y: number, z: number, radius: number) => void;
 }
 
 /**
@@ -212,6 +213,7 @@ export class CombatDamageResolver {
           ?.showSubtitle('TACTICAL: A field supply station was destroyed by blast damage.', 3.2);
       }
     }
+    this.deps.onExplosionVfx?.(ev.x, ev.y, ev.z, ev.radius);
     this.deps.monitor.recordPhase('explosions', performance.now() - t0);
   };
 

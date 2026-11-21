@@ -1,3 +1,8 @@
+import {
+  intersectRayOrientedSlope,
+  OrientedSlopeRayHit,
+  OrientedSlopeRegion,
+} from '@/src/physics/OrientedSlope';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 
 export const VAULT_MIN_HEIGHT = 0.46;
@@ -101,6 +106,27 @@ export class CollisionSystem {
     normalZ: 0,
     contactX: 0,
     contactZ: 0,
+  };
+  private readonly sweptScratchHit: RaycastHitResult = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly slopeRayScratch: OrientedSlopeRayHit = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
   };
 
   public raycastsThisFrame = 0;
@@ -320,7 +346,8 @@ export class CollisionSystem {
   }
 
   /**
-   * Swept ray or sphere cast against SpatialHash + ground plane y=0.
+   * Swept ray or sphere cast against SpatialHash AABBs/OBBs, OrientedSlopeRegions,
+   * and the true terrain heightfield (no hardcoded flat y=0 plane when terrainHeightFn is provided).
    */
   sweptCast(
     spatialHash: SpatialHash,
@@ -334,7 +361,9 @@ export class CollisionSystem {
     radius: number,
     layerMask: number,
     outHit: RaycastHitResult,
-    ignoreColliderId?: string | null
+    ignoreColliderId?: string | null,
+    slopes?: readonly OrientedSlopeRegion[],
+    getTerrainHeightAt?: (x: number, z: number) => number
   ): boolean {
     if (radius > 0) {
       this.shapeCastsThisFrame++;
@@ -354,17 +383,7 @@ export class CollisionSystem {
     const maxZ = Math.max(oz, endZ) + radius + 0.5;
 
     const candidates = spatialHash.queryAABB(minX, minZ, maxX, maxZ, layerMask, this.queryScratch);
-    const scratchHit: RaycastHitResult = {
-      hit: false,
-      distance: maxDist,
-      pointX: 0,
-      pointY: 0,
-      pointZ: 0,
-      normalX: 0,
-      normalY: 1,
-      normalZ: 0,
-      collider: null,
-    };
+    const scratchHit = this.sweptScratchHit;
 
     for (let i = 0; i < candidates.length; i++) {
       const box = candidates[i];
@@ -385,19 +404,140 @@ export class CollisionSystem {
       }
     }
 
-    // Check ground plane y = radius
-    if (dy < -1e-5) {
-      const tGround = (radius - oy) / dy;
-      if (tGround >= 0 && tGround < outHit.distance) {
-        outHit.hit = true;
-        outHit.distance = tGround;
-        outHit.pointX = ox + dx * tGround;
-        outHit.pointY = radius;
-        outHit.pointZ = oz + dz * tGround;
-        outHit.normalX = 0;
-        outHit.normalY = 1;
-        outHit.normalZ = 0;
-        outHit.collider = null;
+    // Test OrientedSlopeRegions (stairs & ramps) when WORLD layer is included
+    if (slopes && slopes.length > 0 && (layerMask & COLLISION_LAYER.WORLD) !== 0) {
+      for (let i = 0; i < slopes.length; i++) {
+        const slope = slopes[i];
+        if (ignoreColliderId && slope.id === ignoreColliderId) continue;
+        // Quick 2D bounding rejection
+        const pad = slope.halfLength + slope.halfWidth + radius + 0.5;
+        if (
+          slope.centerX + pad < minX ||
+          slope.centerX - pad > maxX ||
+          slope.centerZ + pad < minZ ||
+          slope.centerZ - pad > maxZ
+        ) {
+          continue;
+        }
+        this.narrowPhaseChecksThisFrame++;
+        if (
+          intersectRayOrientedSlope(
+            ox,
+            oy,
+            oz,
+            dx,
+            dy,
+            dz,
+            outHit.distance,
+            slope,
+            radius,
+            this.slopeRayScratch
+          )
+        ) {
+          if (this.slopeRayScratch.distance < outHit.distance) {
+            outHit.hit = true;
+            outHit.distance = this.slopeRayScratch.distance;
+            outHit.pointX = this.slopeRayScratch.pointX;
+            outHit.pointY = this.slopeRayScratch.pointY;
+            outHit.pointZ = this.slopeRayScratch.pointZ;
+            outHit.normalX = this.slopeRayScratch.normalX;
+            outHit.normalY = this.slopeRayScratch.normalY;
+            outHit.normalZ = this.slopeRayScratch.normalZ;
+            outHit.collider = null;
+          }
+        }
+      }
+    }
+
+    // Test terrain heightfield (or fallback flat plane only if no heightfield callback supplied)
+    if ((layerMask & COLLISION_LAYER.WORLD) !== 0) {
+      if (getTerrainHeightAt) {
+        const tLimit = outHit.distance;
+        const endY = oy + dy * tLimit;
+        const minRayClearY = Math.min(oy, endY) - radius;
+        // Max terrain height within 320x320 playfield & perimeter ridges is < 18m; skip march cleanly for high rays
+        const maxTerrainEnvelopeY = 18.0;
+        if (tLimit > 1e-4 && minRayClearY <= maxTerrainEnvelopeY) {
+          const baseStep = tLimit <= 6 ? 0.25 : 0.6;
+          let prevT = 0;
+          let prevClear = oy - radius - getTerrainHeightAt(ox, oz);
+          // Only report immediate terrain hit at origin if moving downward into ground
+          if (prevClear <= 0 && dy < -1e-4) {
+            const eps = 0.3;
+            const dHx = (getTerrainHeightAt(ox + eps, oz) - getTerrainHeightAt(ox - eps, oz)) / (2 * eps);
+            const dHz = (getTerrainHeightAt(ox, oz + eps) - getTerrainHeightAt(ox, oz - eps)) / (2 * eps);
+            const invN = 1 / Math.hypot(-dHx, 1, -dHz);
+            outHit.hit = true;
+            outHit.distance = 0;
+            outHit.pointX = ox;
+            outHit.pointY = oy;
+            outHit.pointZ = oz;
+            outHit.normalX = -dHx * invN;
+            outHit.normalY = invN;
+            outHit.normalZ = -dHz * invN;
+            outHit.collider = null;
+          } else {
+            let t = baseStep;
+            while (t <= tLimit + baseStep) {
+              const sampleT = t > tLimit ? tLimit : t;
+              const sx = ox + dx * sampleT;
+              const sy = oy + dy * sampleT;
+              const sz = oz + dz * sampleT;
+              const clear = sy - radius - getTerrainHeightAt(sx, sz);
+              if (clear <= 0 && prevClear > 0) {
+                // Binary search refinement (5 iterations -> ~0.015m-0.05m accuracy)
+                let lo = prevT;
+                let hi = sampleT;
+                for (let b = 0; b < 5; b++) {
+                  const mid = (lo + hi) * 0.5;
+                  const mx = ox + dx * mid;
+                  const my = oy + dy * mid;
+                  const mz = oz + dz * mid;
+                  if (my - radius - getTerrainHeightAt(mx, mz) > 0) {
+                    lo = mid;
+                  } else {
+                    hi = mid;
+                  }
+                }
+                const hitT = hi;
+                const hx = ox + dx * hitT;
+                const hy = oy + dy * hitT;
+                const hz = oz + dz * hitT;
+                const eps = 0.3;
+                const dHx = (getTerrainHeightAt(hx + eps, hz) - getTerrainHeightAt(hx - eps, hz)) / (2 * eps);
+                const dHz = (getTerrainHeightAt(hx, hz + eps) - getTerrainHeightAt(hx, hz - eps)) / (2 * eps);
+                const invN = 1 / Math.hypot(-dHx, 1, -dHz);
+                outHit.hit = true;
+                outHit.distance = hitT;
+                outHit.pointX = hx;
+                outHit.pointY = hy;
+                outHit.pointZ = hz;
+                outHit.normalX = -dHx * invN;
+                outHit.normalY = invN;
+                outHit.normalZ = -dHz * invN;
+                outHit.collider = null;
+                break;
+              }
+              prevT = sampleT;
+              prevClear = clear;
+              if (sampleT >= tLimit) break;
+              t = sampleT + (sampleT >= 12 ? 1.6 : baseStep);
+            }
+          }
+        }
+      } else if (dy < -1e-5) {
+        const tGround = (radius - oy) / dy;
+        if (tGround >= 0 && tGround < outHit.distance) {
+          outHit.hit = true;
+          outHit.distance = tGround;
+          outHit.pointX = ox + dx * tGround;
+          outHit.pointY = radius;
+          outHit.pointZ = oz + dz * tGround;
+          outHit.normalX = 0;
+          outHit.normalY = 1;
+          outHit.normalZ = 0;
+          outHit.collider = null;
+        }
       }
     }
 
@@ -609,11 +749,12 @@ export class CollisionSystem {
     x: number,
     z: number,
     radius: number,
+    referenceFeetY: number,
     maxSupportY: number,
     layerMask: number,
-    getTerrainHeightAt: (x: number, z: number) => number
+    getGroundHeightAt: (x: number, z: number, referenceFeetY?: number) => number
   ): number {
-    let supportY = getTerrainHeightAt(x, z);
+    let supportY = getGroundHeightAt(x, z, referenceFeetY);
     const supportRadius = radius * 0.85;
     const candidates = spatialHash.queryAABB(
       x - supportRadius - 0.2,
@@ -648,10 +789,12 @@ export class CollisionSystem {
     radius: number,
     standingHeight: number,
     worldBoundLimit: number,
-    getTerrainHeightAt: (x: number, z: number) => number,
+    getGroundHeightAt: (x: number, z: number, referenceFeetY?: number) => number,
     out: VaultProbeResult,
     maxReach = VAULT_MAX_PROBE_DISTANCE,
-    layerMask = VAULT_PROBE_LAYER_MASK
+    layerMask = VAULT_PROBE_LAYER_MASK,
+    slopes?: readonly OrientedSlopeRegion[],
+    getTerrainHeightAt?: (x: number, z: number) => number
   ): boolean {
     out.canVault = false;
     out.mode = 'vault_over';
@@ -788,8 +931,9 @@ export class CollisionSystem {
       let validLanding = false;
 
       if (mode === 'vault_over') {
-        landX = exitX + ndx * (radius + 0.24);
-        landZ = exitZ + ndz * (radius + 0.24);
+        const landStride = Math.max(0.72, radius + 0.24);
+        landX = exitX + ndx * landStride;
+        landZ = exitZ + ndz * landStride;
 
         if (Math.abs(landX) <= boundClamp && Math.abs(landZ) <= boundClamp) {
           const supportY = this.computeVaultSupportY(
@@ -797,9 +941,10 @@ export class CollisionSystem {
             landX,
             landZ,
             radius,
+            feetY,
             box.maxY + 0.05,
             layerMask,
-            getTerrainHeightAt
+            getGroundHeightAt
           );
           if (supportY >= feetY - VAULT_MAX_DROP_HEIGHT && supportY <= box.maxY + 0.05) {
             const midX = (entryX + exitX) * 0.5;
@@ -863,7 +1008,9 @@ export class CollisionSystem {
                   sweepRadius,
                   layerMask,
                   this.vaultSweepHit,
-                  box.id
+                  box.id,
+                  slopes,
+                  getTerrainHeightAt
                 );
 
               const landSweepX = landX - exitX;
@@ -885,7 +1032,9 @@ export class CollisionSystem {
                   sweepRadius,
                   layerMask,
                   this.vaultSweepHit,
-                  box.id
+                  box.id,
+                  slopes,
+                  getTerrainHeightAt
                 );
 
               if (!blockedApex && !blockedDescent) {
@@ -938,7 +1087,9 @@ export class CollisionSystem {
                 sweepRadius,
                 layerMask,
                 this.vaultSweepHit,
-                box.id
+                box.id,
+                slopes,
+                getTerrainHeightAt
               );
             if (!blockedPath) {
               validLanding = true;

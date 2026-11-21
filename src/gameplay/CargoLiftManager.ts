@@ -403,8 +403,18 @@ export class CargoLiftManager {
 
       for (let i = 0; i < occupants.length; i++) {
         const occ = occupants[i];
-        if (!this.isPositionOnPlatform(r, occ.pos.x, occ.pos.y, occ.pos.z)) continue;
-        if (r.occupantIds.size >= r.maxOccupants) continue;
+        const inShaftHoriz =
+          Math.abs(occ.pos.x - r.def.centerX) <= r.def.halfWidth + 0.16 &&
+          Math.abs(occ.pos.z - r.def.centerZ) <= r.def.halfDepth + 0.16;
+        // Include jumping occupants inside the shaft above the deck (up to +1.8m) when traveling or doors_closing
+        const verticalMarginUp =
+          r.state === 'traveling' || r.state === 'doors_closing' || r.state === 'docking' ? 1.85 : 0.65;
+        const onDeck =
+          inShaftHoriz &&
+          occ.pos.y >= r.currentY - 0.42 &&
+          occ.pos.y <= r.currentY + verticalMarginUp;
+        if (!onDeck) continue;
+        if (r.occupantIds.size >= r.maxOccupants && !occ.isPlayer) continue;
         if (!occ.isPlayer && r.aiOccupantIds.size >= r.maxAiOccupants) continue;
         r.occupantIds.add(occ.id);
         if (occ.isPlayer) {
@@ -504,17 +514,32 @@ export class CargoLiftManager {
             }
           }
 
-          const deltaY = nextY - r.currentY;
+          const prevY = r.currentY;
+          const deltaY = nextY - prevY;
           r.currentY = nextY;
 
-          // Carry physical occupants smoothly with platform displacement
+          // Swept carry for all physical occupants inside shaft XZ:
+          // handles standing, crouching, mid-doors_closing entry, AND jumping on an ascending/descending deck!
           if (Math.abs(deltaY) > 1e-6) {
             for (let i = 0; i < occupants.length; i++) {
               const occ = occupants[i];
               if (!r.occupantIds.has(occ.id)) continue;
-              occ.pos.y += deltaY;
-              if (occ.vel && occ.vel.y < 0) {
-                occ.vel.y = 0;
+              const isStandingOnDeck = Math.abs(occ.pos.y - prevY) <= 0.45;
+              if (deltaY > 0) {
+                if (isStandingOnDeck) {
+                  occ.pos.y += deltaY;
+                  if (occ.vel && occ.vel.y < 0) occ.vel.y = 0;
+                } else if (occ.pos.y >= prevY - 0.45 && occ.pos.y <= nextY + 0.08) {
+                  // Swept catch: rising deck met jumping/descending occupant feet
+                  occ.pos.y = nextY;
+                  if (occ.vel && occ.vel.y < 0) occ.vel.y = 0;
+                }
+              } else {
+                // Descending: carry standing occupants cleanly downward so they never float/bounce
+                if (isStandingOnDeck && (!occ.vel || occ.vel.y <= 0.1)) {
+                  occ.pos.y += deltaY;
+                  if (occ.vel && occ.vel.y < 0) occ.vel.y = 0;
+                }
               }
             }
           }

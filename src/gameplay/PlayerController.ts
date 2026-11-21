@@ -9,7 +9,7 @@ import {
 import { formatCollisionLayer, PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import type { CharacterMoveResult, PhysicsBodyInspectorRow } from '@/src/engine/physics/PhysicsTypes';
 import { AGENT_TRAVERSAL_PROFILES } from '@/src/navigation/AgentTraversalProfile';
-import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { CollisionWorld, LadderVolume } from '@/src/physics/CollisionWorld';
 import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 import {
   DIFFICULTY_COMBAT_PROFILES,
@@ -65,6 +65,9 @@ export class PlayerController {
   public isSliding = false;
   public isVaulting = false;
   public canVault = false;
+  public isClimbingLadder = false;
+  public canClimbLadder = false;
+  public activeLadder: LadderVolume | null = null;
   public currentSpeed = 0;
   public alive = true;
   public suppressionLevel = 0;
@@ -115,16 +118,22 @@ export class PlayerController {
   private lastArmorAbsorbed = 0;
   private lastHealthLost = 0;
   private lastMoveResult: CharacterMoveResult | null = null;
+  private vaultProbeCooldownSec = 0;
   private occupiedVehicleColliderId: string | null = null;
   private occupiedVehicleDamageHandler:
     | ((amount: number) => { hullDestroyed: boolean; residualPlayerDamage: number })
     | null = null;
 
-  private readonly standingEyeHeight = 1.66;
+  private ladderCooldownSec = 0;
+  private ladderStepAccum = 0;
+
+  private readonly standingHeight = AGENT_TRAVERSAL_PROFILES.player.standingHeight;
+  private readonly crouchedHeight = AGENT_TRAVERSAL_PROFILES.player.crouchedHeight;
+  private readonly standingEyeHeight = 1.62;
   private readonly crouchEyeHeight = 1.05;
   private readonly slideEyeHeight = 0.85;
-  private readonly capsuleRadius = 0.45;
-  private readonly stepHeight = 0.48;
+  private readonly capsuleRadius = AGENT_TRAVERSAL_PROFILES.player.capsuleRadius;
+  private readonly stepHeight = AGENT_TRAVERSAL_PROFILES.player.maxStepHeight;
 
   private readonly _fwd = new THREE.Vector3();
   private readonly _right = new THREE.Vector3();
@@ -148,7 +157,7 @@ export class PlayerController {
 
   private readonly _hitboxVolumes: PlayerHitboxVolumes = {
     stance: 'standing',
-    totalHeight: 1.8,
+    totalHeight: AGENT_TRAVERSAL_PROFILES.player.standingHeight,
     headCenter: new THREE.Vector3(),
     headRadius: 0.21,
     upperTorsoMin: new THREE.Vector3(),
@@ -227,8 +236,19 @@ export class PlayerController {
     return this.occupiedVehicleColliderId;
   }
 
-  spawn(x: number, y: number, z: number, yaw = 0): void {
-    this.position.set(x, Math.max(0, y - 1.65), z);
+  spawn(x: number, y: number, z: number, yaw = 0, collision?: CollisionWorld): void {
+    const rawFeetY = y - 1.65;
+    const groundedY = collision
+      ? collision.getSupportHeightAt(
+          x,
+          Math.max(rawFeetY, collision.getTerrainHeightOnly(x, z)),
+          z,
+          this.standingHeight,
+          this.stepHeight,
+          AGENT_TRAVERSAL_PROFILES.player.maxSlopeDeg
+        )
+      : Math.max(0, rawFeetY);
+    this.position.set(x, groundedY, z);
     this.velocity.set(0, 0, 0);
     this.yaw = yaw;
     this.pitch = 0;
@@ -246,6 +266,11 @@ export class PlayerController {
     this.isSliding = false;
     this.isVaulting = false;
     this.canVault = false;
+    this.isClimbingLadder = false;
+    this.canClimbLadder = false;
+    this.activeLadder = null;
+    this.ladderCooldownSec = 0;
+    this.ladderStepAccum = 0;
     this.vaultObstacleId = null;
     this.vaultElapsed = 0;
     this.suppressionLevel = 0;
@@ -268,6 +293,21 @@ export class PlayerController {
     this.lastMoveResult = null;
     this.occupiedVehicleColliderId = null;
     this.occupiedVehicleDamageHandler = null;
+  }
+
+  getLastMoveResult(): CharacterMoveResult | null {
+    return this.lastMoveResult;
+  }
+
+  getActiveCapsuleDimensions(): { radius: number; height: number } {
+    const height = this.isVaulting
+      ? VAULT_CAPSULE_HEIGHT
+      : this.isSliding
+        ? 0.95
+        : this.isCrouching
+          ? this.crouchedHeight
+          : this.standingHeight;
+    return { radius: this.capsuleRadius, height };
   }
 
   applyCheckpointVitals(health: number, armor: number): void {
@@ -465,6 +505,7 @@ export class PlayerController {
       this.alive = false;
       this.isRegenerating = false;
       this.cancelVault(null);
+      this.dismountLadder(false);
     }
   }
 
@@ -500,13 +541,13 @@ export class PlayerController {
       this._hitboxVolumes.lowerBodyMax.set(px + 0.22, py + 0.54, pz + 0.22);
     } else {
       this._hitboxVolumes.stance = 'standing';
-      this._hitboxVolumes.totalHeight = 1.8;
-      this._hitboxVolumes.headCenter.set(px, py + 1.62, pz);
+      this._hitboxVolumes.totalHeight = this.standingHeight;
+      this._hitboxVolumes.headCenter.set(px, py + 1.58, pz);
       this._hitboxVolumes.headRadius = 0.21;
-      this._hitboxVolumes.upperTorsoMin.set(px - 0.23, py + 0.92, pz - 0.23);
-      this._hitboxVolumes.upperTorsoMax.set(px + 0.23, py + 1.44, pz + 0.23);
+      this._hitboxVolumes.upperTorsoMin.set(px - 0.23, py + 0.90, pz - 0.23);
+      this._hitboxVolumes.upperTorsoMax.set(px + 0.23, py + 1.42, pz + 0.23);
       this._hitboxVolumes.lowerBodyMin.set(px - 0.21, py + 0.02, pz - 0.21);
-      this._hitboxVolumes.lowerBodyMax.set(px + 0.21, py + 0.92, pz + 0.21);
+      this._hitboxVolumes.lowerBodyMax.set(px + 0.21, py + 0.90, pz + 0.21);
     }
 
     return this._hitboxVolumes;
@@ -601,11 +642,173 @@ export class PlayerController {
     this.isVaulting = false;
     this.canVault = false;
     this.vaultObstacleId = null;
-    if (collision && !collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+    if (collision && !collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight, 'player')) {
       this.isCrouching = true;
     } else {
       this.isCrouching = false;
     }
+  }
+
+  /**
+   * Attempts to mount a nearby climbable ladder (called by [E] interact or auto-approach).
+   */
+  tryMountLadder(collision: CollisionWorld): boolean {
+    if (!this.alive || this.isClimbingLadder || this.isVaulting || this.ladderCooldownSec > 0) {
+      return false;
+    }
+    const lookX = -Math.sin(this.yaw);
+    const lookZ = -Math.cos(this.yaw);
+    const candidate = collision.findMountableLadder(
+      this.position.x,
+      this.position.y,
+      this.position.z,
+      lookX,
+      lookZ,
+      1.3
+    );
+    if (!candidate) return false;
+    this.attachToLadder(candidate.ladder, candidate.entrySide);
+    return true;
+  }
+
+  private attachToLadder(ladder: LadderVolume, entrySide: 'bottom' | 'top'): void {
+    this.activeLadder = ladder;
+    this.isClimbingLadder = true;
+    this.canClimbLadder = false;
+    this.isSprinting = false;
+    this.isSliding = false;
+    this.isCrouching = false;
+    this.grounded = false;
+    this.airTimeSec = 0;
+    this.velocity.set(0, 0, 0);
+    this.ladderStepAccum = 0;
+
+    const climbOffset = this.capsuleRadius + 0.1;
+    this.position.x = ladder.x + ladder.normalX * climbOffset;
+    this.position.z = ladder.z + ladder.normalZ * climbOffset;
+    if (entrySide === 'top') {
+      this.position.y = Math.max(ladder.bottomY, ladder.topY - 0.65);
+    } else {
+      this.position.y = THREE.MathUtils.clamp(this.position.y, ladder.bottomY, ladder.topY - 0.35);
+    }
+    this.audio.play2D('footstep', 2, 0.3);
+  }
+
+  dismountLadder(jumpOff: boolean): void {
+    if (!this.isClimbingLadder) return;
+    const lad = this.activeLadder;
+    this.isClimbingLadder = false;
+    this.activeLadder = null;
+    this.ladderCooldownSec = 0.38;
+    if (jumpOff && lad) {
+      this.velocity.set(lad.normalX * 3.8, 4.8, lad.normalZ * 3.8);
+      this.grounded = false;
+    }
+  }
+
+  private stepLadderClimb(
+    dt: number,
+    input: InputManager,
+    collision: CollisionWorld,
+    forwardAxis: number
+  ): void {
+    const lad = this.activeLadder;
+    if (!lad) {
+      this.isClimbingLadder = false;
+      return;
+    }
+
+    // Jump dismount pushes cleanly outward from ladder face
+    if (input.wasActionPressed('jump')) {
+      this.dismountLadder(true);
+      return;
+    }
+    // Crouch lets go cleanly
+    if (input.wasActionPressed('crouch')) {
+      this.dismountLadder(false);
+      this.velocity.set(lad.normalX * 0.8, 0, lad.normalZ * 0.8);
+      return;
+    }
+
+    // Looking steeply down inverts W to descend naturally; otherwise W=up, S=down
+    const lookDirSign = this.pitch < -0.58 ? -1 : 1;
+    const climbInput = Math.abs(forwardAxis) > 0.08 ? forwardAxis * lookDirSign : 0;
+    const climbSpeed = 3.85;
+    const vy = climbInput * climbSpeed;
+
+    // Keep player horizontally aligned to ladder climb rail
+    const climbOffset = this.capsuleRadius + 0.1;
+    const targetX = lad.x + lad.normalX * climbOffset;
+    const targetZ = lad.z + lad.normalZ * climbOffset;
+    this.position.x = THREE.MathUtils.lerp(this.position.x, targetX, Math.min(1, dt * 16));
+    this.position.z = THREE.MathUtils.lerp(this.position.z, targetZ, Math.min(1, dt * 16));
+    this.position.y += vy * dt;
+    this.velocity.set(0, vy, 0);
+    this.currentSpeed = Math.abs(vy);
+    this.grounded = false;
+    this.crouchBlend = THREE.MathUtils.lerp(this.crouchBlend, 0, Math.min(1, dt * 10));
+    this.accelState = Math.abs(vy) > 0.1 ? 'CRUISE' : 'IDLE';
+
+    if (Math.abs(vy) > 0.25) {
+      this.ladderStepAccum += Math.abs(vy) * dt;
+      if (this.ladderStepAccum >= 0.48) {
+        this.ladderStepAccum = 0;
+        this.audio.play2D('footstep', 2, 0.22);
+      }
+    }
+
+    // Clean Top Step-Over onto the upper platform/roof deck
+    if (this.position.y >= lad.topY - 0.14 && climbInput > 0) {
+      this.position.set(lad.topExitX, lad.topExitY + 0.02, lad.topExitZ);
+      this.velocity.set(-lad.normalX * 2.4, 0, -lad.normalZ * 2.4);
+      const res = collision.resolvePlayerCapsule(
+        this.position,
+        this.velocity,
+        this.capsuleRadius,
+        this.standingHeight,
+        this.stepHeight,
+        1 / 60,
+        'player',
+        PHYSICS_MASKS.CHARACTER_SOLID,
+        this._moveResultScratch,
+        AGENT_TRAVERSAL_PROFILES.player.maxSlopeDeg
+      );
+      this.lastMoveResult = res;
+      this.grounded = true;
+      this.isClimbingLadder = false;
+      this.activeLadder = null;
+      this.ladderCooldownSec = 0.4;
+      this.audio.play2D('footstep', 2, 0.34);
+      return;
+    }
+
+    // Safe Bottom Exit onto ground
+    if (this.position.y <= lad.bottomY + 0.06 && climbInput < 0) {
+      this.position.set(lad.bottomExitX, lad.bottomExitY, lad.bottomExitZ);
+      this.velocity.set(lad.normalX * 1.4, 0, lad.normalZ * 1.4);
+      const res = collision.resolvePlayerCapsule(
+        this.position,
+        this.velocity,
+        this.capsuleRadius,
+        this.standingHeight,
+        this.stepHeight,
+        1 / 60,
+        'player',
+        PHYSICS_MASKS.CHARACTER_SOLID,
+        this._moveResultScratch,
+        AGENT_TRAVERSAL_PROFILES.player.maxSlopeDeg
+      );
+      this.lastMoveResult = res;
+      this.grounded = res.grounded;
+      this.isClimbingLadder = false;
+      this.activeLadder = null;
+      this.ladderCooldownSec = 0.38;
+      this.audio.play2D('footstep', 2, 0.3);
+      return;
+    }
+
+    // Clamp Y safely within ladder span while holding steady
+    this.position.y = THREE.MathUtils.clamp(this.position.y, lad.bottomY, lad.topY);
   }
 
   private startVault(probe: VaultProbeResult, dirX: number, dirZ: number): void {
@@ -757,7 +960,7 @@ export class PlayerController {
       this.vaultObstacleId = null;
 
       const mustCrouch =
-        landCrouchFlag || !collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player');
+        landCrouchFlag || !collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight, 'player');
       this.isCrouching = mustCrouch;
 
       const carrySpeed = forwardAxis > 0.15 ? 4.4 * weaponMobilityFactor : 1.5;
@@ -824,11 +1027,17 @@ export class PlayerController {
       this.vaultRollOffset = THREE.MathUtils.lerp(this.vaultRollOffset, 0, Math.min(1, dt * 14));
     }
 
+    this.ladderCooldownSec = Math.max(0, this.ladderCooldownSec - dt);
+
     if (inVehicle) {
       if (this.isVaulting) {
         this.cancelVault(collision);
       }
+      if (this.isClimbingLadder) {
+        this.dismountLadder(false);
+      }
       this.canVault = false;
+      this.canClimbLadder = false;
       this.currentSpeed = 0;
       return;
     }
@@ -837,8 +1046,39 @@ export class PlayerController {
     this._fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
+    if (this.isClimbingLadder) {
+      this.canVault = false;
+      this.canClimbLadder = false;
+      this.stepLadderClimb(dt, input, collision, axes.forward);
+      return;
+    }
+
     if (this.isVaulting) {
       this.stepVault(dt, collision, axes.forward, weaponMobilityFactor);
+      return;
+    }
+
+    // Check nearby climbable ladders (supports auto-mount on forward push into bottom face, or [E] prompt)
+    const ladderCandidate =
+      this.ladderCooldownSec <= 0
+        ? collision.findMountableLadder(
+            this.position.x,
+            this.position.y,
+            this.position.z,
+            this._fwd.x,
+            this._fwd.z,
+            1.25
+          )
+        : null;
+    this.canClimbLadder = ladderCandidate !== null;
+    if (
+      ladderCandidate &&
+      ladderCandidate.entrySide === 'bottom' &&
+      ladderCandidate.distance < 0.45 &&
+      axes.forward > 0.35 &&
+      !this.isSliding
+    ) {
+      this.attachToLadder(ladderCandidate.ladder, 'bottom');
       return;
     }
 
@@ -858,7 +1098,7 @@ export class PlayerController {
         }
         this.isCrouching = true;
       } else if (this.isCrouching) {
-        if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+        if (collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight, 'player')) {
           this.isCrouching = false;
         }
       } else {
@@ -870,7 +1110,7 @@ export class PlayerController {
       this.slideTimer -= dt;
       if (this.slideTimer <= 0) {
         this.isSliding = false;
-        if (!collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+        if (!collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight, 'player')) {
           this.isCrouching = true;
         }
       }
@@ -888,7 +1128,7 @@ export class PlayerController {
       !isFiringOrAiming &&
       !this.isSliding;
     if (wantsSprint && this.isCrouching) {
-      if (collision.canStandUp(this.position, this.capsuleRadius, 1.8, 'player')) {
+      if (collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight, 'player')) {
         this.isCrouching = false;
       } else {
         wantsSprint = false;
@@ -938,27 +1178,50 @@ export class PlayerController {
     const hasForwardApproach =
       (axes.forward > 0.15 && facingDot >= 0.45) || (forwardVel > 0.8 && facingDot >= 0.45);
 
-    this.canVault =
+    const jumpPressed = input.wasActionPressed('jump');
+    const onActiveSlope = Boolean(this.lastMoveResult?.activeSlopeId);
+    const eligibleToVault =
       !this.isSliding &&
+      !onActiveSlope &&
       (this.grounded || this.velocity.y > -5.5) &&
-      facingDot >= 0.45 &&
-      collision.probeVaultObstacle(
+      facingDot >= 0.45;
+
+    if (!eligibleToVault) {
+      this.canVault = false;
+      this.vaultProbeCooldownSec = 0;
+    } else if (jumpPressed && hasForwardApproach) {
+      this.vaultProbeCooldownSec = 0.08;
+      this.canVault = collision.probeVaultObstacle(
         this.position,
         probeDirX,
         probeDirZ,
         this.capsuleRadius,
-        1.8,
+        this.standingHeight,
         this._vaultProbeScratch
       );
+    } else {
+      this.vaultProbeCooldownSec -= dt;
+      if (this.vaultProbeCooldownSec <= 0) {
+        this.vaultProbeCooldownSec = 0.1;
+        this.canVault = collision.probeVaultObstacle(
+          this.position,
+          probeDirX,
+          probeDirZ,
+          this.capsuleRadius,
+          this.standingHeight,
+          this._vaultProbeScratch
+        );
+      }
+    }
 
     // Trigger contextual low-cover vault when approaching obstacle and pressing Jump
-    if (input.wasActionPressed('jump')) {
+    if (jumpPressed) {
       if (this.canVault && hasForwardApproach && this._vaultProbeScratch.canVault) {
         this.startVault(this._vaultProbeScratch, probeDirX, probeDirZ);
         return;
       }
       if (this.grounded) {
-        if (collision.canStandUp(this.position, this.capsuleRadius, 1.85, 'player')) {
+        if (collision.canStandUp(this.position, this.capsuleRadius, this.standingHeight + 0.05, 'player')) {
           this.velocity.y = 7.4;
           this.lastJumpImpulse = 7.4;
           this.grounded = false;
@@ -983,7 +1246,11 @@ export class PlayerController {
     this.velocity.y -= 21.5 * dt;
 
     const preStepY = this.position.y;
-    const capsuleHeight = this.isSliding ? 0.95 : this.isCrouching ? 1.15 : 1.8;
+    const capsuleHeight = this.isSliding
+      ? 0.95
+      : this.isCrouching
+        ? this.crouchedHeight
+        : this.standingHeight;
     const res = collision.resolvePlayerCapsule(
       this.position,
       this.velocity,
@@ -1148,17 +1415,29 @@ export class PlayerController {
       : this.isSliding
         ? 0.95
         : this.isCrouching
-          ? 1.15
-          : 1.8;
-    const physicalState = this.isVaulting
-      ? 'VAULTING'
-      : !this.grounded
-        ? 'AIRBORNE'
-        : this.isSliding
-          ? 'SLIDING'
-          : this.isCrouching
-            ? 'CROUCHED'
-            : 'GROUNDED';
+          ? this.crouchedHeight
+          : this.standingHeight;
+    const physicalState = this.isClimbingLadder
+      ? 'CLIMBING'
+      : this.isVaulting
+        ? 'VAULTING'
+        : !this.grounded
+          ? 'AIRBORNE'
+          : this.isSliding
+            ? 'SLIDING'
+            : this.isCrouching
+              ? 'CROUCHED'
+              : 'GROUNDED';
+
+    const nx = this.lastMoveResult?.hitWall
+      ? this.lastMoveResult.wallNormalX
+      : (this.lastMoveResult?.groundNormalX ?? 0);
+    const ny = this.lastMoveResult?.hitWall
+      ? this.lastMoveResult.wallNormalY
+      : (this.lastMoveResult?.groundNormalY ?? 1);
+    const nz = this.lastMoveResult?.hitWall
+      ? this.lastMoveResult.wallNormalZ
+      : (this.lastMoveResult?.groundNormalZ ?? 0);
 
     return {
       id: 'player',
@@ -1174,7 +1453,7 @@ export class PlayerController {
       vy: Number(this.velocity.y.toFixed(2)),
       vz: Number(this.velocity.z.toFixed(2)),
       ax: 0,
-      ay: -21.5,
+      ay: this.isClimbingLadder ? 0 : -21.5,
       az: 0,
       speed: Number(this.currentSpeed.toFixed(2)),
       massKg: 85,
@@ -1183,10 +1462,10 @@ export class PlayerController {
       mask: PHYSICS_MASKS.CHARACTER_SOLID,
       maskLabel: formatCollisionLayer(PHYSICS_MASKS.CHARACTER_SOLID),
       physicalState,
-      lastCollisionId: this.lastMoveResult?.lastBlockerId ?? null,
-      lastNormalX: Number((this.lastMoveResult?.wallNormalX ?? 0).toFixed(2)),
-      lastNormalY: Number((this.lastMoveResult?.wallNormalY ?? 1).toFixed(2)),
-      lastNormalZ: Number((this.lastMoveResult?.wallNormalZ ?? 0).toFixed(2)),
+      lastCollisionId: this.lastMoveResult?.lastBlockerId ?? this.activeLadder?.id ?? null,
+      lastNormalX: Number(nx.toFixed(2)),
+      lastNormalY: Number(ny.toFixed(2)),
+      lastNormalZ: Number(nz.toFixed(2)),
       contactCount: this.lastMoveResult?.activeContacts ?? (this.grounded ? 1 : 0),
     };
   }

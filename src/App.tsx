@@ -1,10 +1,11 @@
-import React, { Suspense, useEffect, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Smartphone } from 'lucide-react';
-import { GameEngine } from '@/src/engine/GameEngine';
-import { InputManager } from '@/src/engine/InputManager';
+import type { GameEngine } from '@/src/engine/GameEngine';
+import type { InputManager } from '@/src/engine/InputManager';
 import { DeploymentMode } from '@/src/schemas/campaign.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
+import { SquadCommandSource, SquadOrderType } from '@/src/gameplay/squad/SquadIntentRouter';
 import { missionSelectionStore, useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { progressionStore, useProgressionStore } from '@/src/stores/progressionStore';
@@ -13,18 +14,23 @@ import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { MissionIntroOverlay } from '@/src/ui/components/MissionIntroOverlay';
 import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { GameHUD } from '@/src/ui/hud/GameHUD';
-import { CombatDebugOverlay } from '@/src/ui/debug/CombatDebugOverlay';
 import { ErrorBoundary } from '@/src/ui/primitives/ErrorBoundary';
 import { TooltipProvider } from '@/src/ui/primitives/Controls';
-import {
-  DebriefScreen,
-  LoadingOverlay,
-  PauseOverlay,
-  ToastAndRecoveryLayer,
-} from '@/src/ui/screens/Overlays';
+import { ToastAndRecoveryLayer } from '@/src/ui/screens/ToastAndRecoveryLayer';
 import { TitleScreen } from '@/src/ui/screens/TitleScreen';
-import '@/src/ui/widgets/VanguardPerfPanel';
 
+const LoadingOverlay = React.lazy(() =>
+  import('@/src/ui/screens/Overlays').then((m) => ({ default: m.LoadingOverlay }))
+);
+const PauseOverlay = React.lazy(() =>
+  import('@/src/ui/screens/Overlays').then((m) => ({ default: m.PauseOverlay }))
+);
+const DebriefScreen = React.lazy(() =>
+  import('@/src/ui/screens/Overlays').then((m) => ({ default: m.DebriefScreen }))
+);
+const CombatDebugOverlay = React.lazy(() =>
+  import('@/src/ui/debug/CombatDebugOverlay').then((m) => ({ default: m.CombatDebugOverlay }))
+);
 const CampaignScreen = React.lazy(() =>
   import('@/src/ui/screens/CampaignScreen').then((m) => ({ default: m.CampaignScreen }))
 );
@@ -55,52 +61,100 @@ export default function App() {
   const screen = useUIStore((s) => s.screen);
   const previousMenuScreen = useUIStore((s) => s.previousMenuScreen);
   const diagnosticsOpen = useUIStore((s) => s.diagnosticsOpen);
+  const combatDebugOpen = useUIStore((s) => s.combatDebugOpen);
   const touchHudOverride = useUIStore((s) => s.touchHudOverride);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
   const touchMode = useSettingsStore((s) => s.input.touchMode);
+  const accessibility = useSettingsStore((s) => s.accessibility);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
   const [deploymentKey, setDeploymentKey] = useState(0);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
   const activeModifiers = useProgressionStore((s) => s.save.activeModifiers ?? []);
 
+  // Sync accessibility modes and typography scale globally onto documentElement
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.colorblind = accessibility.colorblindMode;
+    root.dataset.highContrast = accessibility.highContrastBorders ? 'true' : 'false';
+    root.dataset.reducedMotion = accessibility.reducedMotion ? 'true' : 'false';
+    root.style.setProperty('--vg-ui-scale', String(accessibility.largeTextMode ? 1.12 : accessibility.uiScale));
+  }, [
+    accessibility.colorblindMode,
+    accessibility.highContrastBorders,
+    accessibility.reducedMotion,
+    accessibility.largeTextMode,
+    accessibility.uiScale,
+  ]);
+
   const viewport = useViewportMode();
+  const [portraitGateDismissed, setPortraitGateDismissed] = useState(false);
   const touchControlsVisible = resolveTouchControlsVisible(touchMode, touchHudOverride, viewport);
+  const effectivePortraitBlocked = viewport.shouldBlockPortrait && !portraitGateDismissed;
+
+  useEffect(() => {
+    if (!viewport.shouldBlockPortrait && portraitGateDismissed) {
+      setPortraitGateDismissed(false);
+    }
+  }, [viewport.shouldBlockPortrait, portraitGateDismissed]);
+
+  const enginePromiseRef = useRef<Promise<GameEngine | null> | null>(null);
 
   useEffect(() => {
     const container = canvasContainerRef.current;
     if (!container) return;
 
-    try {
-      const engine = new GameEngine(container);
-      engineRef.current = engine;
-      setInputManager(engine.getInputManager());
+    let cancelled = false;
+    let mountedEngine: GameEngine | null = null;
+    const onResize = () => {
+      mountedEngine?.resize();
+    };
+    window.addEventListener('resize', onResize);
 
-      const onResize = () => {
-        engine.resize();
-      };
-      window.addEventListener('resize', onResize);
-
-      if (progressionStore.getState().recoveredFromCorruption) {
-        uiStore
-          .getState()
-          .showToast(
-            'Save Recovery Active',
-            'Corrupted profile slot was restored from backup.',
-            'warning'
-          );
-      }
-
-      return () => {
-        window.removeEventListener('resize', onResize);
-        setInputManager(null);
-        engine.dispose();
-        engineRef.current = null;
-      };
-    } catch (err) {
-      setEngineError(err instanceof Error ? err.message : 'WebGL initialization failed.');
+    if (progressionStore.getState().recoveredFromCorruption) {
+      uiStore
+        .getState()
+        .showToast(
+          'Save Recovery Active',
+          'Corrupted profile slot was restored from backup.',
+          'warning'
+        );
     }
+
+    const loadEngine = async (): Promise<GameEngine | null> => {
+      try {
+        const { GameEngine: EngineCtor } = await import('@/src/engine/GameEngine');
+        if (cancelled || !canvasContainerRef.current) return null;
+        const engine = new EngineCtor(canvasContainerRef.current);
+        mountedEngine = engine;
+        engineRef.current = engine;
+        setInputManager(engine.getInputManager());
+        return engine;
+      } catch (err) {
+        if (!cancelled) {
+          setEngineError(err instanceof Error ? err.message : 'WebGL initialization failed.');
+        }
+        return null;
+      }
+    };
+
+    enginePromiseRef.current = loadEngine();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('resize', onResize);
+      setInputManager(null);
+      mountedEngine?.dispose();
+      engineRef.current = null;
+      enginePromiseRef.current = null;
+    };
   }, []);
+
+  useEffect(() => {
+    if (devModeActive && diagnosticsOpen) {
+      void import('@/src/ui/widgets/VanguardPerfPanel');
+    }
+  }, [devModeActive, diagnosticsOpen]);
 
   // Re-sync renderer canvas whenever settled viewport / visualViewport dimensions change
   useEffect(() => {
@@ -109,30 +163,81 @@ export default function App() {
 
   // Portrait orientation gate: auto-pause active combat & release held inputs
   useEffect(() => {
-    uiStore.getState().setPortraitBlocked(viewport.shouldBlockPortrait);
-    if (viewport.shouldBlockPortrait) {
+    uiStore.getState().setPortraitBlocked(effectivePortraitBlocked);
+    if (effectivePortraitBlocked) {
       engineRef.current?.getInputManager().clearAllInputs();
       if (uiStore.getState().screen === 'playing') {
         engineRef.current?.pauseMission();
       }
     }
-  }, [viewport.shouldBlockPortrait]);
+  }, [effectivePortraitBlocked]);
 
-  const handleDeploy = (
-    missionId: number,
-    diff: Difficulty,
-    weaponId?: WeaponId,
-    mode?: DeploymentMode
-  ) => {
-    const resolvedMode =
-      mode ?? missionSelectionStore.getState().getDeploymentModeForMission(missionId);
-    setDeploymentKey((k) => k + 1);
-    void engineRef.current?.startMission(missionId, diff, weaponId, resolvedMode);
-  };
+  const handleDeploy = useCallback(
+    (missionId: number, diff: Difficulty, weaponId?: WeaponId, mode?: DeploymentMode) => {
+      const selection = missionSelectionStore.getState();
+      if (selection.selectedMissionId !== missionId) {
+        selection.setSelectedMission(missionId);
+      }
+      if (selection.difficulty !== diff) {
+        selection.setDifficulty(diff);
+      }
+      const resolvedMode =
+        mode ?? missionSelectionStore.getState().getDeploymentModeForMission(missionId);
+      setDeploymentKey((k) => k + 1);
+      if (engineRef.current) {
+        void engineRef.current.startMission(missionId, diff, weaponId, resolvedMode);
+      } else if (enginePromiseRef.current) {
+        void enginePromiseRef.current.then((eng) => {
+          if (eng) void eng.startMission(missionId, diff, weaponId, resolvedMode);
+        });
+      }
+    },
+    []
+  );
 
-  const handleUiClick = () => {
+  const handleUiClick = useCallback(() => {
     engineRef.current?.playUiSound();
-  };
+  }, []);
+
+  const handleRequestPointerLock = useCallback(() => {
+    engineRef.current?.requestPointerLock();
+  }, []);
+
+  const handlePause = useCallback(() => {
+    engineRef.current?.pauseMission();
+  }, []);
+
+  const handleRestartCheckpoint = useCallback(() => {
+    engineRef.current?.restartCheckpoint();
+  }, []);
+
+  const handleRestartMission = useCallback(() => {
+    const sel = missionSelectionStore.getState();
+    handleDeploy(sel.selectedMissionId, sel.difficulty);
+  }, [handleDeploy]);
+
+  const handleAbort = useCallback(() => {
+    engineRef.current?.abortToMenu('campaign');
+  }, []);
+
+  const handleIssueSquadCommand = useCallback(
+    (order: SquadOrderType, source: SquadCommandSource, opId?: string) => {
+      engineRef.current?.issueSquadCommand(order, source, opId);
+    },
+    []
+  );
+
+  const handleSwapFieldWeapon = useCallback((slotIdx: number, weaponId: WeaponId) => {
+    engineRef.current?.swapFieldWeapon(slotIdx, weaponId);
+  }, []);
+
+  const handleTriggerSoloSelfRecovery = useCallback(() => {
+    return engineRef.current?.triggerSoloSelfRecovery();
+  }, []);
+
+  const getQualityTelemetry = useCallback(() => {
+    return engineRef.current?.getQualityTelemetry() ?? null;
+  }, []);
 
   return (
     <ErrorBoundary>
@@ -143,7 +248,12 @@ export default function App() {
             ref={canvasContainerRef}
             className="fixed inset-0 z-0"
             onClick={() => {
-              if (screen === 'playing' && !touchControlsVisible && !viewport.isCoarsePointer) {
+              if (
+                screen === 'playing' &&
+                !touchControlsVisible &&
+                !viewport.isCoarsePointer &&
+                !engineRef.current?.getInputManager().isPointerLockBlocked()
+              ) {
                 engineRef.current?.requestPointerLock();
               }
             }}
@@ -164,6 +274,7 @@ export default function App() {
             <TitleScreen
               onQuickDeploy={() => handleDeploy(selectedMissionId, difficulty)}
               onUiClick={handleUiClick}
+              hardwareBadge={null}
             />
           )}
 
@@ -179,12 +290,17 @@ export default function App() {
               <ArmoryScreen
                 onDeployWithWeapon={(wId) => handleDeploy(selectedMissionId, difficulty, wId)}
                 onUiClick={handleUiClick}
+                isSoftwareGl={
+                  engineRef.current?.getGpuCapabilityReport()?.hardwareProfile === 'software_webgl'
+                }
+                hardwareBadge={null}
               />
             )}
 
             {screen === 'settings' && (
               <SettingsPanel
                 gpuReport={engineRef.current?.getGpuCapabilityReport() ?? null}
+                qualityTelemetry={getQualityTelemetry()}
                 onReapplyAutoGraphics={() => engineRef.current?.reapplyAutoGraphics() ?? null}
                 onResumeAndTest={() => {
                   handleUiClick();
@@ -208,27 +324,27 @@ export default function App() {
             )}
           </Suspense>
 
-          {screen === 'loading' && (
-            <LoadingOverlay onCancel={() => engineRef.current?.cancelLoad()} />
-          )}
+          <Suspense fallback={null}>
+            {screen === 'loading' && (
+              <LoadingOverlay onCancel={() => engineRef.current?.cancelLoad()} />
+            )}
+          </Suspense>
 
           {screen === 'playing' && (
             <>
               <GameHUD
-                onRequestPointerLock={() => engineRef.current?.requestPointerLock()}
-                onPause={() => engineRef.current?.pauseMission()}
-                onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
-                onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
-                onAbort={() => engineRef.current?.abortToMenu('campaign')}
-                onIssueSquadCommand={(order, source, opId) =>
-                  engineRef.current?.issueSquadCommand(order, source, opId)
-                }
-                onSwapFieldWeapon={(slotIdx, weaponId) =>
-                  engineRef.current?.swapFieldWeapon(slotIdx, weaponId)
-                }
-                onTriggerSoloSelfRecovery={() => engineRef.current?.triggerSoloSelfRecovery()}
+                onRequestPointerLock={handleRequestPointerLock}
+                onPause={handlePause}
+                onRestartCheckpoint={handleRestartCheckpoint}
+                onRestartMission={handleRestartMission}
+                onAbort={handleAbort}
+                onIssueSquadCommand={handleIssueSquadCommand}
+                onSwapFieldWeapon={handleSwapFieldWeapon}
+                onTriggerSoloSelfRecovery={handleTriggerSoloSelfRecovery}
                 inputManager={inputManager}
                 touchControlsVisible={touchControlsVisible}
+                qualityTelemetry={getQualityTelemetry()}
+                getQualityTelemetry={getQualityTelemetry}
               />
               <MissionIntroOverlay
                 missionId={selectedMissionId}
@@ -239,42 +355,52 @@ export default function App() {
             </>
           )}
 
-          {screen === 'paused' && (
-            <PauseOverlay
-              onResume={() => engineRef.current?.resumeMission()}
-              onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
-              onRestartMission={() => handleDeploy(selectedMissionId, difficulty)}
-              onAbort={() => engineRef.current?.abortToMenu('campaign')}
-              gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
-            />
-          )}
+          <Suspense fallback={null}>
+            {screen === 'paused' && (
+              <PauseOverlay
+                onResume={() => engineRef.current?.resumeMission()}
+                onRestartCheckpoint={handleRestartCheckpoint}
+                onRestartMission={handleRestartMission}
+                onAbort={handleAbort}
+                gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
+              />
+            )}
 
-          {screen === 'debrief' && (
-            <DebriefScreen
-              onRestartCheckpoint={() => engineRef.current?.restartCheckpoint()}
-              onRetry={() => handleDeploy(selectedMissionId, difficulty)}
-              onChangeDifficulty={(newDiff) => {
-                missionSelectionStore.getState().setDifficulty(newDiff);
-                handleDeploy(selectedMissionId, newDiff);
-              }}
-              onNextMission={(nextId) => handleDeploy(nextId, difficulty)}
-              onReturnMenu={() => engineRef.current?.abortToMenu('campaign')}
-              gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
-            />
-          )}
+            {screen === 'debrief' && (
+              <DebriefScreen
+                onRestartCheckpoint={handleRestartCheckpoint}
+                onRetry={() =>
+                  handleDeploy(
+                    missionSelectionStore.getState().selectedMissionId,
+                    missionSelectionStore.getState().difficulty
+                  )
+                }
+                onChangeDifficulty={(newDiff) => {
+                  missionSelectionStore.getState().setDifficulty(newDiff);
+                }}
+                onNextMission={(nextId) =>
+                  handleDeploy(nextId, missionSelectionStore.getState().difficulty)
+                }
+                onReturnMenu={handleAbort}
+                gpuRenderer={engineRef.current?.getGpuCapabilityReport()?.signals.rendererHint ?? undefined}
+              />
+            )}
+          </Suspense>
 
           {/* Optional isolated Web Component diagnostics panel, mounted only in Dev Mode on [F3] */}
           {devModeActive && diagnosticsOpen && React.createElement('vanguard-perf-panel')}
 
-          {/* Developer Combat AI & Ballistics Debug Overlay, mounted only in Dev Mode */}
-          {devModeActive && (
-            <CombatDebugOverlay onRequestPointerLock={() => engineRef.current?.requestPointerLock()} />
+          {/* Developer Combat AI & Ballistics Debug Overlay, lazy-mounted only when [F4] is opened */}
+          {devModeActive && combatDebugOpen && (
+            <Suspense fallback={null}>
+              <CombatDebugOverlay onRequestPointerLock={handleRequestPointerLock} />
+            </Suspense>
           )}
 
           <ToastAndRecoveryLayer />
 
           {/* Portrait Orientation Enforcement Gate for Mobile Smartphones */}
-          {viewport.shouldBlockPortrait && (
+          {effectivePortraitBlocked && (
             <div
               role="dialog"
               aria-modal="true"
@@ -299,6 +425,16 @@ export default function App() {
                   VANGUARD: ZERO HOUR uses twin-stick landscape tactical controls and wide-angle combat optics.
                   Rotate your phone sideways to continue.
                 </p>
+                {!viewport.isCoarsePointer && (
+                  <button
+                    type="button"
+                    data-testid="portrait-preview-continue"
+                    onClick={() => setPortraitGateDismissed(true)}
+                    className="mt-2 w-full min-h-[40px] px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
+                  >
+                    Continue in Narrow Preview
+                  </button>
+                )}
               </div>
             </div>
           )}

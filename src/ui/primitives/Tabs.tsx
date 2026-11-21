@@ -8,7 +8,7 @@ export function TabsList({ className, ...props }: React.ComponentPropsWithoutRef
   return (
     <TabsPrimitive.List
       className={cn(
-        'inline-flex items-center gap-1 bg-[#0B0E11] p-1 border border-zinc-800 rounded-sm',
+        'inline-flex shrink-0 items-center gap-1 bg-[#0B0E11] p-1 border border-zinc-800 rounded-sm',
         className
       )}
       {...props}

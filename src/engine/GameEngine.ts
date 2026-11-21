@@ -74,7 +74,7 @@ import { buildSupplyCrate } from '@/src/world/builders/WorldPropsAndLandmarks';
 import { PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import { CollisionWorld, RayHit } from '@/src/physics/CollisionWorld';
 import { DIFFICULTY_COMBAT_PROFILES } from '@/src/schemas/combat.schema';
-import { Difficulty, MissionGrade } from '@/src/schemas/common.schema';
+import { Difficulty, MapId, MissionGrade } from '@/src/schemas/common.schema';
 import { EXPLOSIVE_BY_ID } from '@/src/schemas/explosive.schema';
 import { AirUnitType, MissionConfig } from '@/src/schemas/mission.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
@@ -87,7 +87,13 @@ import { uiStore } from '@/src/stores/uiStore';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
 import { DestructionSystem } from '@/src/world/DestructionSystem';
 import { SceneLights, setupLightingRig } from '@/src/world/LightingRig';
-import { buildWorldMap, BuiltWorldData } from '@/src/world/MapBuilder';
+import {
+  BuiltWorldData,
+  createWorldShell,
+  loadMapPopulator,
+  MapPopulator,
+  populateCommonWorldAndFinalize,
+} from '@/src/world/MapBuilderAsync';
 import { WorldChunkManager } from '@/src/world/WorldChunkManager';
 import { CombatDebugRenderer } from './CombatDebugRenderer';
 import { engineLifecycleMachine } from './EngineLifecycle';
@@ -97,6 +103,20 @@ import { HudSnapshotPublisher } from './HudSnapshotPublisher';
 import { InputManager } from './InputManager';
 import { PerformanceGovernor } from './PerformanceGovernor';
 import { PerformanceMonitor } from './PerformanceMonitor';
+import { PbrMaterialLibrary } from '@/src/assets/PbrMaterialLibrary';
+import { SpatialAcousticEngine } from '@/src/audio/SpatialAcousticEngine';
+import { BattlefieldVfxSystem } from '@/src/effects/BattlefieldVfxSystem';
+import {
+  classifyImpactMaterialFromObject,
+  ImpactSurfaceMaterial,
+  SurfaceDecalManager,
+} from '@/src/effects/SurfaceDecalManager';
+import {
+  buildMissionEnvironmentEnhancement,
+  getMissionAtmosphereDirective,
+  MissionEnhancementHandle,
+} from '@/src/world/MissionEnvironmentEnhancer';
+import { DirectorTelemetrySnapshot } from './RenderingQualityDirector';
 import { EngineRenderer } from './Renderer';
 
 export class GameEngine {
@@ -155,9 +175,22 @@ export class GameEngine {
   private activeModifierEffects: CombinedModifierEffects = computeCombinedModifierEffects([]);
   private lastExtractionAttemptLogged = false;
 
+  private readonly pbrLibrary = new PbrMaterialLibrary();
+  private readonly spatialAcoustics = new SpatialAcousticEngine();
+  private readonly battlefieldVfx: BattlefieldVfxSystem;
+  private readonly surfaceDecals: SurfaceDecalManager;
+  private readonly impactRaycaster = new THREE.Raycaster();
+  private readonly decalQueryRootsScratch: THREE.Object3D[] = [];
+  private readonly tmpExplosionPos = new THREE.Vector3();
+  private readonly tmpDownOrigin = new THREE.Vector3();
+  private readonly tmpDownDir = new THREE.Vector3(0, -1, 0);
+  private readonly tmpUpVec = new THREE.Vector3(0, 1, 0);
+  private missionEnhancement: MissionEnhancementHandle | null = null;
+
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
   private worldData: BuiltWorldData | null = null;
+  private readonly mapPopulatorCache = new Map<MapId, MapPopulator>();
   private missionDirector: MissionDirector | null = null;
   private activeMission: MissionConfig | null = null;
   private activeScope: ResourceScope | null = null;
@@ -194,14 +227,40 @@ export class GameEngine {
       }
     );
     this.assetManager.configureRenderer(this.renderer.renderer);
+    this.assetManager.setOnMaterialCreated((mat) => {
+      this.renderer.registerMaterialForShadows(mat);
+    });
+    this.pbrLibrary.setOnMaterialCreated((mat) => {
+      this.renderer.registerMaterialForShadows(mat);
+    });
 
     this.gpuReport = detectGpuCapability(this.renderer.renderer);
+    this.renderer.qualityDirector.setHardwareProfile(this.gpuReport.hardwareProfile);
     const initialGraphics = settingsStore.getState().graphics;
     if (!initialGraphics.autoDetectedPresetApplied && initialGraphics.qualityMode === 'auto') {
       settingsStore.getState().applyAutoDetectedGraphics(this.gpuReport.recommendedSettings);
     }
 
     const settings = settingsStore.getState();
+    this.renderer.qualityDirector.syncFromGraphicsSettings(settings.graphics);
+    this.renderer.applyDirectorDimensions(
+      settings.graphics.maxDpr,
+      this.lights,
+      settings.graphics.shadowsEnabled
+    );
+    this.battlefieldVfx = new BattlefieldVfxSystem(this.renderer.scene, this.renderer.isSoftwareGl);
+    this.surfaceDecals = new SurfaceDecalManager(
+      this.renderer.scene,
+      settings.graphics.decalBudget
+    );
+    this.spatialAcoustics.configure({
+      spatialEnabled: audioSettings.spatialAudioEnabled,
+      reverbEnabled: audioSettings.environmentalReverbEnabled,
+      dynamicRange: audioSettings.dynamicRange,
+    });
+    const initDims = this.renderer.qualityDirector.getActiveDimensions();
+    this.battlefieldVfx.setDensityScales(initDims.particleDensityScale, initDims.rainDensityScale);
+
     this.governor = new PerformanceGovernor(settings.graphics.quality, settings.graphics.adaptiveGovernor);
     this.governor.configureFromSettings(settings.graphics);
     this.assetManager.setTextureQuality(settings.graphics.textureQuality);
@@ -246,6 +305,10 @@ export class GameEngine {
         const scr = uiStore.getState().screen;
         if (scr === 'playing') this.pauseMission();
         else if (scr === 'paused') this.resumeMission();
+      },
+      () => {
+        const ui = uiStore.getState();
+        return ui.screen === 'playing' && !ui.tacticalOverviewOpen && !ui.combatDebugOpen;
       }
     );
     this.input.attach(this.renderer.renderer.domElement);
@@ -283,6 +346,42 @@ export class GameEngine {
       this.telemetry.recordHealthRegenerated(amt);
     };
     this.weapons = new WeaponSystem(this.renderer.viewModelScene, this.audio, this.vfx, this.projectiles);
+    this.weapons.setCombatVfxHooks({
+      onMuzzleFired: (_weaponId, muzzleWorld, dir, right, isLauncher) => {
+        this.battlefieldVfx.emitEffect('barrel_smoke', muzzleWorld, dir, isLauncher ? 1.35 : 0.65);
+        if (!isLauncher) {
+          this.battlefieldVfx.emitEffect('shell_casings', muzzleWorld, right, 1.0);
+        }
+      },
+      onWorldImpact: (origin, dir, point, normal, distance, colliderId) => {
+        const hitMesh = this.findDecalTargetMesh(
+          origin,
+          dir,
+          Math.max(0.05, distance - 2.0),
+          distance + 1.5,
+          colliderId,
+          point
+        );
+        let surface: ImpactSurfaceMaterial = hitMesh
+          ? classifyImpactMaterialFromObject(hitMesh)
+          : 'concrete';
+        if (!hitMesh && colliderId) {
+          const idLow = colliderId.toLowerCase();
+          if (/metal|steel|barrel|tank|apc|pipe|radar|crate|beam/.test(idLow)) surface = 'metal';
+          else if (/wood|plank|tree|bridge|cache/.test(idLow)) surface = 'wood';
+          else if (/glass|window/.test(idLow)) surface = 'glass';
+        }
+        this.battlefieldVfx.emitSurfaceImpact(surface, point, normal);
+        if (hitMesh) {
+          this.surfaceDecals.spawnImpactDecal({
+            targetMesh: hitMesh,
+            point,
+            normal,
+            surface,
+          });
+        }
+      },
+    });
     this.enemies = new EnemyManager(
       this.renderer.scene,
       this.resourceManager,
@@ -374,6 +473,35 @@ export class GameEngine {
           }
         }
       },
+      onExplosionVfx: (x, y, z, radius) => {
+        const scale = Math.max(0.65, Math.min(2.2, radius / 6.0));
+        this.tmpExplosionPos.set(x, y, z);
+        this.battlefieldVfx.emitEffect('explosion_debris', this.tmpExplosionPos, this.tmpUpVec, scale);
+        this.battlefieldVfx.emitEffect('smoke_plumes', this.tmpExplosionPos, this.tmpUpVec, scale);
+        this.tmpDownOrigin.set(x, y + 1.6, z);
+        const groundY = this.collisionWorld.getGroundHeightAt(x, z);
+        const onGround = Math.abs(y - groundY) <= 0.35;
+        const groundMesh = onGround
+          ? (this.worldData?.groundMesh ?? null)
+          : this.findDecalTargetMesh(
+              this.tmpDownOrigin,
+              this.tmpDownDir,
+              0.05,
+              Math.max(4.5, radius),
+              null,
+              this.tmpExplosionPos
+            );
+        if (groundMesh) {
+          this.tmpExplosionPos.set(x, Number.isFinite(groundY) ? groundY + 0.02 : y, z);
+          this.surfaceDecals.spawnImpactDecal({
+            targetMesh: groundMesh,
+            point: this.tmpExplosionPos,
+            normal: this.tmpUpVec,
+            isExplosion: true,
+            radiusScale: scale,
+          });
+        }
+      },
     });
     this.cargoLiftManager.onPortalStateChange((u) => {
       this.workerBridge?.updatePortalState(u.portalId, u.enabled, u.dynamicWaitCostSec, u.activeOccupants);
@@ -400,7 +528,8 @@ export class GameEngine {
     // Load live background 3D diorama for Title/Menu screens, then capture shared baseline
     this.setupMenuDiorama();
     this.resourceManager.recordBaseline();
-    this.loop.start();
+    // Keep GameLoop idle on opaque menu screens (started when deploying into a mission)
+    this.loop.stop();
   }
 
   getInputManager(): InputManager {
@@ -423,26 +552,60 @@ export class GameEngine {
     return report;
   }
 
+  getQualityTelemetry(): DirectorTelemetrySnapshot {
+    return this.renderer.qualityDirector.getTelemetry();
+  }
+
   private bindReactiveSettings(): void {
+    let prevInput = settingsStore.getState().input;
+    let prevGraphics = settingsStore.getState().graphics;
     this.unsubscribers.push(
       settingsStore.subscribe((state) => {
-        this.input.updateSettings(state.input);
-        this.governor.configureFromSettings(state.graphics);
-        this.governor.setTargetRefreshRate(state.graphics.targetRefreshRate ?? 60);
-        this.renderer.setRendererBackendPreference(state.graphics.rendererBackend ?? 'auto');
-        this.assetManager.setTextureQuality(state.graphics.textureQuality);
-        this.loop.setFpsCap(state.graphics.fpsCap);
-        const effProf = this.governor.getProfile();
-        this.vfx.setBudgetRatio(effProf.particleBudgetRatio);
-        this.renderer.applyGovernorProfile(
-          effProf,
-          state.graphics.shadowsEnabled,
-          state.graphics.bloomEnabled,
-          this.lights
-        );
+        if (state.input !== prevInput) {
+          prevInput = state.input;
+          this.input.updateSettings(state.input);
+        }
+        if (state.graphics !== prevGraphics) {
+          prevGraphics = state.graphics;
+          const isPlaying = uiStore.getState().screen === 'playing';
+          this.governor.configureFromSettings(state.graphics);
+          this.governor.setTargetRefreshRate(state.graphics.targetRefreshRate ?? 60);
+          this.renderer.setRendererBackendPreference(state.graphics.rendererBackend ?? 'auto');
+          this.renderer.qualityDirector.syncFromGraphicsSettings(state.graphics);
+          this.renderer.applyDirectorDimensions(
+            state.graphics.maxDpr,
+            this.lights,
+            state.graphics.shadowsEnabled,
+            { allowCsmRebuild: true, deferResize: isPlaying }
+          );
+          const activeDims = this.renderer.qualityDirector.getActiveDimensions();
+          this.battlefieldVfx.setDensityScales(
+            activeDims.particleDensityScale,
+            activeDims.rainDensityScale
+          );
+          this.surfaceDecals.setBudget(activeDims.decalBudget);
+          this.assetManager.setTextureQuality(state.graphics.textureQuality);
+          this.loop.setFpsCap(state.graphics.fpsCap);
+          const effProf = this.governor.getProfile();
+          this.vfx.setBudgetRatio(effProf.particleBudgetRatio);
+          if (state.graphics.qualityProfile !== 'auto_adaptive') {
+            this.renderer.applyGovernorProfile(
+              effProf,
+              state.graphics.shadowsEnabled,
+              state.graphics.bloomEnabled,
+              this.lights,
+              { deferResize: isPlaying }
+            );
+          }
+        }
       }),
       audioSettingsStore.subscribe((state) => {
         this.audio.applySettings(state);
+        this.spatialAcoustics.configure({
+          spatialEnabled: state.spatialAudioEnabled,
+          reverbEnabled: state.environmentalReverbEnabled,
+          dynamicRange: state.dynamicRange,
+        });
       }),
       uiStore.subscribe(
         (s) => ({
@@ -564,35 +727,35 @@ export class GameEngine {
   }
 
   private setupMenuDiorama(): void {
+    // Opaque full-bleed artwork & Command HQ overlays cover all menu screens;
+    // keep the 3D scene unloaded on menus to eliminate hidden GPU/CPU memory & frame burn (VIS-016).
     this.clearWorldState();
-    const scope: ResourceScope = 'mission:0';
-    this.activeScope = scope;
-    const profile = this.governor.getProfile();
-    const gSettings = settingsStore.getState().graphics;
-    this.lights = setupLightingRig(
-      this.renderer.scene,
-      'sunset',
-      profile.shadowMapSize,
-      profile.shadowDistance,
-      this.resourceManager
-    );
-    this.renderer.applyGovernorProfile(
-      profile,
-      gSettings.shadowsEnabled,
-      gSettings.bloomEnabled,
-      this.lights
-    );
-    this.worldData = buildWorldMap(
-      'warzone_city',
-      0,
-      this.renderer.scene,
-      this.assetManager,
-      this.resourceManager,
-      this.collisionWorld,
-      this.chunkManager,
-      this.destruction
-    );
-    this.dioramaLoaded = true;
+    this.dioramaLoaded = false;
+  }
+
+  private yieldToFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      if (
+        typeof window !== 'undefined' &&
+        typeof window.requestAnimationFrame === 'function' &&
+        typeof document !== 'undefined' &&
+        !document.hidden
+      ) {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  private reportLoadStage(loaded: number, total: number, currentAsset: string): void {
+    gameSessionStore.getState().setLoadProgress({
+      loaded,
+      total,
+      currentAsset,
+      percent: Math.round((loaded / total) * 100),
+      usedFallbackCount: this.assetManager.getFallbackCount(),
+    });
   }
 
   async startMission(
@@ -635,35 +798,39 @@ export class GameEngine {
     const signal = this.activeAbortController.signal;
 
     try {
-      const stages = [
-        'Streaming Terrain & Architecture',
-        'Compiling Collision BVH & NavGrid',
-        'Deploying Armored Vehicles & Air Support',
-        'Calibrating Ballistics & Spatial Audio',
-      ];
-
-      for (let i = 0; i < stages.length; i++) {
-        if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
-        gameSessionStore.getState().setLoadProgress({
-          loaded: i + 1,
-          total: stages.length,
-          currentAsset: stages[i],
-          percent: Math.round(((i + 1) / stages.length) * 100),
-          usedFallbackCount: this.assetManager.getFallbackCount(),
-        });
-        await new Promise((r) => window.setTimeout(r, 45));
+      const totalStages = 4;
+      this.reportLoadStage(1, totalStages, 'Streaming Terrain & Architecture');
+      let populator = this.mapPopulatorCache.get(mission.mapId);
+      if (!populator) {
+        populator = await loadMapPopulator(mission.mapId);
+        this.mapPopulatorCache.set(mission.mapId, populator);
       }
-
-      this.lifecycle.send({ type: 'ASSETS_LOADED' });
+      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      await this.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
-      this.populateMissionWorld(mission, difficulty, scope, preferredWeapon);
+      this.reportLoadStage(2, totalStages, 'Building Vertical Structures & Collision BVH');
+      this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
+      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      await this.yieldToFrame();
+      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+
+      this.reportLoadStage(3, totalStages, 'Deploying Squad, Vehicles & Navigation Grid');
+      this.populateEntitiesAndPlayerStep(mission, difficulty, scope, preferredWeapon);
+      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      await this.yieldToFrame();
+      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+
+      this.reportLoadStage(4, totalStages, 'Compiling Shaders & Spatial Acoustics');
+      this.lifecycle.send({ type: 'ASSETS_LOADED' });
+      this.finalizeMissionLoadStep(mission, difficulty);
 
       this.lifecycle.send({ type: 'WORLD_READY' });
       this.audio.startMissionAmbienceAndMusic();
       this.suppressAutoPauseOnUnlock = false;
       uiStore.getState().setDebugSimPaused(false);
       this.loop.setPaused(false);
+      this.loop.start();
       uiStore.getState().setScreen('playing');
       if (!(uiStore.getState().combatDebugOpen && !uiStore.getState().combatDebugCollapsed)) {
         this.requestPointerLock();
@@ -762,6 +929,27 @@ export class GameEngine {
     preferredWeapon?: WeaponId,
     restoredCheckpoint?: MissionCheckpointSnapshot
   ): void {
+    const populator = this.mapPopulatorCache.get(mission.mapId);
+    if (!populator) {
+      throw new Error(`Map module not loaded for ${mission.mapId}`);
+    }
+    this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
+    this.populateEntitiesAndPlayerStep(
+      mission,
+      difficulty,
+      scope,
+      preferredWeapon,
+      restoredCheckpoint
+    );
+    this.finalizeMissionLoadStep(mission, difficulty, restoredCheckpoint);
+  }
+
+  private populateWorldArchitectureStep(
+    mission: MissionConfig,
+    difficulty: Difficulty,
+    scope: ResourceScope,
+    populator: MapPopulator
+  ): void {
     if (!this.attemptContext || this.attemptContext.missionId !== mission.id) {
       this.attemptContext = {
         missionId: mission.id,
@@ -788,7 +976,7 @@ export class GameEngine {
       this.lights
     );
 
-    this.worldData = buildWorldMap(
+    const shell = createWorldShell(
       mission.mapId,
       mission.id,
       this.renderer.scene,
@@ -798,6 +986,54 @@ export class GameEngine {
       this.chunkManager,
       this.destruction
     );
+    populator(shell.ctx);
+    this.worldData = populateCommonWorldAndFinalize(shell);
+
+    // Frontier Masterplan V3: distinct mission environment, localized wetness, weather, acoustics, CSM
+    const directive = getMissionAtmosphereDirective(mission.id);
+    this.renderer.setExposure(directive.exposure);
+    this.missionEnhancement?.dispose();
+    this.missionEnhancement = buildMissionEnvironmentEnhancement(
+      this.renderer.scene,
+      mission.id,
+      this.pbrLibrary,
+      this.collisionWorld.getGroundHeightAt
+    );
+    this.surfaceDecals.clearMissionDecals();
+    this.battlefieldVfx.clearAll();
+    this.battlefieldVfx.clearIndoorShelters();
+    for (const surf of this.worldData.elevatedSurfaces) {
+      if (surf.elevationY >= 2.2) {
+        this.battlefieldVfx.registerIndoorShelter({
+          minX: surf.minX,
+          maxX: surf.maxX,
+          minZ: surf.minZ,
+          maxZ: surf.maxZ,
+          ceilingY: surf.elevationY,
+        });
+      }
+    }
+    this.battlefieldVfx.setEnvironmentWeather(
+      directive.weatherMode,
+      directive.windX,
+      directive.windZ
+    );
+    this.spatialAcoustics.setAcousticSpace(directive.acousticSpace);
+    this.renderer.applyDirectorDimensions(
+      gSettings.maxDpr,
+      this.lights,
+      gSettings.shadowsEnabled
+    );
+  }
+
+  private populateEntitiesAndPlayerStep(
+    mission: MissionConfig,
+    difficulty: Difficulty,
+    scope: ResourceScope,
+    preferredWeapon?: WeaponId,
+    restoredCheckpoint?: MissionCheckpointSnapshot
+  ): void {
+    if (!this.worldData) return;
 
     const completedSet = new Set([
       ...(restoredCheckpoint?.completedObjectiveIds ?? []),
@@ -998,7 +1234,7 @@ export class GameEngine {
         this.collisionWorld,
         hazards
       );
-      this.player.spawn(safeSpawn.x, safeSpawn.y, safeSpawn.z, safeSpawn.yaw);
+      this.player.spawn(safeSpawn.x, safeSpawn.y, safeSpawn.z, safeSpawn.yaw, this.collisionWorld);
       const vitals = clampCheckpointVitals(
         restoredCheckpoint.healthAtCheckpoint,
         restoredCheckpoint.armorAtCheckpoint,
@@ -1024,7 +1260,8 @@ export class GameEngine {
         mission.playerSpawn.x,
         mission.playerSpawn.y,
         mission.playerSpawn.z,
-        mission.playerYaw
+        mission.playerYaw,
+        this.collisionWorld
       );
       this.weapons.resetLoadout(startWeapon, carriedSlots);
       if (equipSpec.bonusGrenades > 0) {
@@ -1087,7 +1324,14 @@ export class GameEngine {
         });
       }
     }
+  }
 
+  private finalizeMissionLoadStep(
+    mission: MissionConfig,
+    difficulty: Difficulty,
+    restoredCheckpoint?: MissionCheckpointSnapshot
+  ): void {
+    const gSettings = settingsStore.getState().graphics;
     // Immediately align camera with spawned player eye position before Frame 0 render/projection
     this.player.syncCamera(
       this.renderer.camera,
@@ -1100,7 +1344,7 @@ export class GameEngine {
     this.missionDirector = new MissionDirector(
       mission,
       difficulty,
-      this.attemptContext,
+      this.attemptContext!,
       restoredCheckpoint,
       () => {
         if (!this.activeModifierEffects.disableCheckpoints) {
@@ -1114,6 +1358,11 @@ export class GameEngine {
     }
     this.reinforcementTimer = 28;
     this.dioramaLoaded = false;
+
+    // PERF-01: Prewarm decal textures/materials, register world + entity materials with CSM,
+    // and precompile all shaders synchronously during mission load (zero mid-combat compile stalls).
+    this.surfaceDecals.prewarm();
+    this.renderer.registerSceneShadowsAndPrecompile();
   }
 
   getLifecycleState(): string {
@@ -1133,6 +1382,7 @@ export class GameEngine {
     this.input.exitPointerLock();
     this.input.clearAllInputs();
     this.loop.setPaused(true);
+    this.loop.stop();
     this.lifecycle.send({ type: 'PAUSE' });
     uiStore.getState().setScreen('paused');
   }
@@ -1144,6 +1394,7 @@ export class GameEngine {
     this.suppressAutoPauseOnUnlock = false;
     uiStore.getState().setDebugSimPaused(false);
     this.loop.setPaused(false);
+    this.loop.start();
     this.lifecycle.send({ type: 'RESUME' });
     uiStore.getState().setScreen('playing');
     if (!(uiStore.getState().combatDebugOpen && !uiStore.getState().combatDebugCollapsed)) {
@@ -1197,6 +1448,7 @@ export class GameEngine {
     this.suppressAutoPauseOnUnlock = false;
     uiStore.getState().setDebugSimPaused(false);
     this.loop.setPaused(false);
+    this.loop.start();
     uiStore.getState().setScreen('playing');
     if (!(uiStore.getState().combatDebugOpen && !uiStore.getState().combatDebugCollapsed)) {
       this.requestPointerLock();
@@ -1259,7 +1511,8 @@ export class GameEngine {
       this.lifecycle.send({ type: 'UNLOAD' });
     }
     this.lifecycle.send({ type: 'UNLOADED' });
-    this.loop.setPaused(false);
+    this.loop.setPaused(true);
+    this.loop.stop();
     this.setupMenuDiorama();
     uiStore.getState().setScreen(targetScreen);
   }
@@ -1274,6 +1527,12 @@ export class GameEngine {
 
   private clearWorldState(): void {
     this.vfx.resetAll();
+    this.battlefieldVfx.clearAll();
+    this.battlefieldVfx.clearIndoorShelters();
+    this.surfaceDecals.clearMissionDecals();
+    this.missionEnhancement?.dispose();
+    this.missionEnhancement = null;
+    this.pbrLibrary.dispose();
     this.projectiles.resetAll();
     this.explosives.reset();
     this.enemies.clear();
@@ -1420,14 +1679,18 @@ export class GameEngine {
     }
 
     // Stage 7 TRN-37: Desktop Squad Quick Keys [F1]-[F4] (Fireteam mode only)
+    // When Developer Mode is active, F3/F4 control Diagnostics & Combat Debug overlays so avoid dual-firing.
     if (this.activeDeploymentMode === 'fireteam') {
+      const devActive = isDeveloperModeActiveForSetting(
+        settingsStore.getState().developer.devModeEnabled
+      );
       if (this.input.wasKeyPressed('F1')) {
         this.issueSquadCommand('REGROUP', 'desktop_quick_key');
       } else if (this.input.wasKeyPressed('F2')) {
         this.issueSquadCommand('MOVE', 'desktop_quick_key');
-      } else if (this.input.wasKeyPressed('F3')) {
+      } else if (!devActive && this.input.wasKeyPressed('F3')) {
         this.issueSquadCommand('ATTACK_TARGET', 'desktop_quick_key');
-      } else if (this.input.wasKeyPressed('F4')) {
+      } else if (!devActive && this.input.wasKeyPressed('F4')) {
         this.issueSquadCommand('FLANK', 'desktop_quick_key');
       }
     }
@@ -1773,7 +2036,71 @@ export class GameEngine {
       this.audio.play2D('ui_click', 4, 0.45);
       return true;
     }
+    if (!this.vehicles.getPlayerVehicle()) {
+      if (this.player.isClimbingLadder) {
+        this.player.dismountLadder(false);
+        this.audio.play2D('ui_click', 4, 0.35);
+        return true;
+      }
+      if (this.player.tryMountLadder(this.collisionWorld)) {
+        this.audio.play2D('ui_click', 4, 0.35);
+        return true;
+      }
+    }
     return false;
+  }
+
+  private findDecalTargetMesh(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    near: number,
+    far: number,
+    colliderId?: string | null,
+    hitPoint?: THREE.Vector3
+  ): THREE.Mesh | null {
+    // PERF-02: O(1) collider-ID / terrain lookup without traversing the full scene graph
+    if (this.worldData) {
+      if (colliderId) {
+        const directMesh = this.worldData.colliderMeshes?.get(colliderId);
+        if (directMesh && directMesh.visible) return directMesh;
+      } else if (hitPoint) {
+        if (this.worldData.roadMesh && Math.abs(hitPoint.x) <= 9.2 && Math.abs(hitPoint.y - 0.025) <= 0.15) {
+          return this.worldData.roadMesh;
+        }
+        const terrainY = this.collisionWorld.getGroundHeightAt(hitPoint.x, hitPoint.z);
+        if (this.worldData.groundMesh && Math.abs(hitPoint.y - terrainY) <= 0.35) {
+          return this.worldData.groundMesh;
+        }
+      }
+    }
+
+    // Tightly-scoped chunk-local fallback raycast (never traverse full scene.children)
+    const sampleX = hitPoint ? hitPoint.x : origin.x + direction.x * ((near + far) * 0.5);
+    const sampleZ = hitPoint ? hitPoint.z : origin.z + direction.z * ((near + far) * 0.5);
+    this.decalQueryRootsScratch.length = 0;
+    this.chunkManager.getChunksAround(sampleX, sampleZ, 16, this.decalQueryRootsScratch);
+    if (this.worldData?.groundMesh) {
+      this.decalQueryRootsScratch.push(this.worldData.groundMesh);
+    }
+    if (this.decalQueryRootsScratch.length === 0) return null;
+
+    this.impactRaycaster.set(origin, direction);
+    this.impactRaycaster.near = near;
+    this.impactRaycaster.far = far;
+    const hits = this.impactRaycaster.intersectObjects(this.decalQueryRootsScratch, true);
+    this.decalQueryRootsScratch.length = 0;
+    for (let i = 0; i < hits.length; i++) {
+      const obj = hits[i].object;
+      if (
+        obj instanceof THREE.Mesh &&
+        !(obj instanceof THREE.InstancedMesh) &&
+        !obj.userData?.isDecal &&
+        obj.geometry?.attributes?.position
+      ) {
+        return obj;
+      }
+    }
+    return null;
   }
 
   private onFixedStep = (dt: number): void => {
@@ -2229,10 +2556,20 @@ export class GameEngine {
     this.telemetry.tickExposure(dt, anyEnemyHasLos);
 
     const devActive = isDeveloperModeActiveForSetting(settings.developer.devModeEnabled);
-    const debugOpen = devActive && uiStore.getState().combatDebugOpen;
-    if (devActive) {
+    const uiState = uiStore.getState();
+    const debugOpen = devActive && uiState.combatDebugOpen;
+    const debugCollapsed = uiState.combatDebugCollapsed;
+    const any3DGizmoEnabled =
+      settings.developer.debugShow3DGizmos ||
+      settings.developer.debugShowFlightPaths ||
+      settings.developer.debugShowPhysicsColliders;
+    this.collisionWorld.physicsWorld.debugSystem.setDetailedRecordingEnabled(
+      debugOpen && (!debugCollapsed || settings.developer.debugShowPhysicsColliders)
+    );
+    if (debugOpen) {
       this.debugPublishAccum += dt;
-      const publishPeriod = debugOpen ? 0.1 : 0.45;
+      // 5 Hz when expanded, 2 Hz when collapsed into the compact pill to minimize React & GPU buffer churn
+      const publishPeriod = debugCollapsed ? 0.5 : 0.2;
       if (this.debugPublishAccum >= publishPeriod) {
         this.debugPublishAccum = 0;
         const groundRows = this.enemies.getDebugInspectorRows(this.player);
@@ -2302,7 +2639,9 @@ export class GameEngine {
         prelimSnap.warnings = warnings;
         gameSessionStore.getState().updateCombatDebug(prelimSnap);
 
-        if (debugOpen) {
+        if (!debugCollapsed || any3DGizmoEnabled) {
+          const cap = this.player.getActiveCapsuleDimensions();
+          const lastMove = this.player.getLastMoveResult();
           this.debugRenderer.update(
             settings.developer.debugShow3DGizmos,
             allDebugUnits,
@@ -2313,13 +2652,26 @@ export class GameEngine {
             prelimSnap.recentExplosions,
             settings.developer.debugShowPhysicsColliders,
             prelimSnap.physics,
-            this.vehicles.getCameraDebugRay()
+            this.vehicles.getCameraDebugRay(),
+            {
+              radius: cap.radius,
+              height: cap.height,
+              velocityX: this.player.velocity.x,
+              velocityY: this.player.velocity.y,
+              velocityZ: this.player.velocity.z,
+              groundNormalX: lastMove?.groundNormalX ?? 0,
+              groundNormalY: lastMove?.groundNormalY ?? 1,
+              groundNormalZ: lastMove?.groundNormalZ ?? 0,
+              grounded: this.player.grounded,
+              climbing: this.player.isClimbingLadder,
+            }
           );
         } else {
           this.debugRenderer.setVisible(false);
         }
       }
     } else {
+      this.debugPublishAccum = 0;
       this.debugRenderer.setVisible(false);
     }
 
@@ -2525,7 +2877,11 @@ export class GameEngine {
   };
 
   private onUpdateVfx = (dt: number): void => {
+    if (uiStore.getState().screen !== 'playing') return;
     this.vfx.update(dt);
+    this.battlefieldVfx.update(dt, this.renderer.camera.position);
+    this.surfaceDecals.update(dt, this.renderer.camera.position);
+    this.missionEnhancement?.update(dt);
     if (this.worldData) {
       const elapsed = performance.now() * 0.001;
       for (const prop of this.worldData.animatedProps) {
@@ -2535,6 +2891,7 @@ export class GameEngine {
   };
 
   private onUpdateAudio = (): void => {
+    if (uiStore.getState().screen !== 'playing') return;
     this.renderer.camera.getWorldDirection(this._audioDir);
     this.audio.updateListener(
       this.renderer.camera.position.x,
@@ -2547,10 +2904,12 @@ export class GameEngine {
   };
 
   private onRender = (dt = 1 / 60): void => {
+    const screen = uiStore.getState().screen;
+    // Never waste GPU/CPU cycles rendering an invisible 3D scene behind opaque menu overlays or frozen pause screen
+    if (screen !== 'playing') return;
     const t0 = performance.now();
-    const isPlaying = uiStore.getState().screen === 'playing';
     const inVehicle = this.vehicles.getPlayerVehicle() !== null;
-    if (isPlaying && !inVehicle && this.activeMission && this.player.alive && this.input.hasPendingLookDelta()) {
+    if (!inVehicle && this.activeMission && this.player.alive && this.input.hasPendingLookDelta()) {
       const settings = settingsStore.getState();
       const weaponCfg = this.weapons.getActiveState().config;
       this.player.touchAimFrictionScale = this.computeTouchAimFrictionScale();
@@ -2572,12 +2931,13 @@ export class GameEngine {
       );
     }
     this.chunkManager.updateVisibility(this.renderer.camera, this.governor.getProfile().drawDistance);
-    const showVm = isPlaying && !inVehicle;
+    const showVm = !inVehicle;
     this.renderer.renderFrame(showVm);
     this.monitor.recordPhase('render', performance.now() - t0);
   };
 
   private onFrameMeasured = (frameMs: number): void => {
+    if (uiStore.getState().screen !== 'playing') return;
     const dt = 1 / 60;
 
     if (!this.initialProbeSettled) {
@@ -2586,30 +2946,48 @@ export class GameEngine {
         this.initialProbeSettled = true;
         const steady = this.initialProbeFrames.slice(5);
         const avgProbeMs = steady.reduce((a, b) => a + b, 0) / Math.max(1, steady.length);
-        const refined = detectGpuCapability(this.renderer.renderer, avgProbeMs);
-        this.gpuReport = refined;
-        const currentGraphics = settingsStore.getState().graphics;
-        const tierOrder = ['low', 'medium', 'high', 'ultra'] as const;
-        if (
-          currentGraphics.qualityMode === 'auto' &&
-          tierOrder.indexOf(refined.recommendedTier) < tierOrder.indexOf(currentGraphics.quality)
-        ) {
-          settingsStore.getState().applyAutoDetectedGraphics(refined.recommendedSettings);
-        }
+        // Record refined GPU capability report for diagnostics without triggering a
+        // mid-combat settings reset / CSM shader rebuild / canvas blink while playing.
+        this.gpuReport = detectGpuCapability(this.renderer.renderer, avgProbeMs);
       }
+    }
+
+    const drawInfo = this.renderer.getDrawInfo();
+    const graphicsSettings = settingsStore.getState().graphics;
+    const directorChanged = this.renderer.qualityDirector.recordFrame({
+      cpuFrameMs: frameMs,
+      drawCalls: drawInfo.calls,
+      triangles: drawInfo.triangles,
+      geometriesCount: drawInfo.geometries,
+      texturesCount: drawInfo.textures,
+    });
+    if (directorChanged) {
+      const dims = this.renderer.qualityDirector.getActiveDimensions();
+      this.renderer.applyDirectorDimensions(
+        dims.maxDpr,
+        this.lights,
+        graphicsSettings.shadowsEnabled,
+        { allowCsmRebuild: false, deferResize: true }
+      );
+      this.battlefieldVfx.setDensityScales(dims.particleDensityScale, dims.rainDensityScale);
+      this.surfaceDecals.setBudget(dims.decalBudget);
     }
 
     const changed = this.governor.recordSample(frameMs, this.monitor.getCpuTimeMs(), dt);
     if (changed) {
-      const settings = settingsStore.getState();
       const prof = this.governor.getProfile();
-      this.renderer.applyGovernorProfile(
-        prof,
-        settings.graphics.shadowsEnabled,
-        settings.graphics.bloomEnabled,
-        this.lights
-      );
       this.vfx.setBudgetRatio(prof.particleBudgetRatio);
+      // In auto_adaptive mode, RenderingQualityDirector owns renderer visual scaling so
+      // PerformanceGovernor does not fight it or trigger redundant resizes/blinks.
+      if (graphicsSettings.qualityProfile !== 'auto_adaptive') {
+        this.renderer.applyGovernorProfile(
+          prof,
+          graphicsSettings.shadowsEnabled,
+          graphicsSettings.bloomEnabled,
+          this.lights,
+          { deferResize: true, allowShadowToggle: false }
+        );
+      }
     }
 
     this.monitor.tick(
@@ -2711,6 +3089,7 @@ export class GameEngine {
     this.input.exitPointerLock();
     this.input.clearAllInputs();
     this.loop.setPaused(true);
+    this.loop.stop();
 
     const checkpointDeaths = this.attemptContext?.checkpointDeathsCount ?? 0;
     const totalDeaths = checkpointDeaths + (victory ? 0 : 1);
@@ -2860,6 +3239,10 @@ export class GameEngine {
   dispose(): void {
     this.loop.stop();
     this.unloadCurrentWorld();
+    this.battlefieldVfx.dispose();
+    this.surfaceDecals.dispose();
+    this.pbrLibrary.dispose();
+    this.spatialAcoustics.dispose();
     this.friendlySquad.dispose(this.renderer.scene);
     this.debugRenderer.setVisible(false);
     this.weapons.dispose();

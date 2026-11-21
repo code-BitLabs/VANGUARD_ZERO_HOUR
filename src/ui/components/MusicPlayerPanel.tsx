@@ -52,42 +52,42 @@ function buildFallbackSnapshot(
 }
 
 export const MusicPlayerPanel: React.FC = () => {
-  const audioSettings = useAudioSettingsStore((s) => s);
+  const musicEnabled = useAudioSettingsStore((s) => s.musicEnabled);
+  const musicTrackId = useAudioSettingsStore((s) => s.musicTrackId);
+  const musicShuffle = useAudioSettingsStore((s) => s.musicShuffle);
+  const musicRepeatMode = useAudioSettingsStore((s) => s.musicRepeatMode);
+  const musicVolume = useAudioSettingsStore((s) => s.musicVolume);
+  const updateAudio = useAudioSettingsStore((s) => s.updateAudio);
+
   const [snap, setSnap] = useState<MusicPlaybackSnapshot>(() => {
     const active = AudioManager.getActiveInstance();
     return active
       ? active.getMusicController().getSnapshot()
-      : buildFallbackSnapshot(
-          audioSettings.musicTrackId,
-          audioSettings.musicShuffle,
-          audioSettings.musicRepeatMode
-        );
+      : buildFallbackSnapshot(musicTrackId, musicShuffle, musicRepeatMode);
   });
 
   useEffect(() => {
     const active = AudioManager.getActiveInstance();
     if (!active) {
-      setSnap(
-        buildFallbackSnapshot(
-          audioSettings.musicTrackId,
-          audioSettings.musicShuffle,
-          audioSettings.musicRepeatMode
-        )
-      );
+      setSnap(buildFallbackSnapshot(musicTrackId, musicShuffle, musicRepeatMode));
       return;
     }
 
     const ctrl = active.getMusicController();
-    const unsub = ctrl.subscribe(setSnap);
+    setSnap(ctrl.getSnapshot());
+    return ctrl.subscribe(setSnap);
+  }, [musicTrackId, musicShuffle, musicRepeatMode]);
+
+  useEffect(() => {
+    if (!snap.isPlaying) return;
+    const active = AudioManager.getActiveInstance();
+    if (!active) return;
+    const ctrl = active.getMusicController();
     const interval = window.setInterval(() => {
       setSnap(ctrl.getSnapshot());
-    }, 250);
-
-    return () => {
-      unsub();
-      window.clearInterval(interval);
-    };
-  }, [audioSettings.musicTrackId, audioSettings.musicShuffle, audioSettings.musicRepeatMode]);
+    }, 500);
+    return () => window.clearInterval(interval);
+  }, [snap.isPlaying]);
 
   const ensureUnlockedAndGetController = () => {
     const active = AudioManager.getActiveInstance();
@@ -101,7 +101,7 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       void ctrl.togglePlay();
     } else {
-      audioSettings.updateAudio({ musicEnabled: !audioSettings.musicEnabled });
+      updateAudio({ musicEnabled: !musicEnabled });
     }
   };
 
@@ -110,9 +110,9 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       void ctrl.next(true);
     } else {
-      const idx = MUSIC_TRACK_CATALOG.findIndex((t) => t.id === audioSettings.musicTrackId);
+      const idx = MUSIC_TRACK_CATALOG.findIndex((t) => t.id === musicTrackId);
       const next = MUSIC_TRACK_CATALOG[(idx + 1) % MUSIC_TRACK_CATALOG.length];
-      audioSettings.updateAudio({ musicTrackId: next.id });
+      updateAudio({ musicTrackId: next.id });
     }
   };
 
@@ -121,10 +121,10 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       void ctrl.previous(true);
     } else {
-      const idx = MUSIC_TRACK_CATALOG.findIndex((t) => t.id === audioSettings.musicTrackId);
+      const idx = MUSIC_TRACK_CATALOG.findIndex((t) => t.id === musicTrackId);
       const prev =
         MUSIC_TRACK_CATALOG[(idx - 1 + MUSIC_TRACK_CATALOG.length) % MUSIC_TRACK_CATALOG.length];
-      audioSettings.updateAudio({ musicTrackId: prev.id });
+      updateAudio({ musicTrackId: prev.id });
     }
   };
 
@@ -140,7 +140,7 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       void ctrl.selectTrack(id, { autoPlay: true, fromUser: true });
     } else {
-      audioSettings.updateAudio({ musicTrackId: id, musicEnabled: true });
+      updateAudio({ musicTrackId: id, musicEnabled: true });
     }
   };
 
@@ -150,7 +150,7 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       ctrl.setShuffle(nextShuffle);
     }
-    audioSettings.updateAudio({ musicShuffle: nextShuffle });
+    updateAudio({ musicShuffle: nextShuffle });
   };
 
   const handleCycleRepeat = () => {
@@ -160,7 +160,7 @@ export const MusicPlayerPanel: React.FC = () => {
     if (ctrl) {
       ctrl.setRepeatMode(nextMode);
     }
-    audioSettings.updateAudio({ musicRepeatMode: nextMode });
+    updateAudio({ musicRepeatMode: nextMode });
   };
 
   const handleToggleAdaptive = () => {
@@ -302,7 +302,7 @@ export const MusicPlayerPanel: React.FC = () => {
         <div className="flex items-center gap-2 text-xs text-zinc-300">
           <Volume2 className="h-3.5 w-3.5 text-zinc-400" />
           <span className="tabular-nums">
-            Music Level ({Math.round(audioSettings.musicVolume * 100)}%)
+            Music Level ({Math.round(musicVolume * 100)}%)
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -329,11 +329,11 @@ export const MusicPlayerPanel: React.FC = () => {
           <div className="w-36 sm:w-44">
             <Slider
               aria-label="Player Music Volume"
-              value={audioSettings.musicVolume}
+              value={musicVolume}
               min={0}
               max={1}
               step={0.02}
-              onValueChange={(musicVolume) => audioSettings.updateAudio({ musicVolume })}
+              onValueChange={(nextVolume) => updateAudio({ musicVolume: nextVolume })}
             />
           </div>
         </div>

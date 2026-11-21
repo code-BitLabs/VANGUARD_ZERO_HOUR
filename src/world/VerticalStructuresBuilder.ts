@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AssetManager } from '@/src/core/AssetManager';
 import { ResourceManager, ResourceScope } from '@/src/core/ResourceManager';
 import { CargoLiftDefinition, CargoLiftFloorStop } from '@/src/gameplay/CargoLiftManager';
@@ -7,6 +8,7 @@ import {
   buildAllowedProfilesMask,
 } from '@/src/navigation/AgentTraversalProfile';
 import { CollisionWorld, createOrientedSlopeRegion } from '@/src/physics/CollisionWorld';
+import { createLadderVolume, LadderVolume } from '@/src/physics/LadderVolume';
 import { COLLISION_LAYER, SpatialAABB } from '@/src/physics/SpatialHash';
 import { ElevatedNavSurfaceDescriptor } from '@/src/workers/WorkerBridge';
 import { NavPortalInput } from '@/src/workers/navigationCore';
@@ -27,10 +29,65 @@ export interface VerticalWorldContext {
   cargoLifts: CargoLiftDefinition[];
   nextSurfaceId: () => number;
   nextPortalId: () => number;
+  colliderMeshes?: Map<string, THREE.Mesh>;
 }
 
 const INFANTRY_PORTAL_MASK = AGENT_PROFILE_ALL_INFANTRY_MASK;
 const LIGHT_INFANTRY_MASK = buildAllowedProfilesMask(['player', 'standard_infantry']);
+
+const _mergeMat4 = new THREE.Matrix4();
+const _mergePos = new THREE.Vector3();
+const _mergeQuat = new THREE.Quaternion();
+const _mergeEuler = new THREE.Euler();
+const _mergeScale = new THREE.Vector3(1, 1, 1);
+
+interface StaticPartSpec {
+  geo: THREE.BufferGeometry;
+  x: number;
+  y: number;
+  z: number;
+  rx?: number;
+  ry?: number;
+  rz?: number;
+  rotOrder?: THREE.EulerOrder;
+}
+
+function buildMergedStaticMesh(
+  parts: StaticPartSpec[],
+  mat: THREE.Material,
+  res: ResourceManager,
+  scope: ResourceScope,
+  name: string,
+  castShadow: boolean,
+  receiveShadow: boolean,
+  skipBvh: boolean
+): THREE.Mesh | null {
+  if (parts.length === 0) return null;
+  const transformed: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    _mergePos.set(p.x, p.y, p.z);
+    _mergeEuler.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0, p.rotOrder ?? 'XYZ');
+    _mergeQuat.setFromEuler(_mergeEuler);
+    _mergeMat4.compose(_mergePos, _mergeQuat, _mergeScale);
+    p.geo.applyMatrix4(_mergeMat4);
+    transformed.push(p.geo);
+  }
+  const merged = mergeGeometries(transformed, false);
+  for (let i = 0; i < transformed.length; i++) {
+    transformed[i].dispose();
+  }
+  if (!merged) return null;
+  res.registerGeometry(merged, scope);
+  const mesh = new THREE.Mesh(merged, mat);
+  mesh.name = name;
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = receiveShadow;
+  if (skipBvh) mesh.userData.skipBvh = true;
+  mesh.matrixAutoUpdate = false;
+  mesh.updateMatrix();
+  return mesh;
+}
 
 function addVisualBox(
   parent: THREE.Group,
@@ -43,14 +100,15 @@ function addVisualBox(
   mat: THREE.Material,
   res: ResourceManager,
   scope: ResourceScope,
-  name?: string
+  name?: string,
+  castShadow = true
 ): THREE.Mesh {
   const geo = new THREE.BoxGeometry(w, h, d);
   res.registerGeometry(geo, scope);
   const mesh = new THREE.Mesh(geo, mat);
   if (name) mesh.name = name;
   mesh.position.set(x, y, z);
-  mesh.castShadow = true;
+  mesh.castShadow = castShadow;
   mesh.receiveShadow = true;
   parent.add(mesh);
   return mesh;
@@ -69,7 +127,9 @@ function addRampVisualFlight(
   deckMat: THREE.Material,
   railMat: THREE.Material,
   res: ResourceManager,
-  scope: ResourceScope
+  scope: ResourceScope,
+  slopeId?: string,
+  colliderMeshes?: Map<string, THREE.Mesh>
 ): void {
   const dx = endX - startX;
   const dy = endY - startY;
@@ -84,6 +144,8 @@ function addRampVisualFlight(
   flightGrp.rotation.order = 'YXZ';
   flightGrp.rotation.y = yaw;
   flightGrp.rotation.x = -pitch;
+  flightGrp.matrixAutoUpdate = false;
+  flightGrp.updateMatrix();
 
   const deckGeo = new THREE.BoxGeometry(width, thickness, fullLen + 0.16);
   res.registerGeometry(deckGeo, scope);
@@ -91,30 +153,45 @@ function addRampVisualFlight(
   deckMesh.position.y = -thickness * 0.5;
   deckMesh.castShadow = true;
   deckMesh.receiveShadow = true;
+  deckMesh.matrixAutoUpdate = false;
+  deckMesh.updateMatrix();
   flightGrp.add(deckMesh);
-
-  // Side steel stringers / safety railings along ±width/2
-  const railGeo = new THREE.BoxGeometry(0.1, 0.95, fullLen);
-  res.registerGeometry(railGeo, scope);
-  for (const side of [-1, 1]) {
-    const rail = new THREE.Mesh(railGeo, railMat);
-    rail.name = 'stair_rail_trim';
-    rail.userData.skipBvh = true;
-    rail.position.set(side * (width * 0.5 - 0.05), 0.48, 0);
-    flightGrp.add(rail);
+  if (slopeId && colliderMeshes) {
+    colliderMeshes.set(slopeId, deckMesh);
   }
 
-  // Non-slip visual tread cleats along the incline
+  // Merge side steel stringers + non-slip tread cleats into 1 non-shadow-casting draw call per flight
+  const trimParts: StaticPartSpec[] = [];
+  for (const side of [-1, 1]) {
+    trimParts.push({
+      geo: new THREE.BoxGeometry(0.1, 0.95, fullLen),
+      x: side * (width * 0.5 - 0.05),
+      y: 0.48,
+      z: 0,
+    });
+  }
   const steps = Math.max(4, Math.floor(horizLen / 0.75));
-  const treadGeo = new THREE.BoxGeometry(width - 0.24, 0.05, 0.22);
-  res.registerGeometry(treadGeo, scope);
   for (let i = 0; i < steps; i++) {
     const t = (i + 0.5) / steps - 0.5;
-    const tread = new THREE.Mesh(treadGeo, railMat);
-    tread.name = 'stair_tread_trim';
-    tread.userData.skipBvh = true;
-    tread.position.set(0, 0.02, t * fullLen);
-    flightGrp.add(tread);
+    trimParts.push({
+      geo: new THREE.BoxGeometry(width - 0.24, 0.05, 0.22),
+      x: 0,
+      y: 0.02,
+      z: t * fullLen,
+    });
+  }
+  const mergedTrim = buildMergedStaticMesh(
+    trimParts,
+    railMat,
+    res,
+    scope,
+    'stair_rail_and_treads',
+    false,
+    true,
+    true
+  );
+  if (mergedTrim) {
+    flightGrp.add(mergedTrim);
   }
 
   parent.add(flightGrp);
@@ -165,8 +242,11 @@ export function buildSwitchbackStaircase(
   const midY = baseY + (topY - baseY) * 0.5;
 
   // Flight 1: entry -> mid-landing along +runDir
+  // Stage 9 PHYS-05: Anchor ground entry strictly to actual terrain elevation at (entryX, entryZ)
   const f1StartX = entryX;
   const f1StartZ = entryZ;
+  const f1StartY =
+    fromSurfaceId === 0 ? collisionWorld.getTerrainHeightOnly(f1StartX, f1StartZ) : baseY;
   const f1EndX = entryX + runDirX * runLength;
   const f1EndZ = entryZ + runDirZ * runLength;
 
@@ -181,10 +261,33 @@ export function buildSwitchbackStaircase(
 
   const thickness = 0.42;
 
+  // Grounded concrete entry apron beneath Flight 1 nose so sloped terrain never exposes an air gap
+  if (fromSurfaceId === 0) {
+    const apronW = Math.abs(runDirX) > 0.5 ? 0.9 : stairWidth + 0.1;
+    const apronD = Math.abs(runDirZ) > 0.5 ? 0.9 : stairWidth + 0.1;
+    const apron = addVisualBox(
+      grp,
+      apronW,
+      0.9,
+      apronD,
+      f1StartX,
+      f1StartY - 0.45,
+      f1StartZ,
+      deckMat,
+      resourceManager,
+      scope,
+      `${id}_entry_apron`,
+      false
+    );
+    apron.userData.skipBvh = true;
+    apron.matrixAutoUpdate = false;
+    apron.updateMatrix();
+  }
+
   addRampVisualFlight(
     grp,
     f1StartX,
-    baseY,
+    f1StartY,
     f1StartZ,
     f1EndX,
     midY,
@@ -194,7 +297,9 @@ export function buildSwitchbackStaircase(
     deckMat,
     railMat,
     resourceManager,
-    scope
+    scope,
+    `${id}_flight1`,
+    ctx.colliderMeshes
   );
   collisionWorld.addSlope(
     createOrientedSlopeRegion({
@@ -205,7 +310,7 @@ export function buildSwitchbackStaircase(
       endX: f1EndX,
       endZ: f1EndZ,
       width: stairWidth,
-      startY: baseY,
+      startY: f1StartY,
       endY: midY,
       thickness,
       hasSideRails: true,
@@ -248,23 +353,38 @@ export function buildSwitchbackStaircase(
     entityId: id,
   });
 
-  // Support pillars under mid-landing (outside walk path)
+  // Support pillar under mid-landing (outside walk path) — Stage 9 PHYS-08: anchored to terrain + physical collider
   const pilCenterX = landCenterX + runDirX * (landSpanAlongRun * 0.42);
   const pilCenterZ = landCenterZ + runDirZ * (landSpanAlongRun * 0.42);
-  const pilH = Math.max(0.5, midY - baseY - 0.42);
+  const pilTerrainY = collisionWorld.getTerrainHeightOnly(pilCenterX, pilCenterZ);
+  const pilBottomY = Math.min(baseY, pilTerrainY) - 0.8;
+  const pilTopY = midY - 0.42;
+  const pilH = Math.max(0.5, pilTopY - pilBottomY);
   addVisualBox(
     grp,
-    0.4,
+    0.44,
     pilH,
-    0.4,
+    0.44,
     pilCenterX,
-    baseY + pilH * 0.5,
+    pilBottomY + pilH * 0.5,
     pilCenterZ,
     deckMat,
     resourceManager,
     scope,
     `${id}_pil`
   );
+  collisionWorld.addStaticBox({
+    id: `${id}_pil`,
+    minX: pilCenterX - 0.24,
+    minY: pilBottomY,
+    minZ: pilCenterZ - 0.24,
+    maxX: pilCenterX + 0.24,
+    maxY: pilTopY,
+    maxZ: pilCenterZ + 0.24,
+    layer: COLLISION_LAYER.WORLD,
+    tag: 'building_pillar',
+    entityId: id,
+  });
 
   // Flight 2: mid-landing -> top bridge landing
   addRampVisualFlight(
@@ -280,7 +400,9 @@ export function buildSwitchbackStaircase(
     deckMat,
     railMat,
     resourceManager,
-    scope
+    scope,
+    `${id}_flight2`,
+    ctx.colliderMeshes
   );
   collisionWorld.addSlope(
     createOrientedSlopeRegion({
@@ -299,10 +421,23 @@ export function buildSwitchbackStaircase(
   );
 
   // Top landing connecting f2End to (exitX, topY, exitZ)
-  const topConnCenterX = (f2EndX + exitX) * 0.5;
-  const topConnCenterZ = (f2EndZ + exitZ) * 0.5;
-  const topConnW = Math.max(stairWidth, Math.abs(f2EndX - exitX) + 1.4);
-  const topConnD = Math.max(stairWidth, Math.abs(f2EndZ - exitZ) + 1.4);
+  // Stage 9 PHYS-05: Offset top_bridge past f2End along -runDir (0.05m seam) so it NEVER
+  // protrudes backward into the upper half of Flight 2 and creates a chest-high blocker!
+  const topRunSpan = 2.0;
+  const topRunCenterX = f2EndX - runDirX * (topRunSpan * 0.5 - 0.05);
+  const topRunCenterZ = f2EndZ - runDirZ * (topRunSpan * 0.5 - 0.05);
+  const latF2 = f2EndX * latX + f2EndZ * latZ;
+  const latExit = exitX * latX + exitZ * latZ;
+  const latMin = Math.min(latF2 - stairWidth * 0.5, latExit - 0.7);
+  const latMax = Math.max(latF2 + stairWidth * 0.5, latExit + 0.7);
+  const latCenter = (latMin + latMax) * 0.5;
+  const latSpan = latMax - latMin;
+  const topConnCenterX =
+    Math.abs(runDirX) > 0.5 ? topRunCenterX : latCenter * Math.sign(latX || 1);
+  const topConnCenterZ =
+    Math.abs(runDirZ) > 0.5 ? topRunCenterZ : latCenter * Math.sign(latZ || 1);
+  const topConnW = Math.abs(runDirX) * topRunSpan + Math.abs(latX) * latSpan;
+  const topConnD = Math.abs(runDirZ) * topRunSpan + Math.abs(latZ) * latSpan;
   addVisualBox(
     grp,
     topConnW,
@@ -331,7 +466,7 @@ export function buildSwitchbackStaircase(
 
   chunkManager.registerObject(grp, (entryX + exitX) * 0.5, (entryZ + exitZ) * 0.5, scene);
 
-  const risePerFlight = Math.abs(topY - baseY) * 0.5;
+  const risePerFlight = Math.max(Math.abs(midY - f1StartY), Math.abs(topY - midY));
   const slopeDeg = (Math.atan2(risePerFlight, Math.max(0.5, runLength)) * 180) / Math.PI;
   const pathDist = runLength * 2 + sep + 2.5;
 
@@ -342,7 +477,7 @@ export function buildSwitchbackStaircase(
     fromSurfaceId,
     toSurfaceId,
     fromX: entryX - runDirX * 1.1,
-    fromY: baseY,
+    fromY: f1StartY,
     fromZ: entryZ - runDirZ * 1.1,
     toX: exitX,
     toY: topY,
@@ -397,10 +532,32 @@ export function buildSingleFlightRamp(
   const grp = new THREE.Group();
   grp.name = `${id}_ramp`;
   const thickness = 0.45;
+  // Stage 9 PHYS-05: Anchor ground ramp nose directly to actual terrain elevation
+  const anchoredStartY =
+    fromSurfaceId === 0 ? collisionWorld.getTerrainHeightOnly(startX, startZ) : startY;
+  if (fromSurfaceId === 0) {
+    const apron = addVisualBox(
+      grp,
+      width + 0.1,
+      0.9,
+      1.0,
+      startX,
+      anchoredStartY - 0.45,
+      startZ,
+      deckMat,
+      resourceManager,
+      scope,
+      `${id}_entry_apron`,
+      false
+    );
+    apron.userData.skipBvh = true;
+    apron.matrixAutoUpdate = false;
+    apron.updateMatrix();
+  }
   addRampVisualFlight(
     grp,
     startX,
-    startY,
+    anchoredStartY,
     startZ,
     endX,
     endY,
@@ -410,7 +567,9 @@ export function buildSingleFlightRamp(
     deckMat,
     railMat,
     resourceManager,
-    scope
+    scope,
+    id,
+    ctx.colliderMeshes
   );
   chunkManager.registerObject(grp, (startX + endX) * 0.5, (startZ + endZ) * 0.5, scene);
 
@@ -422,7 +581,7 @@ export function buildSingleFlightRamp(
     endX,
     endZ,
     width,
-    startY,
+    startY: anchoredStartY,
     endY,
     thickness,
     hasSideRails: true,
@@ -442,7 +601,7 @@ export function buildSingleFlightRamp(
     fromSurfaceId,
     toSurfaceId,
     fromX: startX - ux * 1.0,
-    fromY: startY,
+    fromY: anchoredStartY,
     fromZ: startZ - uz * 1.0,
     toX: endX + ux * 1.0,
     toY: endY,
@@ -474,6 +633,11 @@ export interface RooftopAccessOptions {
   accessType: 'switchback_stair' | 'single_ramp' | 'lift_only';
   parapetHeight?: number;
   liftBridgeZ?: number;
+  /** Optional secondary exterior tactical climbable ladder (auto-cuts parapet opening) */
+  ladderAccess?: {
+    side: '+z' | '-z' | '+x' | '-x';
+    offsetAlongWall?: number;
+  };
 }
 
 /**
@@ -502,36 +666,60 @@ export function buildBuildingRooftopAccess(
   const grp = new THREE.Group();
   grp.name = `${opts.buildingId}_rooftop_parapets`;
 
-  // Entry portal side & center Z for stair/ramp/lift opening
+  // Stage 9 PHYS-05: Compute stair/ramp exit Z BEFORE building parapets so the parapet opening
+  // is ALWAYS centered directly on the physical top landing with zero blockage!
   const sideSign = opts.accessSide === '+x' ? 1 : -1;
-  const gapCenterZ = opts.liftBridgeZ ?? opts.z;
-  const gateGapHalfZ = 1.9;
+  const stairRunLen = Math.min(8.2, Math.max(6.2, (opts.roofY - opts.baseY) * 1.1));
+  const clampedStairEntryZ = Math.max(
+    opts.z - halfD + 2.5,
+    Math.min(opts.z + halfD - 2.5, opts.z - stairRunLen * 0.5)
+  );
+  const rampRunLen = Math.max(9.5, (opts.roofY - opts.baseY) * 2.0);
+  const rampEndZ = opts.z - 0.5;
 
-  // +Z & -Z parapets with central firing embrasure gap (2.2m wide so players/AI can shoot or step cover cleanly)
+  const gapCenterZ =
+    opts.accessType === 'switchback_stair'
+      ? clampedStairEntryZ
+      : opts.accessType === 'single_ramp'
+        ? rampEndZ
+        : (opts.liftBridgeZ ?? opts.z);
+  const gateGapHalfZ = 2.05;
+
+  const parapetParts: StaticPartSpec[] = [];
+  const parapetColliderIds: string[] = [];
+
+  // +Z & -Z parapets with central firing embrasure gap (2.4m wide — also cleanly accommodates center +z/-z ladders)
   for (const zSign of [-1, 1]) {
     const pz = opts.z + zSign * (halfD - parapetT * 0.5);
-    const segW = Math.max(1.2, (opts.width - 2.4) * 0.5);
-    for (const xSign of [-1, 1]) {
-      const px = opts.x + xSign * (halfW - segW * 0.5);
-      addVisualBox(
-        grp,
-        segW,
-        parapetH,
-        parapetT,
-        px,
-        opts.roofY + parapetH * 0.5,
-        pz,
-        parapetMat,
-        resourceManager,
-        scope,
-        `${opts.buildingId}_parapet_z_${zSign}_${xSign}`
-      );
+    const ladderOnThisWall =
+      opts.ladderAccess &&
+      ((zSign === 1 && opts.ladderAccess.side === '+z') ||
+        (zSign === -1 && opts.ladderAccess.side === '-z'));
+    const gapCenterX = ladderOnThisWall ? opts.x + (opts.ladderAccess?.offsetAlongWall ?? 0) : opts.x;
+    const gapHalfX = 1.25;
+    const minSideX = opts.x - halfW;
+    const maxSideX = opts.x + halfW;
+    for (const [segIdx, sMin, sMax] of [
+      [-1, minSideX, gapCenterX - gapHalfX],
+      [1, gapCenterX + gapHalfX, maxSideX],
+    ] as const) {
+      const segW = sMax - sMin;
+      if (segW < 0.8) continue;
+      const px = (sMin + sMax) * 0.5;
+      const colId = `${opts.buildingId}_parapet_z_${zSign}_${segIdx}`;
+      parapetParts.push({
+        geo: new THREE.BoxGeometry(segW, parapetH, parapetT),
+        x: px,
+        y: opts.roofY + parapetH * 0.5,
+        z: pz,
+      });
+      parapetColliderIds.push(colId);
       collisionWorld.addStaticBox({
-        id: `${opts.buildingId}_parapet_z_${zSign}_${xSign}`,
-        minX: px - segW * 0.5,
+        id: colId,
+        minX: sMin,
         minY: opts.roofY,
         minZ: pz - parapetT * 0.5,
-        maxX: px + segW * 0.5,
+        maxX: sMax,
         maxY: opts.roofY + parapetH,
         maxZ: pz + parapetT * 0.5,
         layer: COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER,
@@ -541,11 +729,21 @@ export function buildBuildingRooftopAccess(
     }
   }
 
-  // +X & -X parapets: leave stair/ramp/lift entry gap on accessSide around gapCenterZ
+  // +X & -X parapets: leave stair/ramp/lift entry gap on accessSide centered directly on gapCenterZ
   for (const xSign of [-1, 1]) {
     const px = opts.x + xSign * (halfW - parapetT * 0.5);
-    const gapHalf = xSign === sideSign ? gateGapHalfZ : 1.0;
-    const localGapZ = xSign === sideSign ? gapCenterZ : opts.z;
+    const ladderOnThisWall =
+      opts.ladderAccess &&
+      ((xSign === 1 && opts.ladderAccess.side === '+x') ||
+        (xSign === -1 && opts.ladderAccess.side === '-x'));
+    const gapHalf =
+      xSign === sideSign ? gateGapHalfZ : ladderOnThisWall ? 1.2 : 1.0;
+    const localGapZ =
+      xSign === sideSign
+        ? gapCenterZ
+        : ladderOnThisWall
+          ? opts.z + (opts.ladderAccess?.offsetAlongWall ?? 0)
+          : opts.z;
     const minSideZ = opts.z - halfD + parapetT;
     const maxSideZ = opts.z + halfD - parapetT;
     const leftSegMin = minSideZ;
@@ -560,21 +758,16 @@ export function buildBuildingRooftopAccess(
       const segD = sMax - sMin;
       if (segD < 0.8) continue;
       const pz = (sMin + sMax) * 0.5;
-      addVisualBox(
-        grp,
-        parapetT,
-        parapetH,
-        segD,
-        px,
-        opts.roofY + parapetH * 0.5,
-        pz,
-        parapetMat,
-        resourceManager,
-        scope,
-        `${opts.buildingId}_parapet_x_${xSign}_${segIdx}`
-      );
+      const colId = `${opts.buildingId}_parapet_x_${xSign}_${segIdx}`;
+      parapetParts.push({
+        geo: new THREE.BoxGeometry(parapetT, parapetH, segD),
+        x: px,
+        y: opts.roofY + parapetH * 0.5,
+        z: pz,
+      });
+      parapetColliderIds.push(colId);
       collisionWorld.addStaticBox({
-        id: `${opts.buildingId}_parapet_x_${xSign}_${segIdx}`,
+        id: colId,
         minX: px - parapetT * 0.5,
         minY: opts.roofY,
         minZ: sMin,
@@ -585,6 +778,25 @@ export function buildBuildingRooftopAccess(
         tag: 'parapet',
         entityId: opts.buildingId,
       });
+    }
+  }
+
+  const mergedParapets = buildMergedStaticMesh(
+    parapetParts,
+    parapetMat,
+    resourceManager,
+    scope,
+    `${opts.buildingId}_parapets_merged`,
+    true,
+    true,
+    false
+  );
+  if (mergedParapets) {
+    grp.add(mergedParapets);
+    if (ctx.colliderMeshes) {
+      for (const colId of parapetColliderIds) {
+        ctx.colliderMeshes.set(colId, mergedParapets);
+      }
     }
   }
 
@@ -615,8 +827,6 @@ export function buildBuildingRooftopAccess(
   const deckEntryX = opts.x + sideSign * (halfW - 1.3);
 
   if (opts.accessType === 'switchback_stair') {
-    const runLen = Math.min(8.2, Math.max(6.2, (opts.roofY - opts.baseY) * 1.1));
-    const entryZ = opts.z - runLen * 0.5;
     buildSwitchbackStaircase(
       ctx,
       `${opts.buildingId}_stair`,
@@ -624,19 +834,17 @@ export function buildBuildingRooftopAccess(
       surfaceId,
       stairEdgeX + sideSign * 2.75,
       opts.baseY,
-      entryZ,
+      clampedStairEntryZ,
       deckEntryX,
       opts.roofY,
-      entryZ,
+      clampedStairEntryZ,
       0,
       1,
-      runLen,
+      stairRunLen,
       2.4
     );
   } else if (opts.accessType === 'single_ramp') {
-    const runLen = Math.max(9.5, (opts.roofY - opts.baseY) * 2.0);
-    const rampStartZ = opts.z + runLen * 0.5;
-    const rampEndZ = opts.z - 0.5;
+    const rampStartZ = opts.z + rampRunLen * 0.5;
     // Top landing pad connecting ramp end into parapet opening
     addVisualBox(
       grp,
@@ -683,6 +891,44 @@ export function buildBuildingRooftopAccess(
     p.toZ = rampEndZ;
   }
 
+  // Optional secondary vertical climbable ladder aligned with the parapet opening
+  if (opts.ladderAccess) {
+    const off = opts.ladderAccess.offsetAlongWall ?? 0;
+    let lx = opts.x;
+    let lz = opts.z;
+    let nx = 0;
+    let nz = 0;
+    if (opts.ladderAccess.side === '+z') {
+      lx = opts.x + off;
+      lz = opts.z + halfD + 0.14;
+      nz = 1;
+    } else if (opts.ladderAccess.side === '-z') {
+      lx = opts.x + off;
+      lz = opts.z - halfD - 0.14;
+      nz = -1;
+    } else if (opts.ladderAccess.side === '+x') {
+      lx = opts.x + halfW + 0.14;
+      lz = opts.z + off;
+      nx = 1;
+    } else {
+      lx = opts.x - halfW - 0.14;
+      lz = opts.z + off;
+      nx = -1;
+    }
+    buildClimbableLadder(ctx, {
+      id: `${opts.buildingId}_ladder`,
+      x: lx,
+      z: lz,
+      bottomY: opts.baseY,
+      topY: opts.roofY,
+      normalX: nx,
+      normalZ: nz,
+      fromSurfaceId: 0,
+      toSurfaceId: surfaceId,
+      anchorBottomToTerrain: true,
+    });
+  }
+
   globalStructureReconciliation.registerStructure({
     missionId: ctx.missionId ?? 1,
     structureId: `${opts.buildingId}_rooftop`,
@@ -716,7 +962,8 @@ export function buildWalkableWatchtower(
   x: number,
   z: number,
   baseY: number,
-  rampSide: '+x' | '-x' = '+x'
+  rampSide: '+x' | '-x' = '+x',
+  runDirZ: 1 | -1 = 1
 ): number {
   const { assetManager, resourceManager, collisionWorld, chunkManager, scene, scope, coverNodes } = ctx;
   const deckY = baseY + 9.0;
@@ -738,23 +985,31 @@ export function buildWalkableWatchtower(
   const grp = new THREE.Group();
   grp.name = `${id}_walkable_watchtower`;
 
-  // 4 Corner support legs at ±2.1m (leaves central ground space open!)
-  const legGeo = new THREE.CylinderGeometry(0.22, 0.28, 9.2, 8);
-  resourceManager.registerGeometry(legGeo, scope);
+  const towerSteelParts: StaticPartSpec[] = [];
+  const towerColliderIds: string[] = [];
+
+  // 4 Corner support legs at ±2.0m — Stage 9 PHYS-05: extend legs deep into sloped terrain so none float
   for (const [lx, lz, tagIdx] of [
     [-2.0, -2.0, 'NW'],
     [2.0, -2.0, 'NE'],
     [-2.0, 2.0, 'SW'],
     [2.0, 2.0, 'SE'],
   ] as const) {
-    const leg = new THREE.Mesh(legGeo, steel);
-    leg.position.set(x + lx, baseY + 4.6, z + lz);
-    leg.castShadow = true;
-    grp.add(leg);
+    const legTerrainY = collisionWorld.getTerrainHeightOnly(x + lx, z + lz);
+    const legBottomY = Math.min(baseY, legTerrainY) - 1.2;
+    const legH = Math.max(9.2, deckY - legBottomY);
+    towerSteelParts.push({
+      geo: new THREE.CylinderGeometry(0.22, 0.28, legH, 8),
+      x: x + lx,
+      y: legBottomY + legH * 0.5,
+      z: z + lz,
+    });
+    const legColId = `${id}_leg_${tagIdx}`;
+    towerColliderIds.push(legColId);
     collisionWorld.addStaticBox({
-      id: `${id}_leg_${tagIdx}`,
+      id: legColId,
       minX: x + lx - 0.3,
-      minY: baseY,
+      minY: legBottomY,
       minZ: z + lz - 0.3,
       maxX: x + lx + 0.3,
       maxY: deckY,
@@ -766,19 +1021,13 @@ export function buildWalkableWatchtower(
   }
 
   // Main 5.2 x 5.2m elevated platform deck at y = deckY
-  addVisualBox(
-    grp,
-    5.2,
-    0.45,
-    5.2,
+  towerSteelParts.push({
+    geo: new THREE.BoxGeometry(5.2, 0.45, 5.2),
     x,
-    deckY - 0.225,
+    y: deckY - 0.225,
     z,
-    steel,
-    resourceManager,
-    scope,
-    `${id}_deck`
-  );
+  });
+  towerColliderIds.push(`${id}_deck`);
   collisionWorld.addStaticBox({
     id: `${id}_deck`,
     minX: x - halfDeck,
@@ -793,19 +1042,13 @@ export function buildWalkableWatchtower(
   });
 
   // Elevated canopy roof supported by thin upper posts (`deckY + 2.4 .. deckY + 3.2`, ample 2.4m standing headroom!)
-  addVisualBox(
-    grp,
-    5.6,
-    0.35,
-    5.6,
+  towerSteelParts.push({
+    geo: new THREE.BoxGeometry(5.6, 0.35, 5.6),
     x,
-    deckY + 2.65,
+    y: deckY + 2.65,
     z,
-    steel,
-    resourceManager,
-    scope,
-    `${id}_canopy_roof`
-  );
+  });
+  towerColliderIds.push(`${id}_canopy_roof`);
   collisionWorld.addStaticBox({
     id: `${id}_canopy_roof`,
     minX: x - 2.8,
@@ -819,27 +1062,66 @@ export function buildWalkableWatchtower(
     entityId: id,
   });
 
-  // 1.15m perimeter parapets on 3 closed sides + open side facing ramp entry
+  // Merge steel corner canopy posts & structural braces into the same tower steel mesh
+  for (const [cx, cz] of [
+    [-2.2, -2.2],
+    [2.2, -2.2],
+    [-2.2, 2.2],
+    [2.2, 2.2],
+  ] as const) {
+    towerSteelParts.push({
+      geo: new THREE.CylinderGeometry(0.08, 0.08, 2.55, 6),
+      x: x + cx,
+      y: deckY + 1.25,
+      z: z + cz,
+    });
+  }
+  for (const braceY of [baseY + 3.0, baseY + 6.4]) {
+    for (const zSign of [-1, 1]) {
+      towerSteelParts.push({
+        geo: new THREE.BoxGeometry(3.9, 0.14, 0.14),
+        x,
+        y: braceY,
+        z: z + zSign * 2.0,
+        rz: zSign * 0.34,
+      });
+    }
+  }
+  const mergedTowerSteel = buildMergedStaticMesh(
+    towerSteelParts,
+    steel,
+    resourceManager,
+    scope,
+    `${id}_steel_merged`,
+    true,
+    true,
+    false
+  );
+  if (mergedTowerSteel) {
+    grp.add(mergedTowerSteel);
+    if (ctx.colliderMeshes) {
+      for (const cid of towerColliderIds) ctx.colliderMeshes.set(cid, mergedTowerSteel);
+    }
+  }
+
+  // 1.15m perimeter parapets on 3 closed sides + open side facing ramp entry (merged into 1 mesh)
   const pH = 1.15;
   const sideSign = rampSide === '+x' ? 1 : -1;
+  const towerParapetParts: StaticPartSpec[] = [];
+  const towerParapetIds: string[] = [];
   // North (-Z) and South (+Z) full parapets
   for (const zSign of [-1, 1]) {
     const pz = z + zSign * (halfDeck - 0.16);
-    addVisualBox(
-      grp,
-      5.0,
-      pH,
-      0.32,
+    const colId = `${id}_parapet_z_${zSign}`;
+    towerParapetParts.push({
+      geo: new THREE.BoxGeometry(5.0, pH, 0.32),
       x,
-      deckY + pH * 0.5,
-      pz,
-      railMat,
-      resourceManager,
-      scope,
-      `${id}_parapet_z_${zSign}`
-    );
+      y: deckY + pH * 0.5,
+      z: pz,
+    });
+    towerParapetIds.push(colId);
     collisionWorld.addStaticBox({
-      id: `${id}_parapet_z_${zSign}`,
+      id: colId,
       minX: x - 2.5,
       minY: deckY,
       minZ: pz - 0.16,
@@ -851,65 +1133,58 @@ export function buildWalkableWatchtower(
       entityId: id,
     });
   }
-  // Opposite X side parapet
+  // Opposite X side parapet split around a clean 1.5m central opening for the tactical vertical ladder
   const oppPx = x - sideSign * (halfDeck - 0.16);
-  addVisualBox(
-    grp,
-    0.32,
-    pH,
-    4.6,
-    oppPx,
-    deckY + pH * 0.5,
-    z,
+  for (const [segIdx, sMin, sMax] of [
+    [0, z - 2.3, z - 0.75],
+    [1, z + 0.75, z + 2.3],
+  ] as const) {
+    const segD = sMax - sMin;
+    const pz = (sMin + sMax) * 0.5;
+    const colId = `${id}_parapet_opp_${segIdx}`;
+    towerParapetParts.push({
+      geo: new THREE.BoxGeometry(0.32, pH, segD),
+      x: oppPx,
+      y: deckY + pH * 0.5,
+      z: pz,
+    });
+    towerParapetIds.push(colId);
+    collisionWorld.addStaticBox({
+      id: colId,
+      minX: oppPx - 0.16,
+      minY: deckY,
+      minZ: sMin,
+      maxX: oppPx + 0.16,
+      maxY: deckY + pH,
+      maxZ: sMax,
+      layer: COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER,
+      tag: 'parapet',
+      entityId: id,
+    });
+  }
+  const mergedTowerParapets = buildMergedStaticMesh(
+    towerParapetParts,
     railMat,
     resourceManager,
     scope,
-    `${id}_parapet_opp`
+    `${id}_parapets_merged`,
+    true,
+    true,
+    false
   );
-  collisionWorld.addStaticBox({
-    id: `${id}_parapet_opp`,
-    minX: oppPx - 0.16,
-    minY: deckY,
-    minZ: z - 2.3,
-    maxX: oppPx + 0.16,
-    maxY: deckY + pH,
-    maxZ: z + 2.3,
-    layer: COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER,
-    tag: 'parapet',
-    entityId: id,
-  });
+  if (mergedTowerParapets) {
+    grp.add(mergedTowerParapets);
+    if (ctx.colliderMeshes) {
+      for (const cid of towerParapetIds) ctx.colliderMeshes.set(cid, mergedTowerParapets);
+    }
+  }
 
-  // Decorative steel cross-bracing, corner canopy posts & dual roof searchlight housings (skipBvh = true)
-  const postGeo = new THREE.CylinderGeometry(0.08, 0.08, 2.55, 6);
-  const braceGeo = new THREE.BoxGeometry(3.9, 0.14, 0.14);
+  // Dual roof floodlight pods on canopy edge (non-shadow casting emissive trim)
   const lampMat = assetManager.getSharedMaterial('watchtower_lamp_emissive', {
     color: 0xfef08a,
     emissive: 0xfacc15,
     emissiveIntensity: 0.85,
   });
-  resourceManager.registerGeometry(postGeo, scope);
-  resourceManager.registerGeometry(braceGeo, scope);
-  for (const [cx, cz] of [
-    [-2.2, -2.2],
-    [2.2, -2.2],
-    [-2.2, 2.2],
-    [2.2, 2.2],
-  ] as const) {
-    const post = new THREE.Mesh(postGeo, steel);
-    post.userData.skipBvh = true;
-    post.position.set(x + cx, deckY + 1.25, z + cz);
-    grp.add(post);
-  }
-  for (const braceY of [baseY + 3.0, baseY + 6.4]) {
-    for (const zSign of [-1, 1]) {
-      const brace = new THREE.Mesh(braceGeo, steel);
-      brace.userData.skipBvh = true;
-      brace.position.set(x, braceY, z + zSign * 2.0);
-      brace.rotation.z = zSign * 0.34;
-      grp.add(brace);
-    }
-  }
-  // Dual roof floodlight pods on canopy edge
   for (const zSign of [-1, 1]) {
     const flood = addVisualBox(
       grp,
@@ -922,9 +1197,12 @@ export function buildWalkableWatchtower(
       lampMat,
       resourceManager,
       scope,
-      `${id}_floodlight_${zSign}`
+      `${id}_floodlight_${zSign}`,
+      false
     );
     flood.userData.skipBvh = true;
+    flood.matrixAutoUpdate = false;
+    flood.updateMatrix();
   }
 
   chunkManager.registerObject(grp, x, z, scene);
@@ -948,8 +1226,8 @@ export function buildWalkableWatchtower(
   });
 
   // Switchback 2-flight stair-ramp (0 -> +4.5m landing -> +9.0m deck, ~28° pitch)
+  // Stage 9 PHYS-05: Align entryZ === z so Flight 2 terminates squarely into the open deck side with zero parapet overlap!
   const f1X = x + sideSign * (halfDeck + 4.25);
-  const entryZ = z - 4.2;
   buildSwitchbackStaircase(
     ctx,
     `${id}_stair`,
@@ -957,15 +1235,29 @@ export function buildWalkableWatchtower(
     surfaceId,
     f1X,
     baseY,
-    entryZ,
+    z,
     x + sideSign * 1.3,
     deckY,
-    z - 0.8,
+    z,
     0,
-    1,
+    runDirZ,
     8.4,
     2.4
   );
+
+  // Stage 9 PHYS-09: Secondary tactical vertical climbable ladder on the opposite watchtower flank
+  buildClimbableLadder(ctx, {
+    id: `${id}_ladder`,
+    x: x - sideSign * (halfDeck + 0.14),
+    z,
+    bottomY: baseY,
+    topY: deckY,
+    normalX: -sideSign,
+    normalZ: 0,
+    fromSurfaceId: 0,
+    toSurfaceId: surfaceId,
+    anchorBottomToTerrain: true,
+  });
 
   globalStructureReconciliation.registerStructure({
     missionId: ctx.missionId ?? 1,
@@ -1023,8 +1315,13 @@ export function buildMultiStopCargoLift(
   const halfW = 1.95;
   const halfD = 1.95;
   const deckT = 0.32;
-  const topY = opts.stops[opts.stops.length - 1].elevationY;
-  const minStopY = opts.stops[0].elevationY;
+  // Stage 9 PHYS-06: Anchor ground stop (`surfaceId === 0`) to real terrain elevation at shaft center
+  const shaftTerrainY = collisionWorld.getTerrainHeightOnly(opts.shaftCenterX, opts.shaftCenterZ);
+  const resolvedStops = opts.stops.map((s) =>
+    s.surfaceId === 0 ? { ...s, elevationY: shaftTerrainY } : s
+  );
+  const topY = resolvedStops[resolvedStops.length - 1].elevationY;
+  const minStopY = resolvedStops[0].elevationY;
 
   const frameMat = assetManager.getSharedMaterial('lift_frame_steel', {
     pattern: 'metal_plate',
@@ -1054,8 +1351,9 @@ export function buildMultiStopCargoLift(
   const staticGroup = new THREE.Group();
   staticGroup.name = `${opts.liftId}_shaft`;
 
-  // 4 Structural corner columns running up the entire shaft
-  const shaftH = topY - minStopY + 3.4;
+  // 4 Structural corner columns running up the entire shaft (extended 1.2m into terrain for sloped ground)
+  const colBottomY = minStopY - 1.2;
+  const shaftH = topY + 3.4 - colBottomY;
   for (const [cx, cz] of [
     [-halfW - 0.14, -halfD - 0.14],
     [halfW + 0.14, -halfD - 0.14],
@@ -1068,7 +1366,7 @@ export function buildMultiStopCargoLift(
       shaftH,
       0.24,
       opts.shaftCenterX + cx,
-      minStopY + shaftH * 0.5,
+      colBottomY + shaftH * 0.5,
       opts.shaftCenterZ + cz,
       frameMat,
       resourceManager,
@@ -1099,8 +1397,8 @@ export function buildMultiStopCargoLift(
   const floorStops: CargoLiftFloorStop[] = [];
   const portalIds: string[] = [];
 
-  for (let i = 0; i < opts.stops.length; i++) {
-    const s = opts.stops[i];
+  for (let i = 0; i < resolvedStops.length; i++) {
+    const s = resolvedStops[i];
     const axisSign = s.gateSign ?? (s.surfaceId === 0 ? -opts.entrySign : opts.entrySign);
     const toSurfaceDirX = opts.entryAxis === 'x' ? axisSign : 0;
     const toSurfaceDirZ = opts.entryAxis === 'z' ? axisSign : 0;
@@ -1544,3 +1842,152 @@ export function buildElevatedSkybridge(
 
   return surfaceId;
 }
+
+export interface ClimbableLadderOptions {
+  id: string;
+  x: number;
+  z: number;
+  bottomY?: number;
+  topY: number;
+  /** Outward unit normal pointing from wall into the climb lane */
+  normalX: number;
+  normalZ: number;
+  width?: number;
+  fromSurfaceId?: number;
+  toSurfaceId?: number;
+  anchorBottomToTerrain?: boolean;
+}
+
+/**
+ * Stage 9 PHYS-09: Shared vertical climbable ladder builder used across all 5 campaign maps.
+ * Generates grounded composite steel side rails, tactical amber rungs, safety grab-hoops at the roof lip,
+ * wall stand-off brackets, and registers an authoritative `LadderVolume` inside `CollisionWorld`.
+ */
+export function buildClimbableLadder(
+  ctx: VerticalWorldContext,
+  opts: ClimbableLadderOptions
+): LadderVolume {
+  const { assetManager, resourceManager, collisionWorld, chunkManager, scene, scope } = ctx;
+  const nLen = Math.hypot(opts.normalX, opts.normalZ) || 1;
+  const nx = opts.normalX / nLen;
+  const nz = opts.normalZ / nLen;
+  const tx = -nz;
+  const tz = nx;
+  const width = opts.width ?? 0.92;
+  const halfW = width * 0.5;
+
+  const anchorGround = opts.anchorBottomToTerrain ?? (opts.fromSurfaceId ?? 0) === 0;
+  const sampleX = opts.x + nx * 0.45;
+  const sampleZ = opts.z + nz * 0.45;
+  const bottomY = anchorGround
+    ? collisionWorld.getTerrainHeightOnly(sampleX, sampleZ)
+    : (opts.bottomY ?? 0);
+  const topY = opts.topY;
+  const height = Math.max(1.2, topY - bottomY);
+
+  const railMat = assetManager.getSharedMaterial('ladder_steel_rail', {
+    pattern: 'metal_plate',
+    color: 0x334155,
+    roughness: 0.45,
+    metalness: 0.78,
+  });
+  const rungMat = assetManager.getSharedMaterial('stair_rail_amber', {
+    color: 0xd97706,
+    roughness: 0.45,
+    metalness: 0.4,
+  });
+
+  const grp = new THREE.Group();
+  grp.name = `${opts.id}_ladder_group`;
+
+  // Merge vertical steel side rails & wall anchor brackets into 1 mesh, and amber rungs into 1 mesh
+  // Two vertical steel side rails extending +1.05m above topY as rooftop safety grab posts
+  // and -0.45m below bottomY into terrain for rock-solid grounding on slopes
+  const railBottomY = bottomY - 0.45;
+  const railTopY = topY + 1.05;
+  const railH = railTopY - railBottomY;
+  const railAndBracketParts: StaticPartSpec[] = [];
+  for (const side of [-1, 1]) {
+    railAndBracketParts.push({
+      geo: new THREE.BoxGeometry(0.08, railH, 0.08),
+      x: opts.x + tx * side * halfW,
+      y: railBottomY + railH * 0.5,
+      z: opts.z + tz * side * halfW,
+    });
+  }
+
+  const yaw = Math.atan2(nx, nz);
+  for (let by = bottomY + 1.0; by <= topY - 0.3; by += 2.2) {
+    for (const side of [-1, 1]) {
+      railAndBracketParts.push({
+        geo: new THREE.BoxGeometry(0.08, 0.08, 0.28),
+        x: opts.x + tx * side * halfW - nx * 0.14,
+        y: by,
+        z: opts.z + tz * side * halfW - nz * 0.14,
+        ry: yaw,
+      });
+    }
+  }
+  const mergedRails = buildMergedStaticMesh(
+    railAndBracketParts,
+    railMat,
+    resourceManager,
+    scope,
+    `${opts.id}_rails_merged`,
+    false,
+    true,
+    true
+  );
+  if (mergedRails) grp.add(mergedRails);
+
+  // Horizontal climb rungs spaced every 0.34m along the vertical span
+  const rungSpacing = 0.34;
+  const rungCount = Math.max(3, Math.floor((height - 0.2) / rungSpacing));
+  const rungParts: StaticPartSpec[] = [];
+  for (let i = 0; i < rungCount; i++) {
+    const ry = bottomY + 0.3 + i * rungSpacing;
+    if (ry > topY - 0.06) break;
+    const rungGeo = new THREE.CylinderGeometry(0.028, 0.028, width, 6);
+    rungGeo.rotateZ(Math.PI * 0.5);
+    rungParts.push({
+      geo: rungGeo,
+      x: opts.x,
+      y: ry,
+      z: opts.z,
+      ry: yaw,
+    });
+  }
+  const mergedRungs = buildMergedStaticMesh(
+    rungParts,
+    rungMat,
+    resourceManager,
+    scope,
+    `${opts.id}_rungs_merged`,
+    false,
+    true,
+    true
+  );
+  if (mergedRungs) grp.add(mergedRungs);
+
+  chunkManager.registerObject(grp, opts.x, opts.z, scene);
+
+  const volume = createLadderVolume({
+    id: opts.id,
+    x: opts.x,
+    z: opts.z,
+    bottomY,
+    topY,
+    normalX: nx,
+    normalZ: nz,
+    width,
+    topExitX: opts.x - nx * 1.15,
+    topExitZ: opts.z - nz * 1.15,
+    bottomExitX: opts.x + nx * 0.95,
+    bottomExitZ: opts.z + nz * 0.95,
+    fromSurfaceId: opts.fromSurfaceId ?? 0,
+    toSurfaceId: opts.toSurfaceId ?? 0,
+  });
+  collisionWorld.addLadder(volume);
+  return volume;
+}
+

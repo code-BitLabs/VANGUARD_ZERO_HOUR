@@ -58,6 +58,33 @@ export class WorldChunkManager {
     this.occluders.push(box);
   }
 
+  getChunkAt(worldX: number, worldZ: number): WorldChunk | undefined {
+    const cx = Math.floor(worldX / this.chunkSize);
+    const cz = Math.floor(worldZ / this.chunkSize);
+    return this.chunks.get(`${cx}_${cz}`);
+  }
+
+  getChunksAround(
+    worldX: number,
+    worldZ: number,
+    radius: number,
+    out: THREE.Object3D[] = []
+  ): THREE.Object3D[] {
+    const minCx = Math.floor((worldX - radius) / this.chunkSize);
+    const maxCx = Math.floor((worldX + radius) / this.chunkSize);
+    const minCz = Math.floor((worldZ - radius) / this.chunkSize);
+    const maxCz = Math.floor((worldZ + radius) / this.chunkSize);
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const chunk = this.chunks.get(`${cx}_${cz}`);
+        if (chunk && chunk.group.visible) {
+          out.push(chunk.group);
+        }
+      }
+    }
+    return out;
+  }
+
   updateVisibility(camera: THREE.Camera, drawDistance: number): void {
     camera.updateMatrixWorld();
     this.projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);

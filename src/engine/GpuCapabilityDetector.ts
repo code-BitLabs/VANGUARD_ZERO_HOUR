@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { QualityTier } from '@/src/schemas/common.schema';
-import { GraphicsSettings } from '@/src/schemas/settings.schema';
+import { GraphicsSettings, HardwareCapabilityProfile } from '@/src/schemas/settings.schema';
 
 export interface GpuCapabilitySignals {
   webglVersion: 1 | 2 | 0;
@@ -20,6 +20,7 @@ export interface GpuCapabilitySignals {
 
 export interface GpuCapabilityReport {
   score: number;
+  hardwareProfile: HardwareCapabilityProfile;
   recommendedTier: QualityTier;
   recommendedSettings: Partial<GraphicsSettings>;
   signals: GpuCapabilitySignals;
@@ -235,10 +236,35 @@ export function classifyGpuCapability(signals: GpuCapabilitySignals): GpuCapabil
     recommendedTier = 'high';
   }
 
+  const hintLower = (signals.rendererHint ?? '').toLowerCase();
+  const isSoftwareGl =
+    hintLower.includes('swiftshader') ||
+    hintLower.includes('llvmpipe') ||
+    hintLower.includes('software') ||
+    hintLower.includes('basic render driver') ||
+    signals.webglVersion <= 1;
+  const isIntegratedHint = /intel|uhd|iris|vega|apple m1|adreno 6|mali-g5/.test(hintLower);
+
+  let hardwareProfile: HardwareCapabilityProfile;
+  if (isSoftwareGl) {
+    hardwareProfile = 'software_webgl';
+  } else if (signals.isMobileFormFactor) {
+    hardwareProfile = score >= 52 ? 'mid_range_mobile' : 'low_end_mobile';
+  } else if (score >= 84 && !isIntegratedHint) {
+    hardwareProfile = 'high_end_desktop';
+  } else if (score >= 64 && !isIntegratedHint) {
+    hardwareProfile = 'mid_range_desktop';
+  } else if (signals.isCoarsePointer && score < 55) {
+    hardwareProfile = 'mid_range_mobile';
+  } else {
+    hardwareProfile = 'integrated_gpu';
+  }
+
   const recommendedSettings = buildSettingsPatchForTier(recommendedTier, signals.isMobileFormFactor);
 
   return {
     score,
+    hardwareProfile,
     recommendedTier,
     recommendedSettings,
     signals,
@@ -256,6 +282,14 @@ export function buildSettingsPatchForTier(
         quality: 'low',
         renderScale: isMobile ? 0.7 : 0.75,
         shadowsEnabled: false,
+        csmCascades: 1,
+        shadowMapSize: 512,
+        ambientOcclusion: false,
+        volumetricFog: false,
+        wetReflections: false,
+        decalBudget: 32,
+        foliageDensity: 'low',
+        maxDpr: 1.0,
         bloomEnabled: false,
         textureQuality: 'low',
         antialiasing: false,
@@ -268,6 +302,14 @@ export function buildSettingsPatchForTier(
         quality: 'medium',
         renderScale: isMobile ? 0.85 : 0.9,
         shadowsEnabled: true,
+        csmCascades: 2,
+        shadowMapSize: 1024,
+        ambientOcclusion: false,
+        volumetricFog: !isMobile,
+        wetReflections: false,
+        decalBudget: 80,
+        foliageDensity: 'medium',
+        maxDpr: isMobile ? 1.35 : 1.5,
         bloomEnabled: false,
         textureQuality: 'medium',
         antialiasing: !isMobile,
@@ -280,6 +322,14 @@ export function buildSettingsPatchForTier(
         quality: 'high',
         renderScale: isMobile ? 0.95 : 1.0,
         shadowsEnabled: true,
+        csmCascades: isMobile ? 2 : 3,
+        shadowMapSize: 1024,
+        ambientOcclusion: !isMobile,
+        volumetricFog: true,
+        wetReflections: !isMobile,
+        decalBudget: isMobile ? 96 : 128,
+        foliageDensity: 'high',
+        maxDpr: isMobile ? 1.5 : 1.75,
         bloomEnabled: !isMobile,
         textureQuality: 'high',
         antialiasing: true,
@@ -292,6 +342,14 @@ export function buildSettingsPatchForTier(
         quality: 'ultra',
         renderScale: 1.0,
         shadowsEnabled: true,
+        csmCascades: 4,
+        shadowMapSize: 2048,
+        ambientOcclusion: true,
+        volumetricFog: true,
+        wetReflections: true,
+        decalBudget: 224,
+        foliageDensity: 'high',
+        maxDpr: 2.0,
         bloomEnabled: true,
         textureQuality: 'high',
         antialiasing: true,

@@ -14,10 +14,48 @@ export function buildMissionEnvironmentalStorytelling(
   res: ResourceManager,
   chunkManager: WorldChunkManager,
   animatedProps: Array<{ update: (elapsed: number) => void }>,
-  scope: ResourceScope
+  scope: ResourceScope,
+  collisionWorld?: CollisionWorld
 ): void {
   const grp = new THREE.Group();
   grp.name = `mission_${missionId}_landmarks`;
+
+  const terrainYAt = (x: number, z: number): number =>
+    collisionWorld ? collisionWorld.getTerrainHeightOnly(x, z) : 0;
+
+  const registerLandmarkCollider = (
+    id: string,
+    x: number,
+    minY: number,
+    z: number,
+    halfW: number,
+    maxY: number,
+    halfD: number,
+    tag: 'building_pillar' | 'cover_barrier' | 'prop' = 'prop',
+    yaw = 0
+  ): void => {
+    if (!collisionWorld) return;
+    const cos = Math.abs(Math.cos(yaw));
+    const sin = Math.abs(Math.sin(yaw));
+    const aabbHx = halfW * cos + halfD * sin;
+    const aabbHz = halfW * sin + halfD * cos;
+    collisionWorld.addStaticBox({
+      id,
+      minX: x - aabbHx,
+      minY,
+      minZ: z - aabbHz,
+      maxX: x + aabbHx,
+      maxY,
+      maxZ: z + aabbHz,
+      yaw: Math.abs(yaw) > 0.001 ? yaw : undefined,
+      centerX: Math.abs(yaw) > 0.001 ? x : undefined,
+      centerZ: Math.abs(yaw) > 0.001 ? z : undefined,
+      halfExtX: Math.abs(yaw) > 0.001 ? halfW : undefined,
+      halfExtZ: Math.abs(yaw) > 0.001 ? halfD : undefined,
+      layer: tag === 'cover_barrier' ? COLLISION_LAYER.COVER : COLLISION_LAYER.WORLD,
+      tag,
+    });
+  };
 
   const steelMat = assets.getSharedMaterial('landmark_steel', {
     pattern: 'metal_plate',
@@ -47,7 +85,8 @@ export function buildMissionEnvironmentalStorytelling(
     mat: THREE.Material,
     rx = 0,
     ry = 0,
-    rz = 0
+    rz = 0,
+    castShadow = true
   ): THREE.Mesh => {
     const geo = new THREE.BoxGeometry(w, h, d);
     res.registerGeometry(geo, scope);
@@ -55,8 +94,10 @@ export function buildMissionEnvironmentalStorytelling(
     m.userData.skipBvh = true;
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
-    m.castShadow = true;
+    m.castShadow = castShadow;
     m.receiveShadow = true;
+    m.matrixAutoUpdate = false;
+    m.updateMatrix();
     grp.add(m);
     return m;
   };
@@ -65,6 +106,8 @@ export function buildMissionEnvironmentalStorytelling(
     // M1 OP. IRON DAWN: Collapsed Elevated Overpass Span framing Northern Horizon + Steel Highway Portal Gantry
     addLandmarkBox(3.4, 9.2, 3.4, -22, 4.6, -78, concreteMat);
     addLandmarkBox(3.4, 9.2, 3.4, 22, 4.6, -78, concreteMat);
+    registerLandmarkCollider('m1_overpass_pier_W', -22, 0, -78, 1.7, 9.2, 1.7, 'building_pillar');
+    registerLandmarkCollider('m1_overpass_pier_E', 22, 0, -78, 1.7, 9.2, 1.7, 'building_pillar');
     addLandmarkBox(24, 1.6, 8.5, -14, 9.4, -78, concreteMat, 0, 0, -0.14);
     addLandmarkBox(24, 1.6, 8.5, 14, 9.4, -78, concreteMat, 0, 0, 0.12);
     addLandmarkBox(18, 0.55, 0.55, 0, 8.8, -78, steelMat, 0, 0, 0.06);
@@ -74,6 +117,8 @@ export function buildMissionEnvironmentalStorytelling(
     addLandmarkBox(1.4, 1.4, 1.4, 10.8, 0.7, 12, concreteMat);
     addLandmarkBox(0.55, 8.8, 0.55, -10.8, 5.2, 12, steelMat);
     addLandmarkBox(0.55, 8.8, 0.55, 10.8, 5.2, 12, steelMat);
+    registerLandmarkCollider('m1_gantry_pier_W', -10.8, 0, 12, 0.72, 9.2, 0.72, 'building_pillar');
+    registerLandmarkCollider('m1_gantry_pier_E', 10.8, 0, 12, 0.72, 9.2, 0.72, 'building_pillar');
     // Upper & lower box-truss chords + vertical stanchions so signage is unmistakably anchored
     addLandmarkBox(22.2, 0.36, 0.48, 0, 9.3, 12, steelMat);
     addLandmarkBox(22.2, 0.36, 0.48, 0, 7.5, 12, steelMat);
@@ -102,8 +147,10 @@ export function buildMissionEnvironmentalStorytelling(
     });
     addLandmarkBox(2.4, 1.15, 5.2, 15.5, 0.65, 22, charredHullMat, 0.05, -0.32, 0.08);
     addLandmarkBox(2.1, 0.75, 2.2, 15.2, 1.45, 21.4, charredHullMat, 0.05, -0.32, 0.08);
+    registerLandmarkCollider('m1_burned_hull', 15.5, 0, 22, 1.25, 1.85, 2.65, 'cover_barrier', -0.32);
     addLandmarkBox(3.8, 0.9, 1.1, -15.5, 0.45, 18, concreteMat, 0, 0.28, 0);
     addLandmarkBox(0.35, 3.2, 0.35, -17.2, 1.6, 17.5, steelMat);
+    registerLandmarkCollider('m1_checkpoint_wall', -15.5, 0, 18, 1.9, 1.0, 0.58, 'cover_barrier', 0.28);
   } else if (missionId === 2 || mapId === 'desert_base') {
     // M2 OP. RED DUST: Twin Pressurized LNG Horton-Spheres + Overhead Refinery Pipeline Bridge
     const sphereGeo = new THREE.SphereGeometry(5.8, 18, 14);
@@ -114,22 +161,27 @@ export function buildMissionEnvironmentalStorytelling(
       metalness: 0.58,
     });
     for (const sx of [-48, 48]) {
+      const sy = terrainYAt(sx, -44);
       const sph = new THREE.Mesh(sphereGeo, tankWhiteMat);
       sph.userData.skipBvh = true;
-      sph.position.set(sx, 7.6, -44);
+      sph.position.set(sx, sy + 7.6, -44);
       sph.castShadow = true;
       grp.add(sph);
+      registerLandmarkCollider(`m2_lng_sphere_${sx < 0 ? 'W' : 'E'}`, sx, sy - 1.0, -44, 5.4, sy + 13.4, 5.4, 'prop');
       for (const [lx, lz] of [
         [-3.5, -3.5],
         [3.5, -3.5],
         [-3.5, 3.5],
         [3.5, 3.5],
       ]) {
-        addLandmarkBox(0.55, 7.2, 0.55, sx + lx, 3.6, -44 + lz, steelMat);
+        addLandmarkBox(0.55, 8.4, 0.55, sx + lx, sy + 3.0, -44 + lz, steelMat);
       }
     }
-    addLandmarkBox(0.6, 8.0, 0.6, -18, 4.0, -18, steelMat);
-    addLandmarkBox(0.6, 8.0, 0.6, 18, 4.0, -18, steelMat);
+    for (const px of [-18, 18]) {
+      const py = terrainYAt(px, -18);
+      addLandmarkBox(0.6, 9.2, 0.6, px, py + 3.4, -18, steelMat);
+      registerLandmarkCollider(`m2_pipe_tower_${px < 0 ? 'W' : 'E'}`, px, py - 1.0, -18, 0.42, py + 8.0, 0.42, 'building_pillar');
+    }
     const pipeGeo = new THREE.CylinderGeometry(0.48, 0.48, 37, 12);
     pipeGeo.rotateZ(Math.PI / 2);
     res.registerGeometry(pipeGeo, scope);
@@ -139,15 +191,19 @@ export function buildMissionEnvironmentalStorytelling(
       pipe.position.set(0, 7.6, -18 + pzOff);
       grp.add(pipe);
     }
-    // M2 Desert Convoy Wreckage & Sandbag Checkpoints along Highway 14 Shoulder
+    // M2 Desert Convoy Wreckage & Sandbag Checkpoints along Highway 14 Shoulder (terrain-anchored!)
     const desertRustMat = assets.getSharedMaterial('m2_convoy_rust', {
       color: 0x5c3a28,
       roughness: 0.86,
       metalness: 0.32,
     });
-    addLandmarkBox(2.5, 1.3, 5.8, -15.5, 0.7, 26, desertRustMat, 0.04, 0.42, -0.09);
-    addLandmarkBox(2.3, 0.9, 2.4, -14.8, 1.55, 27.2, desertRustMat, 0.04, 0.42, -0.09);
-    addLandmarkBox(4.4, 1.1, 1.2, 15.5, 0.55, -8, concreteMat, 0, -0.22, 0);
+    const wreckY = terrainYAt(-15.5, 26);
+    addLandmarkBox(2.5, 1.3, 5.8, -15.5, wreckY + 0.65, 26, desertRustMat, 0.04, 0.42, -0.09);
+    addLandmarkBox(2.3, 0.9, 2.4, -14.8, wreckY + 1.5, 27.2, desertRustMat, 0.04, 0.42, -0.09);
+    registerLandmarkCollider('m2_convoy_wreck', -15.5, wreckY - 0.4, 26, 1.3, wreckY + 1.95, 2.95, 'cover_barrier', 0.42);
+    const cpY = terrainYAt(15.5, -8);
+    addLandmarkBox(4.4, 1.1, 1.2, 15.5, cpY + 0.55, -8, concreteMat, 0, -0.22, 0);
+    registerLandmarkCollider('m2_checkpoint_east', 15.5, cpY - 0.4, -8, 2.2, cpY + 1.15, 0.62, 'cover_barrier', -0.22);
   }
 
   if (missionId === 3) {
@@ -210,24 +266,38 @@ export function buildMissionEnvironmentalStorytelling(
       roughness: 0.92,
       metalness: 0.05,
     });
-    for (const [bx, bz, s] of [
-      [-14, 15.5, 1.3],
-      [-9, 17.2, 0.9],
-      [11, 14.8, 1.4],
-      [16, 17.6, 1.0],
-      [-40, 16.0, 1.5],
-      [40, 15.2, 1.4],
-    ] as const) {
+    for (const [bIdx, [bx, bz, s]] of (
+      [
+        [-14, 15.5, 1.3],
+        [-9, 17.2, 0.9],
+        [11, 14.8, 1.4],
+        [16, 17.6, 1.0],
+        [-40, 16.0, 1.5],
+        [40, 15.2, 1.4],
+      ] as const
+    ).entries()) {
       const rock = new THREE.Mesh(boulderGeo, mossRockMat);
       rock.userData.skipBvh = true;
       rock.position.set(bx, -0.25, bz);
       rock.scale.set(s * 1.3, s * 0.75, s);
       grp.add(rock);
+      registerLandmarkCollider(
+        `m4_river_boulder_${bIdx}`,
+        bx,
+        -1.2,
+        bz,
+        1.15 * s,
+        0.55 * s,
+        0.95 * s,
+        'prop'
+      );
     }
     for (const bz of [8.5, 23.5]) {
       addLandmarkBox(0.45, 5.8, 0.45, -4.1, 2.9, bz, steelMat);
       addLandmarkBox(0.45, 5.8, 0.45, 4.1, 2.9, bz, steelMat);
       addLandmarkBox(8.8, 0.42, 0.45, 0, 5.6, bz, steelMat);
+      registerLandmarkCollider(`m4_bridge_tower_${bz}_W`, -4.1, -0.5, bz, 0.28, 5.8, 0.28, 'building_pillar');
+      registerLandmarkCollider(`m4_bridge_tower_${bz}_E`, 4.1, -0.5, bz, 0.28, 5.8, 0.28, 'building_pillar');
     }
     // M4 Jungle Bridgehead Camo Field Post & Radio Mast on North Bank
     const camoTarpMat = assets.getSharedMaterial('m4_camo_tarp', {
@@ -235,12 +305,13 @@ export function buildMissionEnvironmentalStorytelling(
       roughness: 0.92,
       metalness: 0.05,
     });
-    addLandmarkBox(0.22, 2.8, 0.22, -9.5, 1.4, 4.5, steelMat);
-    addLandmarkBox(0.22, 2.8, 0.22, -5.5, 1.4, 4.5, steelMat);
-    addLandmarkBox(0.22, 2.8, 0.22, -9.5, 1.4, 1.2, steelMat);
-    addLandmarkBox(0.22, 2.8, 0.22, -5.5, 1.4, 1.2, steelMat);
-    addLandmarkBox(4.6, 0.16, 3.8, -7.5, 2.82, 2.85, camoTarpMat, 0.05, 0, 0);
-    addLandmarkBox(0.14, 7.2, 0.14, -9.8, 3.6, 1.0, steelMat);
+    const postBaseY = terrainYAt(-7.5, 2.85);
+    addLandmarkBox(0.22, 2.8, 0.22, -9.5, postBaseY + 1.4, 4.5, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -5.5, postBaseY + 1.4, 4.5, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -9.5, postBaseY + 1.4, 1.2, steelMat);
+    addLandmarkBox(0.22, 2.8, 0.22, -5.5, postBaseY + 1.4, 1.2, steelMat);
+    addLandmarkBox(4.6, 0.16, 3.8, -7.5, postBaseY + 2.82, 2.85, camoTarpMat, 0.05, 0, 0);
+    addLandmarkBox(0.14, 7.2, 0.14, -9.8, postBaseY + 3.6, 1.0, steelMat);
   }
 
   if (missionId === 5 || mapId === 'industrial_complex') {
@@ -266,6 +337,7 @@ export function buildMissionEnvironmentalStorytelling(
       stack.position.set(fx, 13, -32);
       stack.castShadow = true;
       grp.add(stack);
+      registerLandmarkCollider(`m5_blast_furnace_${fx < 0 ? 'W' : 'E'}`, fx, 0, -32, 4.5, 26, 4.5, 'prop');
 
       const crownGlow = addLandmarkBox(8.2, 1.2, 8.2, fx, 25.2, -32, moltenMat);
       crownGlow.userData.skipBvh = true;
@@ -276,6 +348,7 @@ export function buildMissionEnvironmentalStorytelling(
       vat.userData.skipBvh = true;
       vat.position.set(vx, 0.9, -2);
       grp.add(vat);
+      registerLandmarkCollider(`m5_slag_vat_${vx < 0 ? 'W' : 'E'}`, vx, 0, -2, 2.55, 1.85, 2.55, 'prop');
 
       const lava = new THREE.Mesh(slagSurfaceGeo, moltenMat);
       lava.userData.skipBvh = true;
@@ -392,6 +465,23 @@ export function buildEnterableBuildingMesh(
     return geo;
   };
 
+  const NO_SHADOW_TRIM = new Set([
+    'interior_floor',
+    'foundation_plinth',
+    'door_frame_jamb',
+    'door_header_beam',
+    'door_canopy_hood',
+    'interior_baseboard',
+    'window_sill_ledge',
+    'window_mullion',
+    'window_header',
+    'story_cornice_band',
+    'facade_hvac_unit',
+    'roof_cornice',
+    'upper_window_band',
+    'upper_window_mullion',
+  ]);
+
   const addBox = (
     bx: number,
     by: number,
@@ -408,8 +498,10 @@ export function buildEnterableBuildingMesh(
     if (name) mesh.name = name;
     if (skipBvh) mesh.userData.skipBvh = true;
     mesh.position.set(bx, by, bz);
-    mesh.castShadow = true;
+    mesh.castShadow = !name || !NO_SHADOW_TRIM.has(name);
     mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
     g.add(mesh);
     return mesh;
   };
@@ -420,6 +512,8 @@ export function buildEnterableBuildingMesh(
   const halfWin = winW * 0.5;
 
   addBox(0, 0.04, 0, w - 0.1, 0.08, d - 0.1, trimMat, 'interior_floor');
+  // Stage 9 PHYS-05: Concrete foundation plinth extending 1.8m below floor so sloped terrain never exposes gaps under walls
+  addBox(0, -0.9, 0, w + 0.08, 1.8, d + 0.08, structuralMat, 'foundation_plinth', true);
 
   const frontBackSegW = Math.max(0.4, halfW - halfDoor);
   const lintelH = Math.max(0.25, groundH - doorH);
@@ -532,7 +626,9 @@ export function buildEnterableBuildingMesh(
     addBox(w * 0.18, h + 1.45, -d * 0.15, w * 0.32, 1.5, d * 0.32, structuralMat, 'roof_penthouse', true);
     if (damagedTop) {
       roof.rotation.z = 0.05;
+      roof.updateMatrix();
       cornice.rotation.z = 0.05;
+      cornice.updateMatrix();
     }
   } else {
     addBox(0, h - 0.04, 0, w - 0.04, 0.08, d - 0.04, trimMat, 'walkable_roof_deck');
@@ -1111,7 +1207,7 @@ export function buildInstancedJungleTrees(
     const z = Math.sin(angle) * rad;
     if (Math.abs(x) < 10 || (z > 6 && z < 26)) continue;
 
-    const y = Math.max(0, heightFn(x, z));
+    const y = heightFn(x, z);
     const s = 0.85 + (i % 5) * 0.1;
 
     dummy.position.set(x, y + 3.75 * s, z);
@@ -1165,6 +1261,14 @@ export function buildInstancedJungleTrees(
   subCrowns.computeBoundingSphere();
   ferns.computeBoundingSphere();
 
+  trunks.matrixAutoUpdate = false;
+  crowns.matrixAutoUpdate = false;
+  subCrowns.matrixAutoUpdate = false;
+  ferns.matrixAutoUpdate = false;
+  trunks.updateMatrix();
+  crowns.updateMatrix();
+  subCrowns.updateMatrix();
+  ferns.updateMatrix();
   scene.add(trunks, crowns, subCrowns, ferns);
   res.register('object3d', scope, () => {
     scene.remove(trunks, crowns, subCrowns, ferns);

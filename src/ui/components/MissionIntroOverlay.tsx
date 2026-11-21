@@ -52,17 +52,17 @@ export const MissionIntroOverlay: React.FC<MissionIntroOverlayProps> = ({
   return (
     <div
       data-testid="mission-intro-overlay"
-      className={`fixed inset-x-0 top-16 sm:top-20 z-25 flex justify-center px-4 pointer-events-none transition-opacity duration-500 ${
+      className={`fixed inset-x-0 top-[96px] sm:top-[108px] [@media(max-height:460px)]:top-[74px] z-25 flex justify-center px-4 pointer-events-none transition-opacity duration-500 ${
         fading ? 'opacity-0' : 'opacity-100'
       }`}
     >
-      <div className="w-full max-w-xl bg-[#0B0E11]/90 border-l-2 border-amber-500 border-y border-r border-zinc-800/90 px-4 py-3 shadow-2xl">
+      <div className="w-full max-w-md sm:max-w-lg [@media(max-height:460px)]:max-w-[340px] bg-[#0B0E11]/90 border-l-2 border-amber-500 border-y border-r border-zinc-800/90 px-3.5 py-2.5 [@media(max-height:460px)]:px-2.5 [@media(max-height:460px)]:py-1.5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-400">
+            <div className="font-mono text-[10px] [@media(max-height:460px)]:text-[9px] uppercase tracking-[0.22em] text-amber-400 truncate">
               {mission.codeName} // {mission.mapName} · {difficulty.toUpperCase()}
             </div>
-            <h2 className="font-display text-lg sm:text-xl font-bold uppercase tracking-wide text-white mt-0.5 truncate">
+            <h2 className="font-display text-lg sm:text-xl [@media(max-height:460px)]:text-sm font-bold uppercase tracking-wide text-white mt-0.5 truncate">
               {mission.title}
             </h2>
           </div>
@@ -81,7 +81,7 @@ export const MissionIntroOverlay: React.FC<MissionIntroOverlayProps> = ({
           </button>
         </div>
 
-        <div className="mt-2 pt-2 border-t border-zinc-800/90 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 font-mono text-[11px]">
+        <div className="mt-2 [@media(max-height:460px)]:mt-1 pt-2 [@media(max-height:460px)]:pt-1 border-t border-zinc-800/90 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 font-mono text-[11px] [@media(max-height:460px)]:text-[9.5px]">
           <div className="text-zinc-200 truncate">
             <span className="text-cyan-400 mr-1.5">PRIMARY:</span>
             {stage1 ? stage1.title : mission.briefing}

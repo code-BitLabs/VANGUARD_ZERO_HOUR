@@ -82,10 +82,7 @@ export function stepVehicleSuspension(
     const [lx, , lz] = veh.wheelLocalPositions[i];
     const wx = veh.position.x + lx * cosY + lz * sinY;
     const wz = veh.position.z - lx * sinY + lz * cosY;
-    const gY =
-      veh.position.y > 0.35
-        ? collision.getSupportHeightAt(wx, veh.position.y + 1.0, wz, 2.2, 0.55)
-        : collision.getGroundHeightAt(wx, wz);
+    const gY = collision.getVehicleSupportHeightAt(wx, veh.position.y, wz);
     const relG = THREE.MathUtils.clamp(gY - veh.position.y, -0.25, 0.25);
     wheelGroundDelta[i] = relG;
     if (i < 2) frontGroundSum += gY;

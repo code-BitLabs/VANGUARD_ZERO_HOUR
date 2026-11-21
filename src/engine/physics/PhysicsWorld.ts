@@ -6,6 +6,11 @@ import {
   OrientedSlopeRegion,
   sampleSlopeTopAt,
 } from '@/src/physics/OrientedSlope';
+import {
+  findMountableLadder,
+  LadderMountCandidate,
+  LadderVolume,
+} from '@/src/physics/LadderVolume';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import {
   CircleBoxContact2D,
@@ -21,8 +26,11 @@ import { formatCollisionLayer, PHYSICS_MASKS } from './PhysicsLayers';
 import {
   CharacterMoveResult,
   ColliderWireframeBox,
+  LadderDebugWireframe,
   PhysicsBodyInspectorRow,
   PhysicsWorldDiagnosticsSnapshot,
+  SlopeDebugWireframe,
+  TraversalIntegrityFlag,
   VehicleMoveResult,
 } from './PhysicsTypes';
 
@@ -66,6 +74,8 @@ export class PhysicsWorld {
   public readonly responseSystem: CollisionResponseSystem;
 
   private slopes: OrientedSlopeRegion[] = [];
+  private ladders: LadderVolume[] = [];
+  private traversalIntegrityFlags: TraversalIntegrityFlag[] = [];
   private terrainHeightFn: (x: number, z: number) => number = () => 0;
   private worldBoundLimit = PhysicsWorld.DEFAULT_WORLD_BOUND;
 
@@ -180,6 +190,37 @@ export class PhysicsWorld {
     return this.slopes;
   }
 
+  addLadder(ladder: LadderVolume): void {
+    this.ladders.push(ladder);
+  }
+
+  getLadders(): readonly LadderVolume[] {
+    return this.ladders;
+  }
+
+  findMountableLadder(
+    x: number,
+    feetY: number,
+    z: number,
+    lookX: number,
+    lookZ: number,
+    maxDist = 1.25
+  ): LadderMountCandidate | null {
+    return findMountableLadder(this.ladders, x, feetY, z, lookX, lookZ, maxDist);
+  }
+
+  setTraversalIntegrityFlags(flags: TraversalIntegrityFlag[]): void {
+    this.traversalIntegrityFlags = flags;
+  }
+
+  getTraversalIntegrityFlags(): readonly TraversalIntegrityFlag[] {
+    return this.traversalIntegrityFlags;
+  }
+
+  getTerrainHeightOnly = (x: number, z: number): number => {
+    return this.terrainHeightFn(x, z);
+  };
+
   getGroundHeightAt = (x: number, z: number, referenceFeetY?: number): number => {
     let h = this.terrainHeightFn(x, z);
     for (let i = 0; i < this.slopes.length; i++) {
@@ -189,6 +230,46 @@ export class PhysicsWorld {
       }
     }
     return h;
+  };
+
+  /**
+   * Resolves ground/bridge/gentle-ramp support elevation for ground vehicles at `(x, refY, z)`.
+   * Includes walkable bridge decks and road slabs while rejecting overhead stairs above `refY + 0.65m`.
+   */
+  getVehicleSupportHeightAt = (x: number, refY: number, z: number): number => {
+    let bestY = this.terrainHeightFn(x, z);
+
+    // Check gentle vehicle-traversable ramps only (<= 28 deg) and strictly below overhead threshold
+    for (let i = 0; i < this.slopes.length; i++) {
+      const s = this.slopes[i];
+      if (s.maxSlopeDeg > 28) continue;
+      const sh = sampleSlopeTopAt(s, x, z, refY, 0.5);
+      if (sh !== null && sh > bestY && sh <= refY + 0.65) {
+        bestY = sh;
+      }
+    }
+
+    // Check walkable static bridge/deck/floor slabs within wheel climb reach
+    const queryR = 0.6;
+    const candidates = this.spatialHash.queryAABB(
+      x - queryR,
+      z - queryR,
+      x + queryR,
+      z + queryR,
+      COLLISION_LAYER.WORLD,
+      this._supportQueryScratch
+    );
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
+      if (box.maxY > bestY && box.maxY <= refY + 0.65) {
+        // Require center overlap so vehicles do not float off bridge edges
+        if (this.collisionSystem.testCircleBox2D(x, z, 0.35, box, this._supportContact2D)) {
+          bestY = box.maxY;
+        }
+      }
+    }
+
+    return bestY;
   };
 
   /**
@@ -347,12 +428,15 @@ export class PhysicsWorld {
       this.getGroundHeightAt,
       out,
       maxReach,
-      layerMask
+      layerMask,
+      this.slopes,
+      this.getTerrainOnlyHeightAt
     );
   }
 
   /**
-   * Resolves vehicle OBB movement with sliding impulse deflection, speed loss, and high-speed hull damage.
+   * Resolves vehicle OBB movement with sliding impulse deflection, speed loss, high-speed hull damage,
+   * bridge-deck support, and overhead-stair exclusion.
    */
   resolveVehicleMovement(
     vehicleId: string,
@@ -377,7 +461,8 @@ export class PhysicsWorld {
       dt,
       this.worldBoundLimit - 2,
       selfCollider,
-      this.getGroundHeightAt
+      this.getVehicleSupportHeightAt,
+      this.slopes
     );
   }
 
@@ -430,7 +515,9 @@ export class PhysicsWorld {
       0,
       layerMask,
       outHit,
-      ignoreColliderId
+      ignoreColliderId,
+      this.slopes,
+      this.getTerrainOnlyHeightAt
     );
   }
 
@@ -459,7 +546,9 @@ export class PhysicsWorld {
       radius,
       layerMask,
       outHit,
-      ignoreColliderId
+      ignoreColliderId,
+      this.slopes,
+      this.getTerrainOnlyHeightAt
     );
   }
 
@@ -481,7 +570,7 @@ export class PhysicsWorld {
         continue;
       }
       if ((b.layer & COLLISION_LAYER.VEHICLE) !== 0) {
-        if (staticColliderBoxes.length < 220) {
+        if (staticColliderBoxes.length < 1200) {
           staticColliderBoxes.push({
             id: b.id,
             minX: Number(b.minX.toFixed(2)),
@@ -502,7 +591,7 @@ export class PhysicsWorld {
         continue;
       }
       staticCount++;
-      if (staticColliderBoxes.length < 220) {
+      if (staticColliderBoxes.length < 1200) {
         staticColliderBoxes.push({
           id: b.id,
           minX: Number(b.minX.toFixed(2)),
@@ -573,6 +662,34 @@ export class PhysicsWorld {
       if (db.contactCount > 0) activePairs += db.contactCount;
     }
 
+    const slopeWireframes: SlopeDebugWireframe[] = this.slopes.map((s) => ({
+      id: s.id,
+      centerX: s.centerX,
+      centerZ: s.centerZ,
+      dirX: s.dirX,
+      dirZ: s.dirZ,
+      halfLength: s.halfLength,
+      halfWidth: s.halfWidth,
+      startY: s.startY,
+      endY: s.endY,
+      thickness: s.thickness,
+      hasSideRails: Boolean(s.hasSideRails),
+    }));
+
+    const ladderWireframes: LadderDebugWireframe[] = this.ladders.map((l) => ({
+      id: l.id,
+      x: l.x,
+      z: l.z,
+      bottomY: l.bottomY,
+      topY: l.topY,
+      width: l.width,
+      normalX: l.normalX,
+      normalZ: l.normalZ,
+      topExitX: l.topExitX,
+      topExitY: l.topExitY,
+      topExitZ: l.topExitZ,
+    }));
+
     return {
       solverBackend: 'Custom FPS Controller + SpatialHash/BVH',
       rapierInitialized: this.isRapierInitialized(),
@@ -600,12 +717,17 @@ export class PhysicsWorld {
       blockedVectors: this.debugSystem.getBlockedVectors(),
       physicsWarnings: this.debugSystem.getWarnings(),
       staticColliderBoxes,
+      slopeWireframes,
+      ladderWireframes,
+      traversalIntegrityFlags: this.traversalIntegrityFlags,
     };
   }
 
   clear(): void {
     this.spatialHash.clear();
     this.slopes = [];
+    this.ladders = [];
+    this.traversalIntegrityFlags = [];
     this.terrainHeightFn = () => 0;
     this.debugSystem.reset();
     this.collisionSystem.resetFrameCounters();

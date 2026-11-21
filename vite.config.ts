@@ -17,14 +17,19 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           manualChunks(id: string) {
-            if (id.includes('node_modules/three') || id.includes('three-mesh-bvh') || id.includes('postprocessing')) {
+            if (
+              id.includes('node_modules/three/') ||
+              id.includes('node_modules/three\\') ||
+              id.includes('node_modules/three-mesh-bvh') ||
+              id.includes('node_modules/postprocessing')
+            ) {
               return 'vendor-three';
             }
             if (
-              id.includes('node_modules/react') ||
-              id.includes('@radix-ui') ||
-              id.includes('lucide-react') ||
-              id.includes('motion')
+              id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/@radix-ui') ||
+              id.includes('node_modules/lucide-react')
             ) {
               return 'vendor-react-ui';
             }
@@ -32,7 +37,7 @@ export default defineConfig(() => {
               id.includes('node_modules/zustand') ||
               id.includes('node_modules/zod') ||
               id.includes('node_modules/xstate') ||
-              id.includes('idb-keyval')
+              id.includes('node_modules/idb-keyval')
             ) {
               return 'vendor-state';
             }

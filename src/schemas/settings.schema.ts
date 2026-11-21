@@ -22,8 +22,110 @@ export const ControlBindingsSchema = z.object({
 });
 export type ControlBindings = z.infer<typeof ControlBindingsSchema>;
 
+/** Context pairs that intentionally share keys (infantry vs vehicle) and should not flag as conflicts */
+const SHARED_CONTEXT_BINDING_PAIRS: ReadonlyArray<[keyof ControlBindings, keyof ControlBindings]> = [
+  ['jump', 'handbrake'],
+];
+
+export interface KeybindConflict {
+  action: keyof ControlBindings;
+  conflictingAction: keyof ControlBindings;
+  keyCode: string;
+}
+
+export function isAllowedSharedBinding(
+  a: keyof ControlBindings,
+  b: keyof ControlBindings
+): boolean {
+  return SHARED_CONTEXT_BINDING_PAIRS.some(
+    ([x, y]) => (x === a && y === b) || (x === b && y === a)
+  );
+}
+
+/**
+ * Pure deterministic keybind conflict detector.
+ * Returns any conflicting action currently assigned to the candidate keyCode.
+ */
+export function findKeybindConflict(
+  bindings: ControlBindings,
+  targetAction: keyof ControlBindings,
+  candidateKeyCode: string
+): KeybindConflict | null {
+  const actions = Object.keys(bindings) as Array<keyof ControlBindings>;
+  for (const existing of actions) {
+    if (existing === targetAction) continue;
+    if (isAllowedSharedBinding(existing, targetAction)) continue;
+    if (bindings[existing] === candidateKeyCode) {
+      return {
+        action: targetAction,
+        conflictingAction: existing,
+        keyCode: candidateKeyCode,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Detects all active conflicts across a bindings map.
+ */
+export function detectAllKeybindConflicts(bindings: ControlBindings): KeybindConflict[] {
+  const conflicts: KeybindConflict[] = [];
+  const actions = Object.keys(bindings) as Array<keyof ControlBindings>;
+  for (let i = 0; i < actions.length; i++) {
+    for (let j = i + 1; j < actions.length; j++) {
+      const a = actions[i];
+      const b = actions[j];
+      if (isAllowedSharedBinding(a, b)) continue;
+      if (bindings[a] === bindings[b]) {
+        conflicts.push({ action: a, conflictingAction: b, keyCode: bindings[a] });
+      }
+    }
+  }
+  return conflicts;
+}
+
+/**
+ * Applies a binding change, optionally swapping the previous key onto the conflicting action
+ * so no action is left orphaned or shadowed.
+ */
+export function applyBindingWithSwap(
+  bindings: ControlBindings,
+  targetAction: keyof ControlBindings,
+  newKeyCode: string,
+  swapOnConflict = true
+): { bindings: ControlBindings; swappedWith: keyof ControlBindings | null } {
+  const conflict = findKeybindConflict(bindings, targetAction, newKeyCode);
+  const next: ControlBindings = { ...bindings, [targetAction]: newKeyCode };
+  if (conflict && swapOnConflict) {
+    next[conflict.conflictingAction] = bindings[targetAction];
+    return { bindings: next, swappedWith: conflict.conflictingAction };
+  }
+  return { bindings: next, swappedWith: null };
+}
+
 export const QualityModeSchema = z.enum(['auto', 'manual']);
 export type QualityMode = z.infer<typeof QualityModeSchema>;
+
+export const QualityPresetProfileSchema = z.enum([
+  'auto_adaptive',
+  'cinematic',
+  'balanced',
+  'performance',
+  'manual',
+  'custom',
+]);
+export type QualityPresetProfile = z.infer<typeof QualityPresetProfileSchema>;
+
+export const HardwareCapabilityProfileSchema = z.enum([
+  'high_end_desktop',
+  'mid_range_desktop',
+  'integrated_gpu',
+  'mid_range_mobile',
+  'low_end_mobile',
+  'software_webgl',
+]);
+export type HardwareCapabilityProfile = z.infer<typeof HardwareCapabilityProfileSchema>;
 
 export const SubQualityLevelSchema = z.enum(['low', 'medium', 'high']);
 export type SubQualityLevel = z.infer<typeof SubQualityLevelSchema>;
@@ -40,13 +142,26 @@ export type RendererBackendPreference = z.infer<typeof RendererBackendPreference
 export const TargetRefreshRateSchema = z.union([z.literal(60), z.literal(90), z.literal(120)]);
 export type TargetRefreshRateSetting = z.infer<typeof TargetRefreshRateSchema>;
 
+export const ShadowMapResolutionSchema = z.union([z.literal(512), z.literal(1024), z.literal(2048)]);
+export type ShadowMapResolution = z.infer<typeof ShadowMapResolutionSchema>;
+
 export const GraphicsSettingsSchema = z.object({
   qualityMode: QualityModeSchema.default('auto'),
+  qualityProfile: QualityPresetProfileSchema.default('auto_adaptive'),
   autoDetectedPresetApplied: z.boolean().default(false),
   quality: QualityTierSchema.default('high'),
   fov: z.number().min(65).max(110).default(78),
   adaptiveGovernor: z.boolean().default(true),
   shadowsEnabled: z.boolean().default(true),
+  csmCascades: z.number().int().min(1).max(4).default(3),
+  shadowMapSize: ShadowMapResolutionSchema.default(1024),
+  ambientOcclusion: z.boolean().default(true),
+  volumetricFog: z.boolean().default(true),
+  wetReflections: z.boolean().default(true),
+  decalBudget: z.number().int().min(0).max(256).default(128),
+  foliageDensity: SubQualityLevelSchema.default('high'),
+  colorGrading: z.boolean().default(true),
+  maxDpr: z.number().min(0.75).max(2.0).default(1.75),
   bloomEnabled: z.boolean().default(true),
   renderScale: z.number().min(0.5).max(1.0).default(1.0),
   textureQuality: SubQualityLevelSchema.default('high'),
@@ -60,8 +175,20 @@ export const GraphicsSettingsSchema = z.object({
 });
 export type GraphicsSettings = z.infer<typeof GraphicsSettingsSchema>;
 
+export const DisplaySettingsSchema = z.object({
+  uiScale: z.number().min(0.85).max(1.25).default(1.0),
+  hudSafeMarginPct: z.number().min(0).max(8).default(2),
+  showFpsCounter: z.boolean().default(false),
+  showPerformanceTelemetry: z.boolean().default(false),
+  menuParallaxEnabled: z.boolean().default(true),
+});
+export type DisplaySettings = z.infer<typeof DisplaySettingsSchema>;
+
 export const MusicRepeatModeSchema = z.enum(['all', 'one', 'off']);
 export type MusicRepeatModeSetting = z.infer<typeof MusicRepeatModeSchema>;
+
+export const AudioDynamicRangeSchema = z.enum(['cinema', 'tactical', 'night_mode']);
+export type AudioDynamicRange = z.infer<typeof AudioDynamicRangeSchema>;
 
 export const AudioSettingsSchema = z.object({
   masterVolume: z.number().min(0).max(1).default(0.8),
@@ -74,8 +201,58 @@ export const AudioSettingsSchema = z.object({
   musicTrackId: z.string().default('zero_hour_overture'),
   musicShuffle: z.boolean().default(false),
   musicRepeatMode: MusicRepeatModeSchema.default('all'),
+  spatialAudioEnabled: z.boolean().default(true),
+  environmentalReverbEnabled: z.boolean().default(true),
+  dynamicRange: AudioDynamicRangeSchema.default('tactical'),
+  radioDucking: z.boolean().default(true),
 });
 export type AudioSettings = z.infer<typeof AudioSettingsSchema>;
+
+export const GameplaySettingsSchema = z.object({
+  defaultDeploymentMode: z.enum(['fireteam', 'solo']).default('fireteam'),
+  autoReloadOnEmpty: z.boolean().default(true),
+  autoSwitchOnEmpty: z.boolean().default(false),
+  cameraShakeIntensity: z.number().min(0).max(1.2).default(0.85),
+  showHitmarkers: z.boolean().default(true),
+  showDamageNumbers: z.boolean().default(false),
+  tacticalGuidanceHints: z.boolean().default(true),
+  holdToCrouch: z.boolean().default(false),
+  holdToSprint: z.boolean().default(false),
+  holdToAds: z.boolean().default(true),
+});
+export type GameplaySettings = z.infer<typeof GameplaySettingsSchema>;
+
+export const HudPresetSchema = z.enum(['full_tactical', 'minimal_diegetic', 'immersive']);
+export type HudPreset = z.infer<typeof HudPresetSchema>;
+
+export const CrosshairStyleSchema = z.enum(['tactical', 'dot', 'classic', 'dynamic']);
+export type CrosshairStyle = z.infer<typeof CrosshairStyleSchema>;
+
+export const CrosshairColorSchema = z.enum([
+  '#38BDF8',
+  '#F59E0B',
+  '#10B981',
+  '#FFFFFF',
+  '#EF4444',
+]);
+export type CrosshairColor = z.infer<typeof CrosshairColorSchema>;
+
+export const HudSettingsSchema = z.object({
+  preset: HudPresetSchema.default('minimal_diegetic'),
+  opacity: z.number().min(0.45).max(1.0).default(0.9),
+  scale: z.number().min(0.8).max(1.25).default(1.0),
+  showCompass: z.boolean().default(true),
+  showRadar: z.boolean().default(true),
+  showObjectiveMarkers: z.boolean().default(true),
+  showKillfeed: z.boolean().default(true),
+  showSquadRoster: z.boolean().default(true),
+  crosshairStyle: CrosshairStyleSchema.default('tactical'),
+  crosshairColor: CrosshairColorSchema.default('#38BDF8'),
+  crosshairThickness: z.number().min(1).max(4).default(2),
+  crosshairGap: z.number().min(2).max(12).default(5),
+  crosshairDynamicSpread: z.boolean().default(true),
+});
+export type HudSettings = z.infer<typeof HudSettingsSchema>;
 
 export const TouchModeSchema = z.enum(['auto', 'always_on', 'always_off']);
 export type TouchMode = z.infer<typeof TouchModeSchema>;
@@ -261,11 +438,19 @@ export type InputSettings = z.infer<typeof InputSettingsSchema>;
 export const HudModeSchema = z.enum(['adaptive', 'minimal', 'expanded']);
 export type HudModeSetting = z.infer<typeof HudModeSchema>;
 
+export const SubtitleSizeSchema = z.enum(['sm', 'md', 'lg']);
+export type SubtitleSize = z.infer<typeof SubtitleSizeSchema>;
+
 export const AccessibilitySettingsSchema = z.object({
   colorblindMode: ColorblindModeSchema.default('standard'),
   subtitles: z.boolean().default(true),
+  subtitleSize: SubtitleSizeSchema.default('md'),
+  subtitleBackdrop: z.boolean().default(true),
   tacticalHints: z.boolean().default(true),
   reducedMotion: z.boolean().default(false),
+  highContrastBorders: z.boolean().default(false),
+  largeTextMode: z.boolean().default(false),
+  screenShakeReduction: z.boolean().default(false),
   uiScale: z.number().min(0.85).max(1.25).default(1.0),
   hudMode: HudModeSchema.default('adaptive'),
   hudOpacity: z.number().min(0.5).max(1.0).default(0.92),
@@ -287,14 +472,109 @@ export const DeveloperSettingsSchema = z.object({
 });
 export type DeveloperSettings = z.infer<typeof DeveloperSettingsSchema>;
 
+export const SettingsCategoryIdSchema = z.enum([
+  'display',
+  'graphics',
+  'audio',
+  'controls',
+  'gameplay',
+  'hud',
+  'accessibility',
+]);
+export type SettingsCategoryId = z.infer<typeof SettingsCategoryIdSchema>;
+
 export const SettingsBundleSchema = z.object({
-  version: z.literal(1).default(1),
+  version: z.union([z.literal(1), z.literal(2)]).default(2),
+  display: DisplaySettingsSchema.default(() => DisplaySettingsSchema.parse({})),
   graphics: GraphicsSettingsSchema.default(() => GraphicsSettingsSchema.parse({})),
   audio: AudioSettingsSchema.default(() => AudioSettingsSchema.parse({})),
   input: InputSettingsSchema.default(() => InputSettingsSchema.parse({})),
+  gameplay: GameplaySettingsSchema.default(() => GameplaySettingsSchema.parse({})),
+  hud: HudSettingsSchema.default(() => HudSettingsSchema.parse({})),
   accessibility: AccessibilitySettingsSchema.default(() => AccessibilitySettingsSchema.parse({})),
   developer: DeveloperSettingsSchema.default(() => DeveloperSettingsSchema.parse({})),
 });
 export type SettingsBundle = z.infer<typeof SettingsBundleSchema>;
 
 export const DEFAULT_SETTINGS: SettingsBundle = SettingsBundleSchema.parse({});
+
+/**
+ * Lossless v1 -> v2 Settings Migration.
+ * Preserves all v1 user choices (sensitivity, bindings, volume, graphics, accessibility)
+ * while hydrating new v2 Display, Gameplay, and HUD categories coherently.
+ */
+export function migrateSettingsBundle(raw: unknown): {
+  bundle: SettingsBundle;
+  migratedFromV1: boolean;
+  recoveredFromCorruption: boolean;
+} {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      bundle: SettingsBundleSchema.parse({}),
+      migratedFromV1: false,
+      recoveredFromCorruption: Boolean(raw),
+    };
+  }
+  const record = raw as Record<string, unknown>;
+  const isV1 = record.version === 1 || record.version === undefined;
+
+  if (isV1) {
+    const legacyAcc = (record.accessibility ?? {}) as Record<string, unknown>;
+    const legacyGfx = (record.graphics ?? {}) as Record<string, unknown>;
+    const hydrated: Record<string, unknown> = {
+      ...record,
+      version: 2,
+      display: {
+        ...(typeof record.display === 'object' && record.display ? record.display : {}),
+        uiScale: typeof legacyAcc.uiScale === 'number' ? legacyAcc.uiScale : 1.0,
+      },
+      gameplay: {
+        ...(typeof record.gameplay === 'object' && record.gameplay ? record.gameplay : {}),
+        tacticalGuidanceHints:
+          typeof legacyAcc.tacticalHints === 'boolean' ? legacyAcc.tacticalHints : true,
+      },
+      hud: {
+        ...(typeof record.hud === 'object' && record.hud ? record.hud : {}),
+        scale: typeof legacyAcc.uiScale === 'number' ? legacyAcc.uiScale : 1.0,
+        opacity: typeof legacyAcc.hudOpacity === 'number' ? legacyAcc.hudOpacity : 0.9,
+        showRadar: typeof legacyAcc.showRadar === 'boolean' ? legacyAcc.showRadar : true,
+        showCompass: typeof legacyAcc.showCompass === 'boolean' ? legacyAcc.showCompass : true,
+        preset:
+          legacyAcc.hudMode === 'minimal'
+            ? 'minimal_diegetic'
+            : legacyAcc.hudMode === 'expanded'
+              ? 'full_tactical'
+              : 'minimal_diegetic',
+      },
+      graphics: {
+        ...legacyGfx,
+        qualityProfile:
+          legacyGfx.qualityProfile ??
+          (legacyGfx.qualityMode === 'manual' ? 'manual' : 'auto_adaptive'),
+      },
+    };
+    const parsed = SettingsBundleSchema.safeParse(hydrated);
+    if (parsed.success) {
+      return {
+        bundle: { ...parsed.data, version: 2 },
+        migratedFromV1: true,
+        recoveredFromCorruption: false,
+      };
+    }
+  }
+
+  const parsed = SettingsBundleSchema.safeParse({ ...record, version: 2 });
+  if (parsed.success) {
+    return {
+      bundle: { ...parsed.data, version: 2 },
+      migratedFromV1: false,
+      recoveredFromCorruption: false,
+    };
+  }
+
+  return {
+    bundle: SettingsBundleSchema.parse({}),
+    migratedFromV1: false,
+    recoveredFromCorruption: true,
+  };
+}

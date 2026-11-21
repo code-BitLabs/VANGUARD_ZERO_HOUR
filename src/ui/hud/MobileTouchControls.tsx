@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowLeft,
@@ -46,7 +46,7 @@ interface MobileTouchControlsProps {
   ) => void;
 }
 
-export function MobileTouchControls({
+export const MobileTouchControls = React.memo(function MobileTouchControls({
   inputManager,
   hud,
   onIssueSquadCommand,
@@ -73,15 +73,10 @@ export function MobileTouchControls({
 
   // Refs for latest reactive values so window-level multi-touch listeners never go stale or detach mid-gesture
   const inputManagerRef = useRef<InputManager | null>(inputManager);
-  inputManagerRef.current = inputManager;
   const inVehicleRef = useRef<boolean>(hud.inVehicle);
-  inVehicleRef.current = hud.inVehicle;
   const touchDeadzoneRef = useRef<number>(touchDeadzone);
-  touchDeadzoneRef.current = touchDeadzone;
   const autoSprintRef = useRef<boolean>(autoSprint);
-  autoSprintRef.current = autoSprint;
   const autoSprintThresholdRef = useRef<number>(autoSprintThreshold);
-  autoSprintThresholdRef.current = autoSprintThreshold;
 
   const stickPointerId = useRef<number | null>(null);
   const stickTouchFallbackId = useRef<number | null>(null);
@@ -91,12 +86,26 @@ export function MobileTouchControls({
   const [stickOffset, setStickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [sprintLocked, setSprintLocked] = useState(false);
   const sprintLockedRef = useRef(false);
-  sprintLockedRef.current = sprintLocked;
   const [autoSprintEngaged, setAutoSprintEngaged] = useState(false);
   const [adsToggled, setAdsToggled] = useState(false);
   const adsToggledRef = useRef(false);
-  adsToggledRef.current = adsToggled;
   const [tacticalOpen, setTacticalOpen] = useState(false);
+
+  useEffect(() => {
+    inputManagerRef.current = inputManager;
+    inVehicleRef.current = hud.inVehicle;
+    touchDeadzoneRef.current = touchDeadzone;
+    autoSprintRef.current = autoSprint;
+    autoSprintThresholdRef.current = autoSprintThreshold;
+  }, [inputManager, hud.inVehicle, touchDeadzone, autoSprint, autoSprintThreshold]);
+
+  useEffect(() => {
+    sprintLockedRef.current = sprintLocked;
+  }, [sprintLocked]);
+
+  useEffect(() => {
+    adsToggledRef.current = adsToggled;
+  }, [adsToggled]);
 
   const lookPointerId = useRef<number | null>(null);
   const lookLastPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -129,22 +138,33 @@ export function MobileTouchControls({
     handbrake: false,
   });
 
-  // Compute unified collision-free layout for the active viewport and HUD state
-  const layout = computeMobileHudLayout(
-    inputSettings,
-    { width: viewport.width, height: viewport.height },
-    {
-      inVehicle: hud.inVehicle,
-      grenadeCount: hud.grenades,
-      c4DeployedCount: hud.ordnance?.c4Deployed ?? 0,
-    }
+  const c4DeployedCount = hud.ordnance?.c4Deployed ?? 0;
+
+  // Compute unified collision-free layout only when viewport, touch settings, or HUD slots actually change
+  const layout = useMemo(
+    () =>
+      computeMobileHudLayout(
+        inputSettings,
+        { width: viewport.width, height: viewport.height },
+        {
+          inVehicle: hud.inVehicle,
+          grenadeCount: hud.grenades,
+          c4DeployedCount,
+        }
+      ),
+    [inputSettings, viewport.width, viewport.height, hud.inVehicle, hud.grenades, c4DeployedCount]
   );
 
-  const vehicleLayout = computeMobileVehicleHudLayout(inputSettings, {
-    width: viewport.width,
-    height: viewport.height,
-  });
-  const squadStripRect = computeMobileSquadStripRect(layout);
+  const vehicleLayout = useMemo(
+    () =>
+      computeMobileVehicleHudLayout(inputSettings, {
+        width: viewport.width,
+        height: viewport.height,
+      }),
+    [inputSettings, viewport.width, viewport.height]
+  );
+
+  const squadStripRect = useMemo(() => computeMobileSquadStripRect(layout), [layout]);
 
   const stickRect = layout.controls.move_joystick;
   const fireLeftRect = layout.controls.fire_left;
@@ -1792,4 +1812,4 @@ export function MobileTouchControls({
       )}
     </div>
   );
-}
+});

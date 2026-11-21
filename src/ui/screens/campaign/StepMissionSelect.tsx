@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  ArrowRight,
   CheckCircle2,
   CloudSun,
   FileText,
@@ -212,32 +211,22 @@ export function StepMissionSelect({
             </div>
           )}
 
-          {/* Primary & Secondary Actions */}
+          {/* Secondary Briefing Link (Primary CTA lives unambiguously in sticky footer) */}
           <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2.5">
+            <span className="font-mono text-[10.5px] uppercase tracking-wider text-zinc-400">
+              Step 2–3: Select Solo / Fireteam, Loadout &amp; Difficulty
+            </span>
             <Button
-              variant="outline"
-              size="md"
+              variant="ghost"
+              size="sm"
               data-testid="step1-full-briefing-btn"
               onClick={() => {
                 onUiClick();
                 onOpenFullBriefing();
               }}
-              className="min-h-[44px]"
+              className="min-h-[38px] text-cyan-300 hover:text-cyan-200"
             >
-              <FileText className="w-4 h-4 text-cyan-400" /> Full Briefing Dossier
-            </Button>
-
-            <Button
-              variant="primary"
-              size="lg"
-              data-testid="step1-prepare-deployment-btn"
-              onClick={() => {
-                onUiClick();
-                onPrepareDeployment();
-              }}
-              className="min-h-[46px] sm:min-w-[220px]"
-            >
-              Prepare Deployment <ArrowRight className="w-4 h-4" />
+              <FileText className="w-3.5 h-3.5 text-cyan-400" /> Full Briefing Dossier
             </Button>
           </div>
         </div>

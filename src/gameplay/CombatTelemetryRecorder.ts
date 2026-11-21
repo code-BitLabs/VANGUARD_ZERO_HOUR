@@ -693,6 +693,9 @@ export class CombatTelemetryRecorder {
     blockedVectors: [],
     physicsWarnings: [],
     staticColliderBoxes: [],
+    slopeWireframes: [],
+    ladderWireframes: [],
+    traversalIntegrityFlags: [],
   };
 
   setMissionId(missionId: number): void {

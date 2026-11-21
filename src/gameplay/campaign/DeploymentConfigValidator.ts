@@ -10,9 +10,9 @@ import {
   SquadRoleId,
 } from '@/src/schemas/campaign.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
-import theaterUrbanDawnImg from '@/src/assets/images/theater_urban_dawn_1795162698497.jpg';
-import theaterDesertConvoyImg from '@/src/assets/images/theater_desert_convoy_1795162698073.jpg';
-import theaterNightFoundryImg from '@/src/assets/images/theater_night_foundry_1795162697888.jpg';
+import theaterUrbanDawnImg from '@/src/assets/images/theater_urban_dawn_1795162698497.webp';
+import theaterDesertConvoyImg from '@/src/assets/images/theater_desert_convoy_1795162698073.webp';
+import theaterNightFoundryImg from '@/src/assets/images/theater_night_foundry_1795162697888.webp';
 
 export interface MissionArtworkDescriptor {
   imageSrc: string;

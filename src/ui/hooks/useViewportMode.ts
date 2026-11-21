@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { TouchMode } from '@/src/schemas/settings.schema';
 
 export interface ViewportMetrics {
@@ -13,19 +13,21 @@ export interface ViewportMetrics {
   shouldBlockPortrait: boolean;
 }
 
+const SERVER_VIEWPORT_SNAPSHOT: ViewportMetrics = {
+  width: 1280,
+  height: 720,
+  offsetTop: 0,
+  offsetLeft: 0,
+  isLandscape: true,
+  isPortrait: false,
+  isCoarsePointer: false,
+  isCompactLandscape: false,
+  shouldBlockPortrait: false,
+};
+
 function readViewportMetrics(): ViewportMetrics {
   if (typeof window === 'undefined') {
-    return {
-      width: 1280,
-      height: 720,
-      offsetTop: 0,
-      offsetLeft: 0,
-      isLandscape: true,
-      isPortrait: false,
-      isCoarsePointer: false,
-      isCompactLandscape: false,
-      shouldBlockPortrait: false,
-    };
+    return SERVER_VIEWPORT_SNAPSHOT;
   }
 
   const vv = window.visualViewport;
@@ -42,8 +44,8 @@ function readViewportMetrics(): ViewportMetrics {
       (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0 && Math.max(width, height) <= 1366)
   );
   const isCompactLandscape = isLandscape && (height <= 540 || (isCoarsePointer && width <= 1024));
-  // Trigger portrait rotation gate on mobile/narrow portrait viewports (e.g., 390x844 phones or coarse portrait tablets)
-  const shouldBlockPortrait = isPortrait && (isCoarsePointer || width <= 640);
+  // Trigger portrait rotation gate on mobile/phone portrait viewports without locking out desktop split-pane previews
+  const shouldBlockPortrait = isPortrait && (isCoarsePointer || width <= 460);
 
   return {
     width,
@@ -58,6 +60,103 @@ function readViewportMetrics(): ViewportMetrics {
   };
 }
 
+function shallowEqualViewport(a: ViewportMetrics, b: ViewportMetrics): boolean {
+  return (
+    a.width === b.width &&
+    a.height === b.height &&
+    a.offsetTop === b.offsetTop &&
+    a.offsetLeft === b.offsetLeft &&
+    a.isLandscape === b.isLandscape &&
+    a.isPortrait === b.isPortrait &&
+    a.isCoarsePointer === b.isCoarsePointer &&
+    a.isCompactLandscape === b.isCompactLandscape &&
+    a.shouldBlockPortrait === b.shouldBlockPortrait
+  );
+}
+
+const listeners = new Set<() => void>();
+let currentSnapshot: ViewportMetrics = readViewportMetrics();
+let rafId = 0;
+let settleTimer = 0;
+let listenersAttached = false;
+
+function syncViewportSnapshot(): void {
+  const next = readViewportMetrics();
+  if (!shallowEqualViewport(currentSnapshot, next)) {
+    currentSnapshot = next;
+    for (const listener of listeners) {
+      listener();
+    }
+  }
+}
+
+function scheduleViewportUpdate(): void {
+  syncViewportSnapshot();
+  if (typeof window === 'undefined') return;
+  if (rafId) window.cancelAnimationFrame(rafId);
+  rafId = window.requestAnimationFrame(() => {
+    rafId = 0;
+    syncViewportSnapshot();
+  });
+  window.clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(() => {
+    settleTimer = 0;
+    syncViewportSnapshot();
+  }, 120);
+}
+
+function attachGlobalListeners(): void {
+  if (listenersAttached || typeof window === 'undefined') return;
+  listenersAttached = true;
+  window.addEventListener('resize', scheduleViewportUpdate);
+  window.addEventListener('orientationchange', scheduleViewportUpdate);
+  window.visualViewport?.addEventListener('resize', scheduleViewportUpdate);
+  window.visualViewport?.addEventListener('scroll', scheduleViewportUpdate);
+}
+
+function detachGlobalListeners(): void {
+  if (!listenersAttached || typeof window === 'undefined') return;
+  listenersAttached = false;
+  if (rafId) {
+    window.cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  if (settleTimer) {
+    window.clearTimeout(settleTimer);
+    settleTimer = 0;
+  }
+  window.removeEventListener('resize', scheduleViewportUpdate);
+  window.removeEventListener('orientationchange', scheduleViewportUpdate);
+  window.visualViewport?.removeEventListener('resize', scheduleViewportUpdate);
+  window.visualViewport?.removeEventListener('scroll', scheduleViewportUpdate);
+}
+
+function subscribeViewport(listener: () => void): () => void {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    // Re-read synchronously on first mount (important in tests mutating window.innerWidth)
+    const fresh = readViewportMetrics();
+    if (!shallowEqualViewport(currentSnapshot, fresh)) {
+      currentSnapshot = fresh;
+    }
+    attachGlobalListeners();
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      detachGlobalListeners();
+    }
+  };
+}
+
+function getViewportSnapshot(): ViewportMetrics {
+  return currentSnapshot;
+}
+
+function getViewportServerSnapshot(): ViewportMetrics {
+  return SERVER_VIEWPORT_SNAPSHOT;
+}
+
 export function resolveTouchControlsVisible(
   touchMode: TouchMode,
   touchHudOverride: boolean | null,
@@ -70,39 +169,10 @@ export function resolveTouchControlsVisible(
 }
 
 export function useViewportMode(): ViewportMetrics {
-  const [metrics, setMetrics] = useState<ViewportMetrics>(() => readViewportMetrics());
-
-  useEffect(() => {
-    let rafId = 0;
-    let settleTimer = 0;
-
-    const update = () => {
-      setMetrics(readViewportMetrics());
-    };
-
-    const scheduleUpdate = () => {
-      update();
-      if (rafId) window.cancelAnimationFrame(rafId);
-      rafId = window.requestAnimationFrame(update);
-      window.clearTimeout(settleTimer);
-      settleTimer = window.setTimeout(update, 120);
-    };
-
-    update();
-    window.addEventListener('resize', scheduleUpdate);
-    window.addEventListener('orientationchange', scheduleUpdate);
-    window.visualViewport?.addEventListener('resize', scheduleUpdate);
-    window.visualViewport?.addEventListener('scroll', scheduleUpdate);
-
-    return () => {
-      if (rafId) window.cancelAnimationFrame(rafId);
-      window.clearTimeout(settleTimer);
-      window.removeEventListener('resize', scheduleUpdate);
-      window.removeEventListener('orientationchange', scheduleUpdate);
-      window.visualViewport?.removeEventListener('resize', scheduleUpdate);
-      window.visualViewport?.removeEventListener('scroll', scheduleUpdate);
-    };
-  }, []);
-
-  return metrics;
+  return useSyncExternalStore(
+    subscribeViewport,
+    getViewportSnapshot,
+    getViewportServerSnapshot
+  );
 }
+

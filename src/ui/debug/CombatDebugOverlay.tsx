@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useDeferredValue, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -103,6 +103,8 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
   const [selectedPhysicsBodyId, setSelectedPhysicsBodyId] = useState<string | null>(null);
   const [physicsBodyFilter, setPhysicsBodyFilter] = useState('');
   const [enemyFilter, setEnemyFilter] = useState('');
+  const deferredPhysicsBodyFilter = useDeferredValue(physicsBodyFilter);
+  const deferredEnemyFilter = useDeferredValue(enemyFilter);
   const [timelinePaused, setTimelinePaused] = useState(false);
   const [frozenEvents, setFrozenEvents] = useState<CombatEventRecord[]>([]);
   const [eventFilter, setEventFilter] = useState('ALL');
@@ -479,7 +481,7 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                 <MetricTile
                   label="Bodies (Tot / Stat / Dyn)"
                   value={`${snapshot.physics.totalBodies} (${snapshot.physics.staticBodiesCount}S / ${snapshot.physics.dynamicBodiesCount + snapshot.physics.kinematicBodiesCount + snapshot.physics.characterBodiesCount}D)`}
-                  sub={`Chars: ${snapshot.physics.characterBodiesCount} · Bounds: ±${snapshot.physics.worldBoundsMax}m`}
+                  sub={`Slopes: ${snapshot.physics.slopeWireframes?.length ?? 0} · Ladders: ${snapshot.physics.ladderWireframes?.length ?? 0} · Flags: ${snapshot.physics.traversalIntegrityFlags?.length ?? 0}`}
                 />
                 <MetricTile
                   label="Per-Frame Queries"
@@ -520,8 +522,8 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                   <tbody className="divide-y divide-zinc-800/70">
                     {snapshot.physics.bodies
                       .filter((b) => {
-                        if (!physicsBodyFilter.trim()) return true;
-                        const q = physicsBodyFilter.toLowerCase();
+                        if (!deferredPhysicsBodyFilter.trim()) return true;
+                        const q = deferredPhysicsBodyFilter.toLowerCase();
                         return (
                           b.id.toLowerCase().includes(q) ||
                           b.entityType.toLowerCase().includes(q) ||
@@ -699,8 +701,8 @@ export function CombatDebugOverlay({ onRequestPointerLock }: CombatDebugOverlayP
                   <tbody className="divide-y divide-zinc-800/70 text-[10px]">
                     {snapshot.enemies
                       .filter((u) => {
-                        if (!enemyFilter.trim()) return true;
-                        const q = enemyFilter.toLowerCase();
+                        if (!deferredEnemyFilter.trim()) return true;
+                        const q = deferredEnemyFilter.toLowerCase();
                         return (
                           u.id.toLowerCase().includes(q) ||
                           u.squadId.toLowerCase().includes(q) ||

@@ -136,6 +136,24 @@ export class WeaponSystem {
   private readonly _muzzleWorld = new THREE.Vector3();
   private readonly _shotDir = new THREE.Vector3();
   private readonly _endPoint = new THREE.Vector3();
+  private readonly _impactNormal = new THREE.Vector3();
+  private combatVfxHooks: {
+    onMuzzleFired?: (
+      weaponId: WeaponId,
+      muzzleWorld: THREE.Vector3,
+      dir: THREE.Vector3,
+      right: THREE.Vector3,
+      isLauncher: boolean
+    ) => void;
+    onWorldImpact?: (
+      origin: THREE.Vector3,
+      dir: THREE.Vector3,
+      point: THREE.Vector3,
+      normal: THREE.Vector3,
+      distance: number,
+      colliderId?: string
+    ) => void;
+  } | null = null;
   private readonly _worldHit: RayHit = {
     hit: false,
     distance: 0,
@@ -147,6 +165,28 @@ export class WeaponSystem {
     normalZ: 0,
     collider: null,
   };
+
+  setCombatVfxHooks(
+    hooks: {
+      onMuzzleFired?: (
+        weaponId: WeaponId,
+        muzzleWorld: THREE.Vector3,
+        dir: THREE.Vector3,
+        right: THREE.Vector3,
+        isLauncher: boolean
+      ) => void;
+      onWorldImpact?: (
+        origin: THREE.Vector3,
+        dir: THREE.Vector3,
+        point: THREE.Vector3,
+        normal: THREE.Vector3,
+        distance: number,
+        colliderId?: string
+      ) => void;
+    } | null
+  ): void {
+    this.combatVfxHooks = hooks;
+  }
 
   constructor(
     viewModelScene: THREE.Scene,
@@ -884,6 +924,13 @@ export class WeaponSystem {
         this._right.z
       );
     }
+    this.combatVfxHooks?.onMuzzleFired?.(
+      cfg.id,
+      muzzleWorld,
+      this._rayDir,
+      this._right,
+      cfg.category === 'launcher'
+    );
 
     if (cfg.projectileType !== 'hitscan') {
       const homing =
@@ -1014,6 +1061,24 @@ export class WeaponSystem {
           onDestructibleHit(this._worldHit.collider.id, effectiveDamage);
         }
         this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, 'concrete');
+        if (p === 0 || p % 3 === 0) {
+          this._impactNormal.set(
+            this._worldHit.normalX,
+            this._worldHit.normalY,
+            this._worldHit.normalZ
+          );
+          if (this._impactNormal.lengthSq() < 0.001) {
+            this._impactNormal.copy(dir).negate();
+          }
+          this.combatVfxHooks?.onWorldImpact?.(
+            this._rayOrigin,
+            dir,
+            endPoint,
+            this._impactNormal,
+            bestDist,
+            this._worldHit.collider?.id
+          );
+        }
       }
     }
   }

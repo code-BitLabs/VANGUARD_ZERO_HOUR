@@ -3,8 +3,8 @@ import { Check, Shield, User, Users } from 'lucide-react';
 import { getMissionById } from '@/src/data/missions';
 import { DeploymentMode } from '@/src/schemas/campaign.schema';
 import { useProgressionStore } from '@/src/stores/progressionStore';
-import soloModeImg from '@/src/assets/images/mode_solo_operator_1795162695115.jpg';
-import fireteamModeImg from '@/src/assets/images/mode_fireteam_squad_1795162698191.jpg';
+import soloModeImg from '@/src/assets/images/mode_solo_operator_1795162695115.webp';
+import fireteamModeImg from '@/src/assets/images/mode_fireteam_squad_1795162698191.webp';
 
 interface StepPlayStyleProps {
   missionId: number;

@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Crosshair, HeartPulse, RefreshCw, Shield, Users, X } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { WEAPON_CATALOG } from '@/src/data/weapons';
 import { HudSnapshot } from '@/src/schemas/events.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
 import { SquadCommandSource, SquadOrderType } from '@/src/gameplay/squad/SquadIntentRouter';
+import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 
 interface RadialOption {
   order: SquadOrderType;
@@ -24,7 +26,10 @@ const RADIAL_OPTIONS: RadialOption[] = [
 ];
 
 export interface SquadCommandHudProps {
-  hud: HudSnapshot;
+  hud?: Pick<
+    HudSnapshot,
+    'squad' | 'nearSupplySwapStation' | 'deploymentMode' | 'carriedWeaponIds' | 'inVehicle'
+  >;
   compactHud: boolean;
   downedActive: boolean;
   onIssueCommand?: (
@@ -35,13 +40,24 @@ export interface SquadCommandHudProps {
   onSwapFieldWeapon: (replaceSlotIndex: number, nextWeaponId: WeaponId) => void;
 }
 
-export function SquadCommandHud({
-  hud,
+export const SquadCommandHud = React.memo(function SquadCommandHud({
+  hud: hudProp,
   compactHud,
   downedActive,
   onIssueCommand,
   onSwapFieldWeapon,
 }: SquadCommandHudProps) {
+  const storeSlice = useGameSessionStore(
+    useShallow((s) => ({
+      squad: s.hud.squad,
+      nearSupplySwapStation: s.hud.nearSupplySwapStation,
+      deploymentMode: s.hud.deploymentMode,
+      carriedWeaponIds: s.hud.carriedWeaponIds,
+      inVehicle: s.hud.inVehicle,
+    }))
+  );
+  const hud = hudProp ?? storeSlice;
+
   const [radialOpen, setRadialOpen] = useState(false);
   const [hoveredOrder, setHoveredOrder] = useState<SquadOrderType | null>(null);
   const [targetOperatorId, setTargetOperatorId] = useState<string | undefined>(undefined);
@@ -51,9 +67,21 @@ export function SquadCommandHud({
   const radialOpenRef = useRef(false);
   const hoveredOrderRef = useRef<SquadOrderType | null>(null);
   const targetOpRef = useRef<string | undefined>(undefined);
-  radialOpenRef.current = radialOpen;
-  hoveredOrderRef.current = hoveredOrder;
-  targetOpRef.current = targetOperatorId;
+  const operatorsRef = useRef(hud.squad?.operators);
+  const nearSupplySwapRef = useRef(hud.nearSupplySwapStation);
+  const onIssueCommandRef = useRef(onIssueCommand);
+
+  useEffect(() => {
+    radialOpenRef.current = radialOpen;
+    hoveredOrderRef.current = hoveredOrder;
+    targetOpRef.current = targetOperatorId;
+  }, [radialOpen, hoveredOrder, targetOperatorId]);
+
+  useEffect(() => {
+    operatorsRef.current = hud.squad?.operators;
+    nearSupplySwapRef.current = hud.nearSupplySwapStation;
+    onIssueCommandRef.current = onIssueCommand;
+  }, [hud.squad?.operators, hud.nearSupplySwapStation, onIssueCommand]);
 
   useEffect(() => {
     if (!hud.nearSupplySwapStation && swapOpen) {
@@ -79,9 +107,9 @@ export function SquadCommandHud({
         setHoveredOrder(null);
       } else if (!isSoloMode && radialOpenRef.current && (e.key === '1' || e.key === '2' || e.key === '3')) {
         const idx = Number(e.key) - 1;
-        const op = hud.squad?.operators[idx];
+        const op = operatorsRef.current?.[idx];
         setTargetOperatorId((prev) => (op && prev !== op.id ? op.id : undefined));
-      } else if (e.code === 'KeyH' && hud.nearSupplySwapStation) {
+      } else if (e.code === 'KeyH' && nearSupplySwapRef.current) {
         setSwapOpen((v) => !v);
       }
     };
@@ -91,8 +119,8 @@ export function SquadCommandHud({
         const chosen = hoveredOrderRef.current;
         setRadialOpen(false);
         setHoveredOrder(null);
-        if (chosen && onIssueCommand) {
-          onIssueCommand(chosen, 'desktop_radial', targetOpRef.current);
+        if (chosen && onIssueCommandRef.current) {
+          onIssueCommandRef.current(chosen, 'desktop_radial', targetOpRef.current);
         }
       }
     };
@@ -129,7 +157,7 @@ export function SquadCommandHud({
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('mousemove', onMouseMove);
     };
-  }, [compactHud, downedActive, hud.nearSupplySwapStation, hud.squad?.operators, isSoloMode, onIssueCommand, swapOpen]);
+  }, [compactHud, downedActive, isSoloMode, swapOpen]);
 
   const squad = isSoloMode ? undefined : hud.squad;
   if (downedActive) return null;
@@ -146,15 +174,17 @@ export function SquadCommandHud({
       {!compactHud && squad && (
         <div
           data-testid="hud-fireteam-strip"
-          className="absolute bottom-36 left-4 z-20 bg-[#0B0E11]/86 border border-zinc-800 rounded-sm px-3 py-2 w-[264px] space-y-1.5 pointer-events-none"
+          className="absolute bottom-[104px] left-3 xl:bottom-32 xl:left-4 z-20 bg-[#0B0E11]/86 border border-zinc-800 rounded-sm px-2.5 py-1.5 xl:px-3 xl:py-2 w-[204px] xl:w-[254px] space-y-1 xl:space-y-1.5 pointer-events-none"
         >
-          <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider border-b border-zinc-800/90 pb-1">
-            <span className="text-cyan-400 font-bold flex items-center gap-1.5">
+          <div className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wider border-b border-zinc-800/90 pb-1">
+            <span className="text-cyan-400 font-bold flex items-center gap-1.5 shrink-0">
               <Users className="w-3 h-3 shrink-0" />
-              FIRETEAM · {squad.activeFormation}
+              FIRETEAM
             </span>
-            <span className="text-amber-300 tabular-nums whitespace-nowrap truncate max-w-[110px]">
-              {squad.activeOrderLabel}
+            <span className="text-amber-300 tabular-nums whitespace-nowrap truncate">
+              {squad.activeOrderLabel && !squad.activeOrderLabel.toUpperCase().startsWith('FORMATION:')
+                ? squad.activeOrderLabel
+                : squad.activeFormation}
             </span>
           </div>
 
@@ -228,9 +258,9 @@ export function SquadCommandHud({
             </div>
           )}
 
-          <div className="pt-1 border-t border-zinc-800/80 font-mono text-[9px] text-zinc-400 flex items-center justify-between whitespace-nowrap">
-            <span>[Q] WHEEL · [F1] REG · [F2] MOV</span>
-            <span>[F3] ATK · [F4] FLK</span>
+          <div className="hidden xl:flex pt-1 border-t border-zinc-800/80 font-mono text-[8.5px] text-zinc-400 items-center justify-between gap-2 whitespace-nowrap">
+            <span>[Q] WHEEL</span>
+            <span>[F1] REG · [F2] MOV · [F3] ATK</span>
           </div>
         </div>
       )}
@@ -386,4 +416,4 @@ export function SquadCommandHud({
       )}
     </>
   );
-}
+});

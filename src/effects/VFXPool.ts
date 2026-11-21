@@ -109,8 +109,19 @@ export class VFXPool {
     resourceManager.registerMaterial(brassMat, 'shared', 'vfx_brass_mat');
     resourceManager.registerMaterial(bloodMat, 'shared', 'vfx_blood_mat');
 
+    const allParticleMats: THREE.Material[] = [
+      sparkMat,
+      fireMat,
+      smokeMat,
+      exhaustMat,
+      brassMat,
+      bloodMat,
+    ];
+    let poolCreateIndex = 0;
     this.particlePool = new ObjectPool<PooledParticle>(200, () => {
-      const mesh = new THREE.Mesh(sphereGeo, sparkMat);
+      const initialMat = allParticleMats[poolCreateIndex % allParticleMats.length];
+      poolCreateIndex++;
+      const mesh = new THREE.Mesh(sphereGeo, initialMat);
       mesh.visible = false;
       mesh.scale.setScalar(0.01);
       this.rootGroup.add(mesh);

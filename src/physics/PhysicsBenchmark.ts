@@ -51,33 +51,10 @@ export async function runPhysicsBackendBenchmark(): Promise<PhysicsBenchmarkResu
   const customMs = (performance.now() - t0) / 60;
   world.clear();
 
-  let rapierMs: number | null = null;
-  try {
-    const RAPIER = await import('@dimforge/rapier3d-compat');
-    await RAPIER.init();
-    const rWorld = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-    for (let i = 0; i < 40; i++) {
-      const desc = RAPIER.ColliderDesc.cuboid(2, 2, 2).setTranslation(
-        (i % 10) * 12 - 58,
-        2,
-        Math.floor(i / 10) * 12 - 28
-      );
-      rWorld.createCollider(desc);
-    }
-    const rt0 = performance.now();
-    for (let step = 0; step < 60; step++) {
-      rWorld.step();
-    }
-    rapierMs = (performance.now() - rt0) / 60;
-    rWorld.free();
-  } catch {
-    rapierMs = null;
-  }
-
   return {
     customSpatialHashMs: Number(customMs.toFixed(3)),
-    rapierWasmMs: rapierMs !== null ? Number(rapierMs.toFixed(3)) : null,
+    rapierWasmMs: null,
     selectedBackend: 'custom_spatial_hash',
-    notes: 'Custom SpatialHash solver avoids WASM heap retention across mission reloads while meeting < 2ms CPU budget.',
+    notes: 'Single-authority PhysicsWorld + O(k) SpatialHash solver avoids WASM heap retention across mission reloads while meeting < 2ms CPU budget.',
   };
 }

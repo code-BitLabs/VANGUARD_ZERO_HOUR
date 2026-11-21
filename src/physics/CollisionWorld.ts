@@ -11,10 +11,15 @@ import {
   createOrientedSlopeRegion,
   OrientedSlopeRegion,
 } from '@/src/physics/OrientedSlope';
+import {
+  createLadderVolume,
+  LadderMountCandidate,
+  LadderVolume,
+} from '@/src/physics/LadderVolume';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from './SpatialHash';
 
-export { createOrientedSlopeRegion };
-export type { OrientedSlopeRegion };
+export { createOrientedSlopeRegion, createLadderVolume };
+export type { OrientedSlopeRegion, LadderVolume, LadderMountCandidate };
 
 export interface RayHit {
   hit: boolean;
@@ -47,16 +52,51 @@ export class CollisionWorld {
     this.physicsWorld.addStaticCollider(box);
   }
 
+  getStaticBoxes(): SpatialAABB[] {
+    return this.spatialHash.getAllBoxes();
+  }
+
   addSlope(slope: SlopeRegion): void {
     this.physicsWorld.addSlope(slope);
+  }
+
+  getSlopes(): readonly OrientedSlopeRegion[] {
+    return this.physicsWorld.getSlopes();
+  }
+
+  addLadder(ladder: LadderVolume): void {
+    this.physicsWorld.addLadder(ladder);
+  }
+
+  getLadders(): readonly LadderVolume[] {
+    return this.physicsWorld.getLadders();
+  }
+
+  findMountableLadder(
+    x: number,
+    feetY: number,
+    z: number,
+    lookX: number,
+    lookZ: number,
+    maxDist = 1.25
+  ): LadderMountCandidate | null {
+    return this.physicsWorld.findMountableLadder(x, feetY, z, lookX, lookZ, maxDist);
   }
 
   setTerrainHeightFn(fn: (x: number, z: number) => number): void {
     this.physicsWorld.setTerrainHeightFn(fn);
   }
 
+  getTerrainHeightOnly = (x: number, z: number): number => {
+    return this.physicsWorld.getTerrainHeightOnly(x, z);
+  };
+
   getGroundHeightAt = (x: number, z: number, referenceFeetY?: number): number => {
     return this.physicsWorld.getGroundHeightAt(x, z, referenceFeetY);
+  };
+
+  getVehicleSupportHeightAt = (x: number, refY: number, z: number): number => {
+    return this.physicsWorld.getVehicleSupportHeightAt(x, refY, z);
   };
 
   getSupportHeightAt(

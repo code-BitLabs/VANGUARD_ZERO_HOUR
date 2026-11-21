@@ -32,6 +32,11 @@ export const audioSettingsStore = createStore<AudioSettingsStoreState>()(
         musicTrackId: patch.musicTrackId ?? get().musicTrackId,
         musicShuffle: patch.musicShuffle ?? get().musicShuffle,
         musicRepeatMode: patch.musicRepeatMode ?? get().musicRepeatMode,
+        spatialAudioEnabled: patch.spatialAudioEnabled ?? get().spatialAudioEnabled,
+        environmentalReverbEnabled:
+          patch.environmentalReverbEnabled ?? get().environmentalReverbEnabled,
+        dynamicRange: patch.dynamicRange ?? get().dynamicRange,
+        radioDucking: patch.radioDucking ?? get().radioDucking,
       };
       set(next);
       persistAudio(next);

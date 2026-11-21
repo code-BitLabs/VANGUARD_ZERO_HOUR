@@ -99,6 +99,14 @@ function clampByte(val: number): number {
   return val < 0 ? 0 : val > 255 ? 255 : Math.round(val);
 }
 
+interface SynthesizedPixelBuffers {
+  readonly albedoData: Uint8Array;
+  readonly normalData: Uint8Array;
+  readonly roughnessData: Uint8Array;
+  readonly metalnessData: Uint8Array;
+  readonly estimatedBytes: number;
+}
+
 /**
  * TRN-07: Multi-Channel PBR AssetManager.
  * Generates deterministic, seeded Albedo (sRGB), Tangent-Space Normal (Linear),
@@ -107,11 +115,15 @@ function clampByte(val: number): number {
  */
 export class AssetManager {
   private readonly textureLoader = new THREE.TextureLoader();
+  private readonly synthesizedPixelCache = new Map<string, SynthesizedPixelBuffers>();
   private readonly pbrBundles = new Map<string, PbrTextureBundle>();
+  private readonly missionBundles = new Map<string, PbrTextureBundle>();
   private readonly materials = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly missionMaterials = new Map<string, THREE.MeshStandardMaterial>();
   private fallbackCount = 0;
   private textureQuality: QualityTier = 'high';
   private maxAnisotropy = 4;
+  private onMaterialCreated?: (mat: THREE.MeshStandardMaterial) => void;
 
   /**
    * Maximum resident PBR profile cache entries to bound GPU memory (~42.6 MiB max at 512x512 with mipmaps).
@@ -119,6 +131,10 @@ export class AssetManager {
   public static readonly MAX_RESIDENT_PBR_BUNDLES = 16;
 
   constructor(private readonly resourceManager: ResourceManager) {}
+
+  setOnMaterialCreated(cb?: (mat: THREE.MeshStandardMaterial) => void): void {
+    this.onMaterialCreated = cb;
+  }
 
   configureRenderer(renderer: THREE.WebGLRenderer): void {
     this.maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy() || 1);
@@ -173,6 +189,10 @@ export class AssetManager {
 
   getResidentProfileCount(): number {
     return this.pbrBundles.size;
+  }
+
+  getSynthesizedPixelProfileCount(): number {
+    return this.synthesizedPixelCache.size;
   }
 
   getEstimatedGpuMemoryBytes(): number {
@@ -236,32 +256,37 @@ export class AssetManager {
   ): PbrTextureBundle {
     const size = this.getTargetTexSize();
     const key = `${pattern}:${repeat[0]}x${repeat[1]}:${size}`;
-    const existing = this.pbrBundles.get(key);
-    if (existing) return existing;
+    if (scope === 'shared') {
+      const existing = this.pbrBundles.get(key);
+      if (existing) return existing;
 
-    // Enforce resident cache cap by reusing same-pattern base bundle if cache is full
-    if (this.pbrBundles.size >= AssetManager.MAX_RESIDENT_PBR_BUNDLES) {
-      for (const [k, b] of this.pbrBundles.entries()) {
-        if (k.startsWith(`${pattern}:`)) {
-          return b;
+      // Enforce resident cache cap by reusing same-pattern base bundle if cache is full
+      if (this.pbrBundles.size >= AssetManager.MAX_RESIDENT_PBR_BUNDLES) {
+        for (const [k, b] of this.pbrBundles.entries()) {
+          if (k.startsWith(`${pattern}:`)) {
+            return b;
+          }
         }
       }
+
+      const bundle = this.synthesizePbrBundle(pattern, size, repeat, scope, key);
+      this.pbrBundles.set(key, bundle);
+      return bundle;
     }
 
-    const bundle = this.synthesizePbrBundle(pattern, size, repeat, scope, key);
-    if (scope === 'shared') {
-      this.pbrBundles.set(key, bundle);
-    }
+    const scopedKey = `${scope}|${key}`;
+    const existingScoped = this.missionBundles.get(scopedKey);
+    if (existingScoped) return existingScoped;
+    const bundle = this.synthesizePbrBundle(pattern, size, repeat, scope, scopedKey);
+    this.missionBundles.set(scopedKey, bundle);
     return bundle;
   }
 
-  private synthesizePbrBundle(
-    pattern: ProceduralPattern,
-    size: number,
-    repeat: [number, number],
-    scope: ResourceScope,
-    cacheKey: string
-  ): PbrTextureBundle {
+  private getOrCreatePixelBuffers(pattern: ProceduralPattern, size: number): SynthesizedPixelBuffers {
+    const baseKey = `${pattern}:${size}`;
+    const cached = this.synthesizedPixelCache.get(baseKey);
+    if (cached) return cached;
+
     const pixelCount = size * size;
     const heightField = new Float32Array(pixelCount);
     const albedoData = new Uint8Array(pixelCount * 4);
@@ -462,6 +487,29 @@ export class AssetManager {
       }
     }
 
+    // 4 RGBA8 textures * (base + 1/3 mipmap pyramid)
+    const estimatedBytes = Math.round(pixelCount * 4 * 4 * (4 / 3));
+    const buffers: SynthesizedPixelBuffers = {
+      albedoData,
+      normalData,
+      roughnessData,
+      metalnessData,
+      estimatedBytes,
+    };
+    this.synthesizedPixelCache.set(baseKey, buffers);
+    return buffers;
+  }
+
+  private synthesizePbrBundle(
+    pattern: ProceduralPattern,
+    size: number,
+    repeat: [number, number],
+    scope: ResourceScope,
+    cacheKey: string
+  ): PbrTextureBundle {
+    const { albedoData, normalData, roughnessData, metalnessData, estimatedBytes } =
+      this.getOrCreatePixelBuffers(pattern, size);
+
     const aniso =
       this.textureQuality === 'low'
         ? 1
@@ -492,7 +540,17 @@ export class AssetManager {
       tex.magFilter = THREE.LinearFilter;
       tex.anisotropy = aniso;
       tex.needsUpdate = true;
-      this.resourceManager.registerTexture(tex, scope, `${cacheKey}:${channelLabel}`);
+      this.resourceManager.register(
+        'texture',
+        scope,
+        () => {
+          tex.dispose();
+          if (scope !== 'shared') {
+            this.missionBundles.delete(cacheKey);
+          }
+        },
+        `${cacheKey}:${channelLabel}`
+      );
       return tex;
     };
 
@@ -500,9 +558,6 @@ export class AssetManager {
     const normalMap = configureDataTex(normalData, THREE.NoColorSpace, 'normal');
     const roughnessMap = configureDataTex(roughnessData, THREE.NoColorSpace, 'roughness');
     const metalnessMap = configureDataTex(metalnessData, THREE.NoColorSpace, 'metalness');
-
-    // 4 RGBA8 textures * (base + 1/3 mipmap pyramid)
-    const estimatedBytes = Math.round(pixelCount * 4 * 4 * (4 / 3));
 
     return {
       pattern,
@@ -523,6 +578,10 @@ export class AssetManager {
     if (scope === 'shared') {
       const existing = this.materials.get(key);
       if (existing) return existing;
+    } else {
+      const scopedKey = `${scope}|${key}`;
+      const existingScoped = this.missionMaterials.get(scopedKey);
+      if (existingScoped) return existingScoped;
     }
 
     const bundle = opts.pattern
@@ -557,22 +616,39 @@ export class AssetManager {
         opts.repeat ?? [1, 1],
         scope
       ).then((loadedTex) => {
-        if (scope !== 'shared' || this.materials.has(key)) {
+        if (scope !== 'shared' ? this.missionMaterials.has(`${scope}|${key}`) : this.materials.has(key)) {
           mat.map = loadedTex;
           mat.needsUpdate = true;
         }
       });
     }
 
-    this.resourceManager.registerMaterial(mat, scope, key);
+    const regId = scope === 'shared' ? key : `${scope}:${key}`;
     if (scope === 'shared') {
+      this.resourceManager.registerMaterial(mat, scope, regId);
       this.materials.set(key, mat);
+    } else {
+      const scopedKey = `${scope}|${key}`;
+      this.resourceManager.register(
+        'material',
+        scope,
+        () => {
+          mat.dispose();
+          this.missionMaterials.delete(scopedKey);
+        },
+        regId
+      );
+      this.missionMaterials.set(scopedKey, mat);
     }
+    this.onMaterialCreated?.(mat);
     return mat;
   }
 
   dispose(): void {
+    this.synthesizedPixelCache.clear();
     this.pbrBundles.clear();
+    this.missionBundles.clear();
     this.materials.clear();
+    this.missionMaterials.clear();
   }
 }

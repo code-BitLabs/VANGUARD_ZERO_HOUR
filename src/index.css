@@ -6,12 +6,17 @@
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  --color-canvas: #0b0e11;
-  --color-surface: #141920;
-  --color-surface-elevated: #1b222c;
-  --color-olive: #1c2320;
+  /* Core Cinematic Special Operations Command Surface Ramp */
+  --color-canvas: #080b0f;
+  --color-surface-base: #0d1218;
+  --color-surface: #121821;
+  --color-surface-elevated: #18202c;
+  --color-surface-well: #0a0e14;
+  --color-olive: #1b241f;
+
+  /* Semantic Accents */
   --color-amber-tactical: #f59e0b;
-  --color-cyan-telemetry: #06b6d4;
+  --color-cyan-telemetry: #38bdf8;
   --color-crimson-threat: #ef4444;
   --color-emerald-safe: #10b981;
 }
@@ -22,6 +27,90 @@
     --sar: env(safe-area-inset-right, 0px);
     --sab: env(safe-area-inset-bottom, 0px);
     --sal: env(safe-area-inset-left, 0px);
+
+    /* Semantic CSS Custom Properties (overridable by Accessibility modes) */
+    --vg-surface-canvas: #080b0f;
+    --vg-surface-base: #0d1218;
+    --vg-surface-panel: #121821;
+    --vg-surface-elevated: #18202c;
+    --vg-surface-well: #0a0e14;
+
+    /* Component Surface Aliases */
+    --vg-bg-canvas: var(--vg-surface-canvas);
+    --vg-bg-base: var(--vg-surface-base);
+    --vg-bg-panel: var(--vg-surface-panel);
+    --vg-bg-elevated: var(--vg-surface-elevated);
+    --vg-bg-recessed: var(--vg-surface-well);
+
+    --vg-border-hairline: rgba(255, 255, 255, 0.1);
+    --vg-border-subtle: var(--vg-border-hairline);
+    --vg-border-strong: rgba(255, 255, 255, 0.2);
+    --vg-border-focus: #38bdf8;
+
+    --vg-text-primary: #f1f5f9;
+    --vg-text-secondary: #94a3b8;
+    --vg-text-muted: #64748b;
+
+    --vg-accent-action: #f59e0b;
+    --vg-accent-friendly: #38bdf8;
+    --vg-accent-hostile: #ef4444;
+    --vg-accent-confirmed: #10b981;
+
+    /* Component Accent Aliases */
+    --vg-accent-amber: var(--vg-accent-action);
+    --vg-accent-cyan: var(--vg-accent-friendly);
+    --vg-accent-crimson: var(--vg-accent-hostile);
+    --vg-accent-emerald: var(--vg-accent-confirmed);
+
+    /* Layer Z-Index Contracts */
+    --vg-z-canvas: 0;
+    --vg-z-hud: 10;
+    --vg-z-shell: 20;
+    --vg-z-drawer: 30;
+    --vg-z-modal: 40;
+    --vg-z-critical: 50;
+
+    /* Motion Durations */
+    --vg-motion-fast: 140ms;
+    --vg-motion-base: 200ms;
+    --vg-motion-slow: 320ms;
+    --vg-ui-scale: 1;
+  }
+
+  /* Accessibility Colorblind Palettes */
+  [data-colorblind="deuteranopia"] {
+    --vg-accent-friendly: #38bdf8;
+    --vg-accent-hostile: #f97316;
+    --vg-accent-confirmed: #60a5fa;
+  }
+
+  [data-colorblind="protanopia"] {
+    --vg-accent-friendly: #38bdf8;
+    --vg-accent-hostile: #eab308;
+    --vg-accent-confirmed: #22d3ee;
+  }
+
+  [data-colorblind="tritanopia"] {
+    --vg-accent-friendly: #2dd4bf;
+    --vg-accent-hostile: #fb7185;
+    --vg-accent-confirmed: #34d399;
+  }
+
+  /* High-Contrast Border Accessibility Mode */
+  [data-high-contrast="true"] {
+    --vg-border-hairline: rgba(255, 255, 255, 0.28);
+    --vg-border-subtle: rgba(255, 255, 255, 0.28);
+    --vg-border-strong: rgba(255, 255, 255, 0.46);
+    --vg-text-secondary: #cbd5e1;
+  }
+
+  /* Explicit User Reduced-Motion Override */
+  [data-reduced-motion="true"] *,
+  [data-reduced-motion="true"] *::before,
+  [data-reduced-motion="true"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 
   html,
@@ -34,8 +123,8 @@
     padding: 0;
     overflow: hidden;
     overscroll-behavior: none;
-    background-color: #0b0e11;
-    color: #f3f4f6;
+    background-color: var(--vg-surface-canvas);
+    color: var(--vg-text-primary);
     font-family: var(--font-sans);
     -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none;
@@ -62,8 +151,27 @@
   }
 
   :focus-visible {
-    outline: 2px solid #f59e0b;
+    outline: 2px solid var(--vg-border-focus);
     outline-offset: 2px;
+  }
+
+  /* Subtle dark tactical scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--vg-surface-well);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(245, 158, 11, 0.55);
   }
 }
 

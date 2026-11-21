@@ -90,6 +90,11 @@ export class InputManager {
   private mouseDeltaY = 0;
   private wheelDelta = 0;
   private pointerLocked = false;
+  private pointerLockFailed = false;
+  private canvasEl: HTMLElement | null = null;
+  private canvasDragActive = false;
+  private lastDragClientX = 0;
+  private lastDragClientY = 0;
   private ignoreNextLargeLockedWarp = false;
   private attached = false;
   private prevGamepadButtons = new Set<number>();
@@ -120,12 +125,14 @@ export class InputManager {
     private readonly resourceManager: ResourceManager,
     private settings: InputSettings,
     private readonly onPointerLockChange?: (locked: boolean) => void,
-    private readonly onEscapeRequested?: () => void
+    private readonly onEscapeRequested?: () => void,
+    private readonly isGameplayActive?: () => boolean
   ) {}
 
   attach(canvas: HTMLElement): void {
     if (this.attached) return;
     this.attached = true;
+    this.canvasEl = canvas;
 
     this.resourceManager.trackEventListener(
       window,
@@ -187,6 +194,8 @@ export class InputManager {
         const wasLocked = this.pointerLocked;
         this.pointerLocked = document.pointerLockElement === canvas;
         if (!wasLocked && this.pointerLocked) {
+          this.pointerLockFailed = false;
+          this.canvasDragActive = false;
           this.mouseDeltaX = 0;
           this.mouseDeltaY = 0;
           this.ignoreNextLargeLockedWarp = true;
@@ -196,6 +205,24 @@ export class InputManager {
           this.clearAllInputs();
         }
         this.onPointerLockChange?.(this.pointerLocked);
+      },
+      'shared'
+    );
+    this.resourceManager.trackEventListener(
+      document,
+      'pointerlockerror',
+      () => {
+        this.pointerLockFailed = true;
+      },
+      'shared'
+    );
+    this.resourceManager.trackEventListener(
+      canvas,
+      'contextmenu',
+      (e: Event) => {
+        if (this.pointerLocked || this.isGameplayActive?.()) {
+          e.preventDefault();
+        }
       },
       'shared'
     );
@@ -218,9 +245,14 @@ export class InputManager {
 
   requestPointerLock(canvas: HTMLElement): void {
     try {
-      canvas.requestPointerLock?.();
+      const result = canvas.requestPointerLock?.() as unknown as Promise<void> | undefined;
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {
+          this.pointerLockFailed = true;
+        });
+      }
     } catch {
-      // Ignore sandboxed pointer lock rejections
+      this.pointerLockFailed = true;
     }
   }
 
@@ -232,6 +264,10 @@ export class InputManager {
 
   isPointerLocked(): boolean {
     return this.pointerLocked;
+  }
+
+  isPointerLockBlocked(): boolean {
+    return this.pointerLockFailed;
   }
 
   setVirtualMoveAxes(forward: number, right: number): void {
@@ -598,6 +634,7 @@ export class InputManager {
     this.justPressedKeys.clear();
     this.mouseButtons.clear();
     this.justPressedMouse.clear();
+    this.canvasDragActive = false;
     this.virtualHeldActions.clear();
     this.virtualJustPressedActions.clear();
     this.virtualMoveForward = 0;
@@ -654,44 +691,98 @@ export class InputManager {
     this.heldKeys.delete(code);
   };
 
-  private handleMouseMove = (e: MouseEvent): void => {
-    if (!this.pointerLocked) return;
-    const mx = e.movementX || 0;
-    const my = e.movementY || 0;
-    if (!Number.isFinite(mx) || !Number.isFinite(my)) return;
-    if (mx === 0 && my === 0) return;
+  private isCanvasGameplayTarget(target: EventTarget | null): boolean {
+    if (!this.canvasEl || !target) return false;
+    if (this.isGameplayActive && !this.isGameplayActive()) return false;
+    return target === this.canvasEl || (target instanceof Node && this.canvasEl.contains(target));
+  }
 
-    // Discard OS/compositor pointer-lock warp jumps (e.g. cursor resetting from button coords to origin)
-    if (this.ignoreNextLargeLockedWarp) {
-      this.ignoreNextLargeLockedWarp = false;
-      if (Math.hypot(mx, my) > 36) {
+  private handleMouseMove = (e: MouseEvent): void => {
+    if (this.pointerLocked) {
+      const mx = e.movementX || 0;
+      const my = e.movementY || 0;
+      if (!Number.isFinite(mx) || !Number.isFinite(my)) return;
+      if (mx === 0 && my === 0) return;
+
+      // Discard OS/compositor pointer-lock warp jumps (e.g. cursor resetting from button coords to origin)
+      if (this.ignoreNextLargeLockedWarp) {
+        this.ignoreNextLargeLockedWarp = false;
+        if (Math.hypot(mx, my) > 36) {
+          return;
+        }
+      }
+      if (Math.abs(mx) > 450 || Math.abs(my) > 450) {
         return;
       }
-    }
-    if (Math.abs(mx) > 450 || Math.abs(my) > 450) {
+
+      this.lastInputDevice = 'keyboard';
+      this.mouseDeltaX += mx;
+      this.mouseDeltaY += my;
       return;
     }
 
+    // Sandboxed iframe / unlocked-cursor fallback: smooth drag-to-aim while holding mouse on the 3D canvas
+    if (!this.canvasDragActive) return;
+    if (this.isGameplayActive && !this.isGameplayActive()) {
+      this.canvasDragActive = false;
+      return;
+    }
+    const rawDx =
+      typeof e.clientX === 'number' && Number.isFinite(e.clientX)
+        ? e.clientX - this.lastDragClientX
+        : e.movementX || 0;
+    const rawDy =
+      typeof e.clientY === 'number' && Number.isFinite(e.clientY)
+        ? e.clientY - this.lastDragClientY
+        : e.movementY || 0;
+    if (typeof e.clientX === 'number' && Number.isFinite(e.clientX)) {
+      this.lastDragClientX = e.clientX;
+    }
+    if (typeof e.clientY === 'number' && Number.isFinite(e.clientY)) {
+      this.lastDragClientY = e.clientY;
+    }
+    if (!Number.isFinite(rawDx) || !Number.isFinite(rawDy)) return;
+    if (rawDx === 0 && rawDy === 0) return;
+    if (Math.abs(rawDx) > 220 || Math.abs(rawDy) > 220) return;
+
     this.lastInputDevice = 'keyboard';
-    this.mouseDeltaX += mx;
-    this.mouseDeltaY += my;
+    this.mouseDeltaX += rawDx * 1.45;
+    this.mouseDeltaY += rawDy * 1.45;
   };
 
   private handleMouseDown = (e: MouseEvent): void => {
-    if (!this.pointerLocked) return;
-    this.lastInputDevice = 'keyboard';
-    if (!this.mouseButtons.has(e.button)) {
-      this.justPressedMouse.add(e.button);
+    if (this.pointerLocked) {
+      this.lastInputDevice = 'keyboard';
+      if (!this.mouseButtons.has(e.button)) {
+        this.justPressedMouse.add(e.button);
+      }
+      this.mouseButtons.add(e.button);
+      return;
     }
-    this.mouseButtons.add(e.button);
+
+    // Free-cursor canvas interaction fallback (critical inside sandboxed preview iframes)
+    if (!this.isCanvasGameplayTarget(e.target)) return;
+    this.lastInputDevice = 'keyboard';
+    this.canvasDragActive = true;
+    this.lastDragClientX = e.clientX;
+    this.lastDragClientY = e.clientY;
+    if (e.button === 0 || e.button === 2) {
+      if (!this.mouseButtons.has(e.button)) {
+        this.justPressedMouse.add(e.button);
+      }
+      this.mouseButtons.add(e.button);
+    }
   };
 
   private handleMouseUp = (e: MouseEvent): void => {
     this.mouseButtons.delete(e.button);
+    if (this.mouseButtons.size === 0) {
+      this.canvasDragActive = false;
+    }
   };
 
   private handleWheel = (e: WheelEvent): void => {
-    if (!this.pointerLocked) return;
+    if (!this.pointerLocked && !this.isCanvasGameplayTarget(e.target)) return;
     this.lastInputDevice = 'keyboard';
     this.wheelDelta += Math.sign(e.deltaY);
   };

@@ -11,6 +11,7 @@ export type PhysicalMotionState =
   | 'CROUCHED'
   | 'SLIDING'
   | 'VAULTING'
+  | 'CLIMBING'
   | 'CRUISING'
   | 'DEFLECTING'
   | 'HOVERING'
@@ -124,6 +125,44 @@ export interface ColliderWireframeBox {
   tag: CollisionTag | 'world';
 }
 
+export interface SlopeDebugWireframe {
+  id: string;
+  centerX: number;
+  centerZ: number;
+  dirX: number;
+  dirZ: number;
+  halfLength: number;
+  halfWidth: number;
+  startY: number;
+  endY: number;
+  thickness: number;
+  hasSideRails: boolean;
+}
+
+export interface LadderDebugWireframe {
+  id: string;
+  x: number;
+  z: number;
+  bottomY: number;
+  topY: number;
+  width: number;
+  normalX: number;
+  normalZ: number;
+  topExitX: number;
+  topExitY: number;
+  topExitZ: number;
+}
+
+export interface TraversalIntegrityFlag {
+  id: string;
+  severity: 'ERROR' | 'WARN';
+  code: 'FLOATING_ENTRY' | 'BLOCKED_PARAPET_EXIT' | 'FLOATING_LIFT_BASE' | 'MISSING_PILLAR_COLLIDER';
+  x: number;
+  y: number;
+  z: number;
+  message: string;
+}
+
 export interface PhysicsWorldDiagnosticsSnapshot {
   solverBackend: 'Custom FPS Controller + SpatialHash/BVH';
   rapierInitialized: boolean;
@@ -151,6 +190,9 @@ export interface PhysicsWorldDiagnosticsSnapshot {
   blockedVectors: BlockedMovementVector[];
   physicsWarnings: PhysicsWarningRecord[];
   staticColliderBoxes: ColliderWireframeBox[];
+  slopeWireframes: SlopeDebugWireframe[];
+  ladderWireframes: LadderDebugWireframe[];
+  traversalIntegrityFlags: TraversalIntegrityFlag[];
 }
 
 export interface CharacterMoveResult {
@@ -164,6 +206,10 @@ export interface CharacterMoveResult {
   wallNormalX: number;
   wallNormalY: number;
   wallNormalZ: number;
+  groundNormalX?: number;
+  groundNormalY?: number;
+  groundNormalZ?: number;
+  activeSlopeId?: string | null;
   penetrationCorrected: number;
   activeContacts?: number;
   maxPenetrationDepth?: number;

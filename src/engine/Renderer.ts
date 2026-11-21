@@ -1,9 +1,19 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { BloomEffect, EffectComposer, EffectPass, RenderPass, VignetteEffect } from 'postprocessing';
+import {
+  BloomEffect,
+  EffectComposer,
+  EffectPass,
+  RenderPass,
+  ToneMappingEffect,
+  ToneMappingMode,
+  VignetteEffect,
+} from 'postprocessing';
 import { ResourceManager } from '@/src/core/ResourceManager';
 import { SceneLights } from '@/src/world/LightingRig';
 import { GovernorProfile } from './PerformanceGovernor';
+import { RenderingQualityDirector } from './RenderingQualityDirector';
+import { ShadowCascadeController } from './ShadowCascadeController';
 import {
   evaluateRenderingVerticalSlice,
   RendererBackendOption,
@@ -18,18 +28,26 @@ export class EngineRenderer {
   public readonly viewModelScene: THREE.Scene;
   public readonly viewModelCamera: THREE.PerspectiveCamera;
   public readonly lightBudgetManager: TacticalLightBudgetManager;
+  public readonly shadowCascades: ShadowCascadeController;
+  public readonly qualityDirector: RenderingQualityDirector;
   public readonly isSoftwareGl: boolean;
 
   private composer: EffectComposer | null = null;
   private bloomEffect: BloomEffect | null = null;
   private vignetteEffect: VignetteEffect | null = null;
+  private toneMappingEffect: ToneMappingEffect | null = null;
   private bloomPass: EffectPass | null = null;
   private vignettePass: EffectPass | null = null;
   private envRT: THREE.WebGLRenderTarget | null = null;
   private renderScale = 1.0;
+  private maxDprCap = 2.0;
   private bloomEnabled = true;
   private width = 1280;
   private height = 720;
+  private appliedWidth = 0;
+  private appliedHeight = 0;
+  private appliedEffectiveDpr = 0;
+  private pendingResize = false;
   private lastDrawCalls = 0;
   private lastTriangles = 0;
   private backendPreference: RendererBackendOption = 'auto';
@@ -65,17 +83,19 @@ export class EngineRenderer {
 
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = this.isSoftwareGl ? 1.26 : 1.15;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = this.isSoftwareGl
       ? THREE.BasicShadowMap
       : THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false;
-    this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
-    );
+    const initialDpr = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(initialDpr);
     this.renderer.setSize(this.width, this.height);
+    this.appliedWidth = this.width;
+    this.appliedHeight = this.height;
+    this.appliedEffectiveDpr = Number(initialDpr.toFixed(2));
 
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
@@ -89,20 +109,37 @@ export class EngineRenderer {
     this.verticalSliceReport = evaluateRenderingVerticalSlice('auto');
 
     this.camera = new THREE.PerspectiveCamera(78, this.width / this.height, 0.15, 560);
+    this.qualityDirector = new RenderingQualityDirector(
+      this.isSoftwareGl ? 'software_webgl' : 'mid_range_desktop'
+    );
+    this.shadowCascades = new ShadowCascadeController(this.scene, this.camera, {
+      cascades: this.isSoftwareGl ? 1 : 3,
+      shadowMapSize: this.isSoftwareGl ? 512 : 1024,
+      maxFar: 180,
+      isSoftwareGl: this.isSoftwareGl,
+    });
 
     // Separate viewmodel layer so first-person weapons never clip into world walls
     this.viewModelScene = new THREE.Scene();
     this.viewModelCamera = new THREE.PerspectiveCamera(58, this.width / this.height, 0.03, 12);
-    this.viewModelScene.add(new THREE.HemisphereLight(0xdbeafe, 0x374151, 1.45));
-    const vmKey = new THREE.DirectionalLight(0xfff1d6, 2.2);
-    vmKey.position.set(1.5, 2.5, 2.0);
+    this.viewModelScene.add(
+      new THREE.HemisphereLight(0xeef6ff, 0x4b5563, this.isSoftwareGl ? 2.45 : 1.75)
+    );
+    const vmKey = new THREE.DirectionalLight(0xfff5e4, this.isSoftwareGl ? 3.2 : 2.55);
+    vmKey.position.set(1.4, 2.4, 2.2);
     this.viewModelScene.add(vmKey);
-    const vmRim = new THREE.DirectionalLight(0x93c5fd, 0.85);
-    vmRim.position.set(-1.8, 1.2, -1.5);
+    const vmFill = new THREE.DirectionalLight(0xcbd5e1, this.isSoftwareGl ? 1.35 : 0.72);
+    vmFill.position.set(-1.3, 0.6, 2.3);
+    this.viewModelScene.add(vmFill);
+    const vmRim = new THREE.DirectionalLight(0x7dd3fc, this.isSoftwareGl ? 1.55 : 1.05);
+    vmRim.position.set(-1.8, 1.4, -1.3);
     this.viewModelScene.add(vmRim);
 
-    this.buildEnvironment();
-    if (!this.isSoftwareGl) {
+    if (this.isSoftwareGl) {
+      // Compensate for skipped PMREM environment IBL on CPU software rasterizers
+      this.scene.add(new THREE.AmbientLight(0xdfe8f5, 0.56));
+    } else {
+      this.buildEnvironment();
       this.buildPostProcessing();
     }
     this.bindContextEvents();
@@ -110,6 +147,7 @@ export class EngineRenderer {
 
 
   private buildEnvironment(): void {
+    if (this.isSoftwareGl) return;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const roomEnv = new RoomEnvironment();
     this.envRT?.dispose();
@@ -125,26 +163,30 @@ export class EngineRenderer {
     this.vignettePass?.dispose();
     this.bloomEffect?.dispose();
     this.vignetteEffect?.dispose();
+    this.toneMappingEffect?.dispose();
     this.composer?.dispose();
     const composer = new EffectComposer(this.renderer, {
       frameBufferType: THREE.HalfFloatType,
     });
     const renderPass = new RenderPass(this.scene, this.camera);
     const bloom = new BloomEffect({
-      intensity: 0.55,
-      luminanceThreshold: 0.85,
-      luminanceSmoothing: 0.25,
+      intensity: 0.36,
+      luminanceThreshold: 1.08,
+      luminanceSmoothing: 0.28,
       mipmapBlur: true,
     });
     const vignette = new VignetteEffect({
       eskil: false,
       offset: 0.35,
-      darkness: 0.45,
+      darkness: 0.42,
     });
-    // Separate passes so disabling Bloom completely skips mipmap blur GPU work while keeping Vignette active on all tiers
+    const toneMapping = new ToneMappingEffect({
+      mode: ToneMappingMode.ACES_FILMIC,
+    });
+    // Separate passes so disabling Bloom completely skips mipmap blur GPU work while keeping ACES Filmic ToneMapping + Vignette active on all hardware tiers
     const bloomPass = new EffectPass(this.camera, bloom);
     bloomPass.enabled = this.bloomEnabled;
-    const vignettePass = new EffectPass(this.camera, vignette);
+    const vignettePass = new EffectPass(this.camera, vignette, toneMapping);
     vignettePass.enabled = true;
     composer.addPass(renderPass);
     composer.addPass(bloomPass);
@@ -153,6 +195,7 @@ export class EngineRenderer {
     this.composer = composer;
     this.bloomEffect = bloom;
     this.vignetteEffect = vignette;
+    this.toneMappingEffect = toneMapping;
     this.bloomPass = bloomPass;
     this.vignettePass = vignettePass;
   }
@@ -176,7 +219,7 @@ export class EngineRenderer {
         if (!this.isSoftwareGl) {
           this.buildPostProcessing();
         }
-        this.resize();
+        this.resize(true);
         this.onContextRestoredCallback?.();
       },
       'shared'
@@ -187,32 +230,42 @@ export class EngineRenderer {
     profile: GovernorProfile,
     shadowsSetting: boolean,
     bloomSetting: boolean,
-    lights?: SceneLights | null
+    lights?: SceneLights | null,
+    options?: { deferResize?: boolean; allowShadowToggle?: boolean }
   ): void {
-    this.renderScale = this.isSoftwareGl ? Math.min(profile.renderScale, 0.85) : profile.renderScale;
+    this.renderScale = this.isSoftwareGl ? Math.min(profile.renderScale, 0.6) : profile.renderScale;
     this.bloomEnabled = !this.isSoftwareGl && profile.bloomEnabled && bloomSetting;
     this.lightBudgetManager?.setQualityTier(profile.tier);
-    const shadowsActive = shadowsSetting && profile.shadowMapSize >= 512;
-    this.renderer.shadowMap.enabled = shadowsActive;
+    const shadowsActive = !this.isSoftwareGl && shadowsSetting && profile.shadowMapSize >= 512;
+    const csmActive = Boolean(this.shadowCascades?.isCsmActive());
+    if (options?.allowShadowToggle !== false) {
+      this.renderer.shadowMap.enabled = shadowsActive;
+    }
     const effectiveShadowSize = this.isSoftwareGl
       ? Math.min(512, profile.shadowMapSize)
       : profile.shadowMapSize;
     if (lights?.sun) {
-      lights.sun.castShadow = shadowsActive;
-      if (shadowsActive && effectiveShadowSize >= 512 && lights.sun.shadow.mapSize.x !== effectiveShadowSize) {
-        lights.sun.shadow.mapSize.set(effectiveShadowSize, effectiveShadowSize);
-        lights.sun.shadow.map?.dispose();
-        lights.sun.shadow.map = null;
+      lights.sun.visible = !csmActive;
+      lights.sun.castShadow = !csmActive && shadowsActive;
+      if (!csmActive && shadowsActive) {
+        if (effectiveShadowSize >= 512 && lights.sun.shadow.mapSize.x !== effectiveShadowSize) {
+          lights.sun.shadow.mapSize.set(effectiveShadowSize, effectiveShadowSize);
+          lights.sun.shadow.map?.dispose();
+          lights.sun.shadow.map = null;
+        }
+        lights.sun.shadow.camera.left = -profile.shadowDistance;
+        lights.sun.shadow.camera.right = profile.shadowDistance;
+        lights.sun.shadow.camera.top = profile.shadowDistance;
+        lights.sun.shadow.camera.bottom = -profile.shadowDistance;
+        lights.sun.shadow.camera.updateProjectionMatrix();
       }
-      lights.sun.shadow.camera.left = -profile.shadowDistance;
-      lights.sun.shadow.camera.right = profile.shadowDistance;
-      lights.sun.shadow.camera.top = profile.shadowDistance;
-      lights.sun.shadow.camera.bottom = -profile.shadowDistance;
-      lights.sun.shadow.camera.updateProjectionMatrix();
     }
 
-    this.camera.far = Math.max(520, profile.drawDistance + 40);
-    this.camera.updateProjectionMatrix();
+    const nextFar = Math.max(520, profile.drawDistance + 40);
+    if (Math.abs(this.camera.far - nextFar) > 0.5) {
+      this.camera.far = nextFar;
+      this.camera.updateProjectionMatrix();
+    }
 
     if (this.bloomPass) {
       this.bloomPass.enabled = this.bloomEnabled;
@@ -223,7 +276,11 @@ export class EngineRenderer {
     if (this.vignettePass) {
       this.vignettePass.enabled = true;
     }
-    this.resize();
+    if (options?.deferResize) {
+      this.scheduleResize();
+    } else {
+      this.resize();
+    }
   }
 
   setRendererBackendPreference(pref: RendererBackendOption, measuredFrameMs = 8.4): RenderingVerticalSliceReport {
@@ -243,30 +300,161 @@ export class EngineRenderer {
     }
   }
 
-  resize(): void {
+  setExposure(exposure: number): void {
+    const lifted = this.isSoftwareGl ? exposure + 0.14 : exposure;
+    const clamped = Math.max(0.65, Math.min(1.55, lifted));
+    this.renderer.toneMappingExposure = clamped;
+  }
+
+  /**
+   * Defers any canvas/FBO resize until the start of the next `renderFrame()` so
+   * calling quality adjustments after `renderFrame()` never wipes the just-drawn
+   * WebGL buffer before the browser composites it (preventing 1-frame screen blinks).
+   */
+  public scheduleResize(): void {
+    this.pendingResize = true;
+  }
+
+  resize(force = false): void {
     const w = Math.max(320, this.container.clientWidth || window.innerWidth);
     const h = Math.max(240, this.container.clientHeight || window.innerHeight);
+
+    const isCoarse =
+      typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+    const maxDpr = this.isSoftwareGl ? 1.0 : Math.min(this.maxDprCap, isCoarse ? 1.5 : 2.0);
+    const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+    const effectiveDpr = Math.max(0.5, Number((baseDpr * this.renderScale).toFixed(2)));
+
+    // Skip redundant canvas/composer setSize calls — assigning canvas.width even to the same
+    // value synchronously clears the WebGL drawing buffer (screen blink) and reallocates FBOs.
+    if (
+      !force &&
+      w === this.appliedWidth &&
+      h === this.appliedHeight &&
+      Math.abs(effectiveDpr - this.appliedEffectiveDpr) < 0.005
+    ) {
+      return;
+    }
+
     this.width = w;
     this.height = h;
+    this.appliedWidth = w;
+    this.appliedHeight = h;
+    this.appliedEffectiveDpr = effectiveDpr;
 
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.viewModelCamera.aspect = w / h;
     this.viewModelCamera.updateProjectionMatrix();
 
-    const isCoarse =
-      typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
-    const maxDpr = this.isSoftwareGl ? 1.0 : isCoarse ? 1.5 : 2.0;
-    const baseDpr = Math.min(window.devicePixelRatio || 1, maxDpr);
-    const effectiveDpr = Math.max(0.5, Number((baseDpr * this.renderScale).toFixed(2)));
     this.renderer.setPixelRatio(effectiveDpr);
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
+    this.shadowCascades?.updateFrustums();
+  }
+
+  public applyDirectorDimensions(
+    maxDpr?: number,
+    lights?: SceneLights | null,
+    shadowsEnabled = true,
+    options?: { allowCsmRebuild?: boolean; deferResize?: boolean }
+  ): void {
+    const dims = this.qualityDirector.getActiveDimensions();
+    this.renderScale = this.isSoftwareGl ? Math.min(dims.renderScale, 0.6) : dims.renderScale;
+    this.maxDprCap = maxDpr ?? dims.maxDpr;
+    this.bloomEnabled = !this.isSoftwareGl && dims.bloomEnabled;
+    if (this.bloomPass) this.bloomPass.enabled = this.bloomEnabled;
+    if (this.bloomEffect) this.bloomEffect.blendMode.opacity.value = this.bloomEnabled ? 1 : 0;
+
+    // During live combat (allowCsmRebuild === false), keep the active CSM cascade count stable
+    // so we never trigger a 500-900ms full-scene shader recompile or sun-light swap blink.
+    // Shadow map resolution still adapts cleanly in-place with zero shader recompilation.
+    const lockCsmCount =
+      options?.allowCsmRebuild === false && Boolean(this.shadowCascades?.isCsmActive());
+    const targetCascades = lockCsmCount
+      ? this.shadowCascades.getTelemetry().activeCascades
+      : shadowsEnabled
+        ? dims.csmCascades
+        : 1;
+
+    const sunDir = lights?.sun
+      ? lights.sun.target.position.clone().sub(lights.sun.position).normalize()
+      : undefined;
+    const csmActive = Boolean(
+      this.shadowCascades?.configure({
+        cascades: targetCascades,
+        shadowMapSize: dims.shadowMapSize,
+        isSoftwareGl: this.isSoftwareGl || !shadowsEnabled,
+        ...(sunDir && sunDir.lengthSq() > 0.001 ? { lightDirection: sunDir } : {}),
+        ...(lights?.sun
+          ? {
+              lightColor: lights.sun.color.getHex(),
+              lightIntensity: lights.sun.intensity,
+            }
+          : {}),
+      })
+    );
+
+    // Prevent double-sun overexposure: mute base directional sun whenever CSM cascades own sun lighting
+    if (lights?.sun) {
+      lights.sun.visible = !csmActive;
+      lights.sun.castShadow = !csmActive && shadowsEnabled && dims.shadowMapSize >= 512;
+    }
+
+    if (csmActive && options?.allowCsmRebuild !== false) {
+      this.shadowCascades?.registerHierarchy(this.scene);
+    }
+    if (options?.deferResize) {
+      this.scheduleResize();
+    } else {
+      this.resize();
+    }
+  }
+
+  public isCsmActive(): boolean {
+    return Boolean(this.shadowCascades?.isCsmActive());
+  }
+
+  public registerMaterialForShadows(mat: THREE.Material): void {
+    if (this.shadowCascades?.isCsmActive()) {
+      this.shadowCascades.setupMaterial(mat);
+    }
+  }
+
+  public registerObjectForShadows(obj: THREE.Object3D): void {
+    if (this.shadowCascades?.isCsmActive()) {
+      this.shadowCascades.registerHierarchy(obj);
+    }
+  }
+
+  public registerSceneShadowsAndPrecompile(): void {
+    if (this.shadowCascades?.isCsmActive()) {
+      this.shadowCascades.registerHierarchy(this.scene);
+      this.shadowCascades.update();
+    }
+    this.scene.updateMatrixWorld();
+    this.viewModelScene.updateMatrixWorld();
+    try {
+      if (!this.renderer.getContext().isContextLost()) {
+        this.renderer.compile(this.scene, this.camera);
+        this.renderer.compile(this.viewModelScene, this.viewModelCamera);
+      }
+    } catch {
+      // Ignore precompile errors in mocked/headless test contexts
+    }
   }
 
   renderFrame(renderViewModel: boolean): void {
     if (this.renderer.getContext().isContextLost()) return;
 
+    if (this.pendingResize) {
+      this.pendingResize = false;
+      this.resize();
+    }
+
+    if (this.shadowCascades?.isCsmActive()) {
+      this.shadowCascades.update();
+    }
     this.renderer.info.reset();
     this.renderer.setRenderTarget(null);
     this.renderer.clear();
@@ -308,16 +496,19 @@ export class EngineRenderer {
     bloomEnabled: boolean;
     bloomPassEnabled: boolean;
     vignetteEnabled: boolean;
+    toneMappingEnabled: boolean;
   } {
     return {
       composerActive: Boolean(this.composer && this.vignettePass),
       bloomEnabled: this.bloomEnabled,
       bloomPassEnabled: Boolean(this.bloomPass?.enabled),
       vignetteEnabled: Boolean(this.vignettePass?.enabled && this.vignetteEffect),
+      toneMappingEnabled: Boolean(this.vignettePass?.enabled && this.toneMappingEffect),
     };
   }
 
   dispose(): void {
+    this.shadowCascades?.dispose();
     this.lightBudgetManager?.dispose();
     this.scene.environment = null;
     this.viewModelScene.environment = null;
@@ -325,12 +516,14 @@ export class EngineRenderer {
     this.vignettePass?.dispose();
     this.bloomEffect?.dispose();
     this.vignetteEffect?.dispose();
+    this.toneMappingEffect?.dispose();
     this.composer?.dispose();
     this.envRT?.dispose();
     this.bloomPass = null;
     this.vignettePass = null;
     this.bloomEffect = null;
     this.vignetteEffect = null;
+    this.toneMappingEffect = null;
     this.composer = null;
     this.envRT = null;
     this.renderer.dispose();

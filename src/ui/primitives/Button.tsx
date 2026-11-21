@@ -3,26 +3,28 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from './cn';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 font-display font-semibold uppercase tracking-[0.08em] text-sm transition-colors duration-150 cursor-pointer disabled:opacity-45 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-amber-500 focus-visible:outline-offset-2 border',
+  'inline-flex items-center justify-center gap-2 font-display font-semibold uppercase tracking-[0.08em] text-sm transition-colors duration-150 cursor-pointer disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-[var(--vg-border-focus)] focus-visible:outline-offset-2 border select-none',
   {
     variants: {
       variant: {
         primary:
-          'bg-amber-500 text-zinc-950 border-amber-400 hover:bg-amber-400 active:bg-amber-600 shadow-[0_0_20px_rgba(245,158,11,0.22)]',
+          'bg-amber-500 text-zinc-950 border-amber-400 hover:bg-amber-400 active:bg-amber-600 shadow-[0_1px_16px_rgba(245,158,11,0.2)]',
         secondary:
-          'bg-[#1B222C] text-zinc-100 border-zinc-700 hover:border-amber-500/60 hover:bg-[#232c39]',
+          'bg-[var(--vg-surface-elevated)] text-[var(--vg-text-primary)] border-[var(--vg-border-strong)] hover:border-amber-500/60 hover:bg-[#1f2937]',
+        tactical:
+          'bg-sky-500/12 text-sky-300 border-sky-400/40 hover:bg-sky-500/20 hover:border-sky-400',
         ghost:
-          'bg-transparent text-zinc-300 border-transparent hover:bg-white/5 hover:text-white',
+          'bg-transparent text-[var(--vg-text-secondary)] border-transparent hover:bg-white/[0.05] hover:text-[var(--vg-text-primary)]',
         danger:
-          'bg-red-600/90 text-white border-red-500 hover:bg-red-500',
+          'bg-red-600/90 text-white border-red-500 hover:bg-red-500 active:bg-red-700',
         outline:
-          'bg-[#0B0E11]/85 text-zinc-200 border-zinc-600 hover:border-amber-500 hover:text-amber-400',
+          'bg-[var(--vg-surface-well)] text-[var(--vg-text-primary)] border-[var(--vg-border-strong)] hover:border-amber-500/75 hover:text-amber-300',
       },
       size: {
-        sm: 'h-8 px-3 text-xs rounded-sm',
-        md: 'h-10 px-4 text-sm rounded-sm',
-        lg: 'h-12 px-7 text-base rounded-sm',
-        icon: 'h-9 w-9 p-0 rounded-sm',
+        sm: 'h-8 px-3 text-xs rounded-[3px]',
+        md: 'h-10 px-4 text-sm rounded-[4px]',
+        lg: 'h-12 px-7 text-base rounded-[4px]',
+        icon: 'h-9 w-9 p-0 rounded-[4px]',
       },
     },
     defaultVariants: {

@@ -13,9 +13,14 @@ export class PhysicsDebugSystem {
   private seqContact = 0;
   private seqWarning = 0;
   private elapsedSec = 0;
+  private detailedRecordingEnabled = true;
 
-  private contactsRing: PhysicsContactPoint[] = [];
-  private blockedVectorsRing: BlockedMovementVector[] = [];
+  private readonly contactsRing: PhysicsContactPoint[] = new Array(PhysicsDebugSystem.MAX_CONTACTS);
+  private contactsHead = 0;
+  private contactsCount = 0;
+  private readonly blockedVectorsRing: BlockedMovementVector[] = new Array(PhysicsDebugSystem.MAX_BLOCKED_VECTORS);
+  private blockedHead = 0;
+  private blockedCount = 0;
   private warningsList: PhysicsWarningRecord[] = [];
   private lastWarningTime = new Map<string, number>();
 
@@ -29,6 +34,14 @@ export class PhysicsDebugSystem {
 
   private entityPenetrationStreak = new Map<string, number>();
 
+  setDetailedRecordingEnabled(enabled: boolean): void {
+    this.detailedRecordingEnabled = enabled;
+  }
+
+  isDetailedRecordingEnabled(): boolean {
+    return this.detailedRecordingEnabled;
+  }
+
   tick(dt: number): void {
     this.elapsedSec += dt;
   }
@@ -37,8 +50,10 @@ export class PhysicsDebugSystem {
     this.seqContact = 0;
     this.seqWarning = 0;
     this.elapsedSec = 0;
-    this.contactsRing = [];
-    this.blockedVectorsRing = [];
+    this.contactsHead = 0;
+    this.contactsCount = 0;
+    this.blockedHead = 0;
+    this.blockedCount = 0;
     this.warningsList = [];
     this.lastWarningTime.clear();
     this.entityPenetrationStreak.clear();
@@ -53,15 +68,46 @@ export class PhysicsDebugSystem {
 
   recordContact(contact: Omit<PhysicsContactPoint, 'id' | 'timestampSec'>): void {
     this.penetrationCorrectionsTotal++;
-    const full: PhysicsContactPoint = {
-      ...contact,
-      id: ++this.seqContact,
-      timestampSec: Number(this.elapsedSec.toFixed(2)),
-    };
-    if (this.contactsRing.length >= PhysicsDebugSystem.MAX_CONTACTS) {
-      this.contactsRing.shift();
+    const timestampSec = Math.round(this.elapsedSec * 100) / 100;
+
+    if (this.detailedRecordingEnabled) {
+      const cap = PhysicsDebugSystem.MAX_CONTACTS;
+      let slot = this.contactsRing[this.contactsHead];
+      if (!slot) {
+        slot = {
+          id: ++this.seqContact,
+          entityId: contact.entityId,
+          colliderId: contact.colliderId,
+          colliderTag: contact.colliderTag,
+          pointX: contact.pointX,
+          pointY: contact.pointY,
+          pointZ: contact.pointZ,
+          normalX: contact.normalX,
+          normalY: contact.normalY,
+          normalZ: contact.normalZ,
+          penetrationDepth: contact.penetrationDepth,
+          impactSpeed: contact.impactSpeed,
+          timestampSec,
+        };
+        this.contactsRing[this.contactsHead] = slot;
+      } else {
+        slot.id = ++this.seqContact;
+        slot.entityId = contact.entityId;
+        slot.colliderId = contact.colliderId;
+        slot.colliderTag = contact.colliderTag;
+        slot.pointX = contact.pointX;
+        slot.pointY = contact.pointY;
+        slot.pointZ = contact.pointZ;
+        slot.normalX = contact.normalX;
+        slot.normalY = contact.normalY;
+        slot.normalZ = contact.normalZ;
+        slot.penetrationDepth = contact.penetrationDepth;
+        slot.impactSpeed = contact.impactSpeed;
+        slot.timestampSec = timestampSec;
+      }
+      this.contactsHead = (this.contactsHead + 1) % cap;
+      if (this.contactsCount < cap) this.contactsCount++;
     }
-    this.contactsRing.push(full);
 
     if (contact.penetrationDepth > 0.08) {
       const streak = (this.entityPenetrationStreak.get(contact.entityId) ?? 0) + 1;
@@ -82,21 +128,52 @@ export class PhysicsDebugSystem {
           suggestedInvestigation: 'Inspect acute corner geometry or AI waypoint inside solid collider.',
         });
       }
-    } else {
+    } else if (this.entityPenetrationStreak.has(contact.entityId)) {
       this.entityPenetrationStreak.set(contact.entityId, 0);
     }
   }
 
   recordBlockedMovement(vec: Omit<BlockedMovementVector, 'timestampSec'>): void {
     this.blockedMovementsTotal++;
-    const full: BlockedMovementVector = {
-      ...vec,
-      timestampSec: Number(this.elapsedSec.toFixed(2)),
-    };
-    if (this.blockedVectorsRing.length >= PhysicsDebugSystem.MAX_BLOCKED_VECTORS) {
-      this.blockedVectorsRing.shift();
+    if (!this.detailedRecordingEnabled) return;
+
+    const timestampSec = Math.round(this.elapsedSec * 100) / 100;
+    const cap = PhysicsDebugSystem.MAX_BLOCKED_VECTORS;
+    let slot = this.blockedVectorsRing[this.blockedHead];
+    if (!slot) {
+      slot = {
+        entityId: vec.entityId,
+        originX: vec.originX,
+        originY: vec.originY,
+        originZ: vec.originZ,
+        desiredDx: vec.desiredDx,
+        desiredDz: vec.desiredDz,
+        resolvedDx: vec.resolvedDx,
+        resolvedDz: vec.resolvedDz,
+        blockerId: vec.blockerId,
+        normalX: vec.normalX,
+        normalY: vec.normalY,
+        normalZ: vec.normalZ,
+        timestampSec,
+      };
+      this.blockedVectorsRing[this.blockedHead] = slot;
+    } else {
+      slot.entityId = vec.entityId;
+      slot.originX = vec.originX;
+      slot.originY = vec.originY;
+      slot.originZ = vec.originZ;
+      slot.desiredDx = vec.desiredDx;
+      slot.desiredDz = vec.desiredDz;
+      slot.resolvedDx = vec.resolvedDx;
+      slot.resolvedDz = vec.resolvedDz;
+      slot.blockerId = vec.blockerId;
+      slot.normalX = vec.normalX;
+      slot.normalY = vec.normalY;
+      slot.normalZ = vec.normalZ;
+      slot.timestampSec = timestampSec;
     }
-    this.blockedVectorsRing.push(full);
+    this.blockedHead = (this.blockedHead + 1) % cap;
+    if (this.blockedCount < cap) this.blockedCount++;
   }
 
   recordCeilingStandupBlocked(entityId: string, x: number, y: number, z: number, blockerId: string): void {
@@ -227,11 +304,25 @@ export class PhysicsDebugSystem {
   }
 
   getRecentContacts(): PhysicsContactPoint[] {
-    return [...this.contactsRing].reverse();
+    const cap = PhysicsDebugSystem.MAX_CONTACTS;
+    const out: PhysicsContactPoint[] = [];
+    for (let i = 0; i < this.contactsCount; i++) {
+      const idx = (this.contactsHead - 1 - i + cap) % cap;
+      const item = this.contactsRing[idx];
+      if (item) out.push({ ...item });
+    }
+    return out;
   }
 
   getBlockedVectors(): BlockedMovementVector[] {
-    return [...this.blockedVectorsRing].reverse();
+    const cap = PhysicsDebugSystem.MAX_BLOCKED_VECTORS;
+    const out: BlockedMovementVector[] = [];
+    for (let i = 0; i < this.blockedCount; i++) {
+      const idx = (this.blockedHead - 1 - i + cap) % cap;
+      const item = this.blockedVectorsRing[idx];
+      if (item) out.push({ ...item });
+    }
+    return out;
   }
 
   getWarnings(): PhysicsWarningRecord[] {

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Award, BookOpen, GitBranch, MonitorCheck, Play, RotateCcw, Settings, ShieldAlert, Users, XCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Award, BookOpen, GitBranch, MonitorCheck, Play, RotateCcw, Settings, Users, XCircle } from 'lucide-react';
 import { TACTICAL_CHALLENGES } from '@/src/data/challenges';
 import { ACHIEVEMENT_DEFINITIONS, getRankForXp } from '@/src/data/ranks';
 import { getMissionById } from '@/src/data/missions';
@@ -8,7 +8,7 @@ import { evaluateOperatorCommendations } from '@/src/gameplay/narrative/SquadDia
 import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
-import { uiStore, useUIStore } from '@/src/stores/uiStore';
+import { uiStore } from '@/src/stores/uiStore';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
@@ -140,7 +140,7 @@ export function PauseOverlay({
               variant="outline"
               onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
             >
-              <BookOpen className="w-4 h-4" /> Field Manual (Tier 3)
+              <BookOpen className="w-4 h-4" /> Field Manual &amp; Controls
             </Button>
             <Button
               className="w-full min-h-[44px]"
@@ -154,7 +154,7 @@ export function PauseOverlay({
               variant="outline"
               onClick={() => setQaOpen(true)}
             >
-              <MonitorCheck className="w-4 h-4" /> Hardware QA
+              <MonitorCheck className="w-4 h-4" /> System Info
             </Button>
             <Button className="w-full min-h-[44px]" variant="danger" onClick={onAbort}>
               Abort to HQ
@@ -553,7 +553,7 @@ export function DebriefScreen({
               className="min-h-[40px]"
               onClick={() => setQaOpen(true)}
             >
-              <MonitorCheck className="w-4 h-4 text-cyan-400" /> Hardware QA Report
+              <MonitorCheck className="w-4 h-4 text-cyan-400" /> System Info
             </Button>
             <div className="flex flex-wrap justify-end gap-2.5">
               <Button variant="outline" className="min-h-[44px]" onClick={onReturnMenu}>
@@ -590,38 +590,4 @@ function MetricBox({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function ToastAndRecoveryLayer() {
-  const toast = useUIStore((s) => s.toast);
-  const contextLost = useUIStore((s) => s.contextLost);
-
-  useEffect(() => {
-    if (!toast) return;
-    const id = window.setTimeout(() => uiStore.getState().clearToast(), 4200);
-    return () => window.clearTimeout(id);
-  }, [toast]);
-
-  return (
-    <>
-      {contextLost && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-6">
-          <div className="max-w-md bg-[#141920] border border-amber-500 p-6 rounded-sm text-center">
-            <ShieldAlert className="w-8 h-8 text-amber-400 mx-auto mb-2" />
-            <h3 className="font-display text-xl font-bold uppercase text-white">
-              Restoring Graphics Context
-            </h3>
-            <p className="text-xs text-zinc-400 mt-1">
-              WebGL context interruption detected. Rebuilding shaders and render targets...
-            </p>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 bg-[#141920] border border-amber-500/70 px-4 py-2.5 rounded-sm shadow-xl max-w-md">
-          <div className="font-display text-xs font-bold uppercase text-amber-400">{toast.title}</div>
-          {toast.description && <div className="text-xs text-zinc-300 mt-0.5">{toast.description}</div>}
-        </div>
-      )}
-    </>
-  );
-}
+export { ToastAndRecoveryLayer } from './ToastAndRecoveryLayer';
