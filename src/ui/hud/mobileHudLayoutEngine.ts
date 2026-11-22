@@ -353,7 +353,7 @@ export function resolveActiveVehicleControlMap(input: InputSettings): VehicleTou
   };
 }
 
-export function resolveFireVisibility(input: InputSettings): {
+function resolveFireVisibility(input: InputSettings): {
   leftFireVisible: boolean;
   rightFireVisible: boolean;
 } {
@@ -398,7 +398,7 @@ function updateRectFromCenter(
   rect.bottom = rect.top + rect.height;
 }
 
-export function doRectsOverlap(
+function doRectsOverlap(
   a: Pick<ComputedTouchControlRect, 'left' | 'top' | 'right' | 'bottom'>,
   b: Pick<ComputedTouchControlRect, 'left' | 'top' | 'right' | 'bottom'>,
   minGapPx = 0

@@ -25,7 +25,6 @@ interface AtomicSaveEnvelope {
 export interface SaveLoadResult {
   save: ProgressionSave;
   recoveredFromCorruption: boolean;
-  migratedFromV1: boolean;
   recoveredFromStaging?: boolean;
 }
 
@@ -49,8 +48,7 @@ function tryDecodeStoredSlot(rawStr: string | null): {
       }
       return { parsed: JSON.parse(outer.payloadJson), validEnvelope: true };
     }
-    // Backwards-compatible raw JSON format from Stage 1–6 saves / tests
-    return { parsed: outer, validEnvelope: true };
+    return { parsed: null, validEnvelope: false };
   } catch {
     return { parsed: null, validEnvelope: false };
   }
@@ -85,26 +83,12 @@ export class SaveManager {
       }
     }
 
-    // 2. If no primary existed at all, check legacy v1 key before recovery path
-    if (!primaryStr && !stagingStr) {
-      const legacyStr = safeGetItem('vanguard_zero_hour_progression_v1');
-      if (legacyStr) {
-        try {
-          const parsedLegacy = JSON.parse(legacyStr);
-          const result = migrateProgressionSave(parsedLegacy);
-          this.saveProgression(result.save);
-          return result;
-        } catch {
-          // Fall through to clean defaults
-        }
-      }
-      if (!backupStr) {
-        return {
-          save: ProgressionSaveSchema.parse({}),
-          recoveredFromCorruption: false,
-          migratedFromV1: false,
-        };
-      }
+    // 2. Fresh profile when no persisted slots exist
+    if (!primaryStr && !stagingStr && !backupStr) {
+      return {
+        save: ProgressionSaveSchema.parse({}),
+        recoveredFromCorruption: false,
+      };
     }
 
     // 3. Interrupted-commit recovery: prefer verified STAGING_KEY if primary was corrupted/missing
@@ -116,7 +100,6 @@ export class SaveManager {
         return {
           save: stagingRes.save,
           recoveredFromCorruption: true,
-          migratedFromV1: stagingRes.migratedFromV1,
           recoveredFromStaging: true,
         };
       }
@@ -131,7 +114,6 @@ export class SaveManager {
         return {
           save: backupRes.save,
           recoveredFromCorruption: true,
-          migratedFromV1: backupRes.migratedFromV1,
         };
       }
     }
@@ -142,7 +124,6 @@ export class SaveManager {
     return {
       save: fresh ?? { ...DEFAULT_PROGRESSION_SAVE },
       recoveredFromCorruption: true,
-      migratedFromV1: false,
     };
   }
 

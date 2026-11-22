@@ -56,6 +56,30 @@ export class CollisionResponseSystem {
     private readonly debugSystem: PhysicsDebugSystem
   ) {}
 
+  private readonly _terrainNormalScratch = { nx: 0, ny: 1, nz: 0, slopeDeg: 0 };
+  private readonly vehicleMoveResultScratch: VehicleMoveResult = {
+    collidedBuilding: false,
+    collidedBarrier: false,
+    collidedVehicleId: null,
+    clampedWorldBounds: false,
+    impactSpeed: 0,
+    hullDamageApplied: 0,
+    normalX: 0,
+    normalY: 0,
+    normalZ: 0,
+    blockerId: null,
+    blockerCollider: null,
+  };
+  private readonly vehicleMoveReturnScratch: {
+    newYaw: number;
+    newSpeed: number;
+    result: VehicleMoveResult;
+  } = {
+    newYaw: 0,
+    newSpeed: 0,
+    result: this.vehicleMoveResultScratch,
+  };
+
   /**
    * Computes terrain heightfield upward unit normal via central finite differences.
    */
@@ -77,12 +101,11 @@ export class CollisionResponseSystem {
     const invLen = 1 / Math.hypot(nx, ny, nz);
     const uny = ny * invLen;
     const slopeDeg = (Math.acos(Math.max(-1, Math.min(1, uny))) * 180) / Math.PI;
-    return {
-      nx: nx * invLen,
-      ny: uny,
-      nz: nz * invLen,
-      slopeDeg,
-    };
+    this._terrainNormalScratch.nx = nx * invLen;
+    this._terrainNormalScratch.ny = uny;
+    this._terrainNormalScratch.nz = nz * invLen;
+    this._terrainNormalScratch.slopeDeg = slopeDeg;
+    return this._terrainNormalScratch;
   }
 
   /**
@@ -705,19 +728,18 @@ export class CollisionResponseSystem {
     getVehicleSupportHeightAt: (x: number, refY: number, z: number) => number,
     slopes: readonly OrientedSlopeRegion[] = []
   ): { newYaw: number; newSpeed: number; result: VehicleMoveResult } {
-    const result: VehicleMoveResult = {
-      collidedBuilding: false,
-      collidedBarrier: false,
-      collidedVehicleId: null,
-      clampedWorldBounds: false,
-      impactSpeed: 0,
-      hullDamageApplied: 0,
-      normalX: 0,
-      normalY: 0,
-      normalZ: 0,
-      blockerId: null,
-      blockerCollider: null,
-    };
+    const result = this.vehicleMoveResultScratch;
+    result.collidedBuilding = false;
+    result.collidedBarrier = false;
+    result.collidedVehicleId = null;
+    result.clampedWorldBounds = false;
+    result.impactSpeed = 0;
+    result.hullDamageApplied = 0;
+    result.normalX = 0;
+    result.normalY = 0;
+    result.normalZ = 0;
+    result.blockerId = null;
+    result.blockerCollider = null;
 
     const fwdX = -Math.sin(yaw);
     const fwdZ = -Math.cos(yaw);
@@ -755,7 +777,6 @@ export class CollisionResponseSystem {
     // 2. Multi-disc OBB approximation (front axle disc, center hull disc, rear axle disc)
     const discRadius = halfWidth * 0.96;
     const axleOffset = Math.max(0.4, halfLength - discRadius * 0.85);
-    const discOffsets = [-axleOffset, 0, axleOffset];
 
     const queryMask =
       COLLISION_LAYER.WORLD |
@@ -792,8 +813,8 @@ export class CollisionResponseSystem {
 
       let hadCollision = false;
 
-      for (let dIdx = 0; dIdx < discOffsets.length; dIdx++) {
-        const dOff = discOffsets[dIdx];
+      for (let dIdx = 0; dIdx < 3; dIdx++) {
+        const dOff = dIdx === 0 ? axleOffset : dIdx === 1 ? 0 : -axleOffset;
         const curFwdX = -Math.sin(newYaw);
         const curFwdZ = -Math.cos(newYaw);
         const discX = pos.x + curFwdX * dOff;
@@ -929,6 +950,9 @@ export class CollisionResponseSystem {
 
     // Bridge-aware, overhead-stair-safe vehicle ground support
     pos.y = getVehicleSupportHeightAt(pos.x, pos.y, pos.z);
-    return { newYaw, newSpeed, result };
+    this.vehicleMoveReturnScratch.newYaw = newYaw;
+    this.vehicleMoveReturnScratch.newSpeed = newSpeed;
+    this.vehicleMoveReturnScratch.result = result;
+    return this.vehicleMoveReturnScratch;
   }
 }

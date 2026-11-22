@@ -80,7 +80,7 @@ const LOST_CONFIDENCE_THRESHOLD = 0.15;
  */
 export class BattlefieldIntelligenceBoard {
   private readonly squadMemories = new Map<string, HostileSquadIntelMemory>();
-  private readonly pendingRelays: PendingRadioRelay[] = [];
+  private readonly pendingRelays = new Map<string, PendingRadioRelay>();
   private readonly deadSpotters = new Set<string>();
   private commsDelayMult = 1.0;
   private lastCounterCalloutSec = -99;
@@ -88,7 +88,7 @@ export class BattlefieldIntelligenceBoard {
 
   reset(commsDelayMult = 1.0): void {
     this.squadMemories.clear();
-    this.pendingRelays.length = 0;
+    this.pendingRelays.clear();
     this.deadSpotters.clear();
     this.commsDelayMult = Math.max(0.5, Math.min(3.0, commsDelayMult));
     this.lastCounterCalloutSec = -99;
@@ -132,9 +132,9 @@ export class BattlefieldIntelligenceBoard {
    */
   notifyUnitEliminated(unitId: string): void {
     this.deadSpotters.add(unitId);
-    for (let i = this.pendingRelays.length - 1; i >= 0; i--) {
-      if (this.pendingRelays[i].spotterUnitId === unitId) {
-        this.pendingRelays.splice(i, 1);
+    for (const [key, relay] of this.pendingRelays.entries()) {
+      if (relay.spotterUnitId === unitId) {
+        this.pendingRelays.delete(key);
       }
     }
   }
@@ -183,28 +183,35 @@ export class BattlefieldIntelligenceBoard {
     // Schedule finite delayed radio relay to other squads (modulated by TRN-39 comms disruption!)
     if (event.source !== 'radio_relay' && nextConfidence >= 0.6) {
       const relayDelay = BASE_RADIO_RELAY_DELAY_SEC * this.commsDelayMult;
+      const relayConfidence = Math.min(0.75, nextConfidence * 0.8);
+      const obsVehicle = Boolean(event.observedPlayerInVehicle);
+      const obsSuppressor = Boolean(event.observedFriendlySuppressor);
       for (const [otherSquadId] of this.squadMemories.entries()) {
         if (otherSquadId === event.squadId) continue;
-        // Deduplicate pending relays to same target squad
-        const existingIdx = this.pendingRelays.findIndex(
-          (r) => r.fromSquadId === event.squadId && r.targetSquadId === otherSquadId
-        );
-        const relay: PendingRadioRelay = {
-          fromSquadId: event.squadId,
-          spotterUnitId: event.spotterUnitId,
-          targetSquadId: otherSquadId,
-          x: event.x,
-          y: event.y,
-          z: event.z,
-          confidence: Math.min(0.75, nextConfidence * 0.8),
-          remainingDelaySec: relayDelay,
-          observedPlayerInVehicle: Boolean(event.observedPlayerInVehicle),
-          observedFriendlySuppressor: Boolean(event.observedFriendlySuppressor),
-        };
-        if (existingIdx >= 0) {
-          this.pendingRelays[existingIdx] = relay;
-        } else if (this.pendingRelays.length < 32) {
-          this.pendingRelays.push(relay);
+        const relayKey = `${event.squadId}->${otherSquadId}`;
+        const existing = this.pendingRelays.get(relayKey);
+        if (existing) {
+          existing.spotterUnitId = event.spotterUnitId;
+          existing.x = event.x;
+          existing.y = event.y;
+          existing.z = event.z;
+          existing.confidence = relayConfidence;
+          existing.remainingDelaySec = relayDelay;
+          existing.observedPlayerInVehicle = obsVehicle;
+          existing.observedFriendlySuppressor = obsSuppressor;
+        } else if (this.pendingRelays.size < 32) {
+          this.pendingRelays.set(relayKey, {
+            fromSquadId: event.squadId,
+            spotterUnitId: event.spotterUnitId,
+            targetSquadId: otherSquadId,
+            x: event.x,
+            y: event.y,
+            z: event.z,
+            confidence: relayConfidence,
+            remainingDelaySec: relayDelay,
+            observedPlayerInVehicle: obsVehicle,
+            observedFriendlySuppressor: obsSuppressor,
+          });
         }
       }
     }
@@ -262,15 +269,14 @@ export class BattlefieldIntelligenceBoard {
     this.elapsedSec += safeDt;
 
     // 1. Process inter-squad radio relay queue
-    for (let i = this.pendingRelays.length - 1; i >= 0; i--) {
-      const relay = this.pendingRelays[i];
+    for (const [key, relay] of this.pendingRelays.entries()) {
       if (this.deadSpotters.has(relay.spotterUnitId)) {
-        this.pendingRelays.splice(i, 1);
+        this.pendingRelays.delete(key);
         continue;
       }
       relay.remainingDelaySec -= safeDt;
       if (relay.remainingDelaySec <= 0) {
-        this.pendingRelays.splice(i, 1);
+        this.pendingRelays.delete(key);
         this.reportDetection({
           squadId: relay.targetSquadId,
           spotterUnitId: relay.spotterUnitId,
@@ -323,7 +329,7 @@ export class BattlefieldIntelligenceBoard {
   }
 
   getPendingRelayCount(): number {
-    return this.pendingRelays.length;
+    return this.pendingRelays.size;
   }
 
   /**

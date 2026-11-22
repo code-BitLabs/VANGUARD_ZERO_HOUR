@@ -7,7 +7,7 @@ import { CargoLiftManager, CargoLiftOccupantProxy } from '@/src/gameplay/CargoLi
 import { PlayerController } from '@/src/gameplay/PlayerController';
 import { AGENT_TRAVERSAL_PROFILES } from '@/src/navigation/AgentTraversalProfile';
 import { CollisionWorld, createOrientedSlopeRegion } from '@/src/physics/CollisionWorld';
-import { runPhysicsBackendBenchmark } from '@/src/physics/PhysicsBenchmark';
+import { runPhysicsBackendBenchmark } from '@/src/tests/harnesses/PhysicsBenchmark';
 import { COLLISION_LAYER, SpatialAABB, SpatialHash } from '@/src/physics/SpatialHash';
 import { DestructionSystem } from '@/src/world/DestructionSystem';
 import { buildWorldMap } from '@/src/world/MapBuilder';
@@ -479,7 +479,6 @@ describe('Stage 9 Cross-Map Physics, Traversal & Collision Integrity (PHYS-01 ..
   it('PHYS-12: Single-authority benchmark runs without Rapier3D and map reload clears all physics registries cleanly', async () => {
     const bench = await runPhysicsBackendBenchmark();
     expect(bench.selectedBackend).toBe('custom_spatial_hash');
-    expect(bench.rapierWasmMs).toBeNull();
     expect(bench.customSpatialHashMs).toBeLessThan(15);
 
     // Reload lifecycle leak test across M1 -> M2 -> M5

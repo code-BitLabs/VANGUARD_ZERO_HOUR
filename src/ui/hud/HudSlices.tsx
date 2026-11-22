@@ -12,6 +12,7 @@ import {
   Layers,
   Pause,
   Radio,
+  RefreshCw,
   Rocket,
   Shield,
 } from 'lucide-react';
@@ -77,8 +78,8 @@ export const HudWorldObjectiveMarker = React.memo(function HudWorldObjectiveMark
 }) {
   const { playerX, playerZ, objectives } = useGameSessionStore(
     useShallow((s) => ({
-      playerX: s.hud.playerX,
-      playerZ: s.hud.playerZ,
+      playerX: Math.round(s.hud.playerX * 2) * 0.5,
+      playerZ: Math.round(s.hud.playerZ * 2) * 0.5,
       objectives: s.hud.objectives,
     }))
   );
@@ -1306,12 +1307,62 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
   );
 });
 
+export type BottomCenterPromptSelection =
+  | { kind: 'critical_hint'; hint: NonNullable<HudSnapshot['activeTacticalHint']> }
+  | { kind: 'interact'; text: string; showInlineFieldSwap: boolean }
+  | { kind: 'vault'; text: string; showInlineFieldSwap: boolean }
+  | { kind: 'field_swap' }
+  | { kind: 'tactical_hint'; hint: NonNullable<HudSnapshot['activeTacticalHint']> }
+  | { kind: 'none' };
+
+/**
+ * Pure single-slot priority arbitrator for the bottom-center HUD prompt rail.
+ * Guarantees at most ONE prompt banner renders at a time (zero vertical overlap).
+ * Priority: Critical Survival > Primary [E] Interact / Vault > Field Armory Swap > Tactical/Onboarding Hint.
+ */
+export function resolveBottomCenterPromptSlot(input: {
+  downedActive: boolean;
+  fieldSwapOpen: boolean;
+  compactHud: boolean;
+  inVehicle: boolean;
+  canVault: boolean;
+  interactPrompt: string | null;
+  nearSupplySwapStation: boolean;
+  canOpenFieldSwap: boolean;
+  activeTacticalHint: HudSnapshot['activeTacticalHint'];
+}): BottomCenterPromptSelection {
+  if (input.downedActive || input.fieldSwapOpen) {
+    return { kind: 'none' };
+  }
+  if (input.activeTacticalHint?.priority === 'critical') {
+    return { kind: 'critical_hint', hint: input.activeTacticalHint };
+  }
+  const swapEligible = input.nearSupplySwapStation && !input.inVehicle && input.canOpenFieldSwap;
+  if (!input.compactHud && input.interactPrompt) {
+    return { kind: 'interact', text: input.interactPrompt, showInlineFieldSwap: swapEligible };
+  }
+  if (!input.compactHud && !input.inVehicle && input.canVault) {
+    return { kind: 'vault', text: '[SPACE] VAULT', showInlineFieldSwap: swapEligible };
+  }
+  if (swapEligible) {
+    return { kind: 'field_swap' };
+  }
+  if (input.activeTacticalHint) {
+    return { kind: 'tactical_hint', hint: input.activeTacticalHint };
+  }
+  return { kind: 'none' };
+}
+
 export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndRadio({
   compactHud,
   downedActive,
+  fieldSwapOpen = false,
+  onOpenFieldSwap,
 }: {
   compactHud: boolean;
   downedActive: boolean;
+  fieldSwapOpen?: boolean;
+  onOpenFieldSwap?: () => void;
 }) {
   const {
     activeTacticalHint,
@@ -1319,6 +1370,7 @@ export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndR
     interactPrompt,
     canVault,
     inVehicle,
+    nearSupplySwapStation,
     activeRadioSubtitle,
     subtitleText,
   } = useGameSessionStore(
@@ -1328,56 +1380,36 @@ export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndR
       interactPrompt: s.hud.interactPrompt,
       canVault: s.hud.canVault,
       inVehicle: s.hud.inVehicle,
+      nearSupplySwapStation: Boolean(s.hud.nearSupplySwapStation),
       activeRadioSubtitle: s.hud.activeRadioSubtitle,
       subtitleText: s.hud.subtitleText,
     }))
   );
   const dismissTacticalHint = useMissionSelectionStore((s) => s.dismissTacticalHint);
 
+  const slot = resolveBottomCenterPromptSlot({
+    downedActive,
+    fieldSwapOpen,
+    compactHud,
+    inVehicle,
+    canVault,
+    interactPrompt,
+    nearSupplySwapStation,
+    canOpenFieldSwap: Boolean(onOpenFieldSwap),
+    activeTacticalHint,
+  });
+
+  const slotPositionClass = compactHud
+    ? 'bottom-20'
+    : 'bottom-36';
+
   return (
     <>
-      {activeTacticalHint && !downedActive && (
-        <div
-          data-testid="hud-tier1-tactical-hint"
-          className={`absolute left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex items-center gap-2 px-3 py-1 rounded-sm font-mono text-[10px] sm:text-xs shadow-lg border ${
-            compactHud ? 'bottom-20' : 'bottom-44'
-          } ${
-            activeTacticalHint.priority === 'critical'
-              ? 'bg-red-950/92 border-red-500/80 text-red-200'
-              : activeTacticalHint.priority === 'tactical'
-                ? 'bg-[#0B0E11]/92 border-amber-400/80 text-amber-200'
-                : 'bg-[#0B0E11]/90 border-cyan-400/75 text-cyan-200'
-          }`}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {activeTacticalHint.actionKey && (
-            <span className="px-1.5 py-0.5 bg-zinc-950 border border-white/25 text-amber-300 font-bold rounded-xs text-[9px] sm:text-[10px]">
-              [{activeTacticalHint.actionKey}]
-            </span>
-          )}
-          <span className="tracking-wide">{activeTacticalHint.text}</span>
-          {activeTacticalHint.dismissible && (
-            <button
-              type="button"
-              data-testid="dismiss-tactical-hint"
-              onClick={(e) => {
-                e.stopPropagation();
-                dismissTacticalHint(activeTacticalHint.id);
-              }}
-              className="ml-1 px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[9px] uppercase rounded-xs cursor-pointer"
-            >
-              OK
-            </button>
-          )}
-        </div>
-      )}
-
-      {liftStatus && !downedActive && (
+      {liftStatus && !downedActive && !fieldSwapOpen && (
         <div
           data-testid="hud-lift-status"
           className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/92 border border-cyan-400/60 px-3 py-1 rounded-sm font-mono text-[10px] text-zinc-100 shadow-lg flex items-center gap-2 whitespace-nowrap ${
-            compactHud ? 'bottom-28' : 'bottom-52'
+            compactHud ? 'bottom-32' : 'bottom-48'
           }`}
         >
           <span className="text-cyan-400 font-bold uppercase">{liftStatus.liftName}</span>
@@ -1394,16 +1426,92 @@ export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndR
         </div>
       )}
 
-      {!compactHud && (interactPrompt || (!inVehicle && canVault)) && (
+      {(slot.kind === 'critical_hint' || slot.kind === 'tactical_hint') && (
         <div
-          data-testid={interactPrompt ? 'hud-interact-prompt' : 'hud-vault-prompt'}
-          className={`absolute bottom-36 left-1/2 -translate-x-1/2 bg-[#0B0E11]/90 px-4 py-1.5 rounded-sm font-mono text-xs tracking-wider ${
-            interactPrompt
+          data-testid="hud-tier1-tactical-hint"
+          className={`absolute left-1/2 -translate-x-1/2 z-20 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-sm font-mono text-[10px] sm:text-xs shadow-lg border whitespace-nowrap ${slotPositionClass} ${
+            slot.hint.priority === 'critical'
+              ? 'bg-red-950/92 border-red-500/80 text-red-200'
+              : slot.hint.priority === 'tactical'
+                ? 'bg-[#0B0E11]/92 border-amber-400/80 text-amber-200'
+                : 'bg-[#0B0E11]/90 border-cyan-400/75 text-cyan-200'
+          }`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {slot.hint.actionKey && (
+            <span className="px-1.5 py-0.5 bg-zinc-950 border border-white/25 text-amber-300 font-bold rounded-xs text-[9px] sm:text-[10px]">
+              [{slot.hint.actionKey}]
+            </span>
+          )}
+          <span className="tracking-wide">{slot.hint.text}</span>
+          {slot.hint.dismissible && (
+            <button
+              type="button"
+              data-testid="dismiss-tactical-hint"
+              onClick={(e) => {
+                e.stopPropagation();
+                dismissTacticalHint(slot.hint.id);
+              }}
+              className="ml-1 px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[9px] uppercase rounded-xs cursor-pointer"
+            >
+              OK
+            </button>
+          )}
+        </div>
+      )}
+
+      {(slot.kind === 'interact' || slot.kind === 'vault') && (
+        <div
+          data-testid={slot.kind === 'interact' ? 'hud-interact-prompt' : 'hud-vault-prompt'}
+          className={`absolute ${slotPositionClass} left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 bg-[#0B0E11]/92 px-4 py-1.5 rounded-sm font-mono text-xs tracking-wider shadow-lg whitespace-nowrap ${
+            slot.kind === 'interact'
               ? 'border border-amber-500 text-amber-400'
               : 'border border-cyan-400/80 text-cyan-300'
-          }`}
+          } ${slot.showInlineFieldSwap ? 'pointer-events-auto' : 'pointer-events-none'}`}
+          onMouseDown={(e) => {
+            if (slot.showInlineFieldSwap) e.stopPropagation();
+          }}
+          onPointerDown={(e) => {
+            if (slot.showInlineFieldSwap) e.stopPropagation();
+          }}
         >
-          {interactPrompt ?? '[SPACE] VAULT'}
+          <span>{slot.text}</span>
+          {slot.showInlineFieldSwap && onOpenFieldSwap && (
+            <>
+              <span className="text-zinc-600">|</span>
+              <button
+                type="button"
+                data-testid="hud-field-swap-trigger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenFieldSwap();
+                }}
+                className="px-2 py-0.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/60 rounded-xs text-[10px] text-amber-200 flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3 h-3 shrink-0" />
+                <span>[H] ARMORY SWAP</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {slot.kind === 'field_swap' && onOpenFieldSwap && (
+        <div
+          className={`absolute left-1/2 -translate-x-1/2 z-20 pointer-events-auto ${slotPositionClass}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            data-testid="hud-field-swap-trigger"
+            onClick={onOpenFieldSwap}
+            className="min-h-[38px] px-3.5 py-1.5 bg-[#0B0E11]/92 hover:bg-[#141920] border border-amber-400/75 rounded-sm font-mono text-[11px] text-amber-300 flex items-center gap-2 whitespace-nowrap shadow-lg cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+            <span>{compactHud ? 'FIELD ARMORY SWAP' : '[H] FIELD ARMORY SWAP (60 REQ OR 60% AMMO)'}</span>
+          </button>
         </div>
       )}
 
@@ -1794,11 +1902,15 @@ export const HudDownedOverlaySlot = React.memo(function HudDownedOverlaySlot({
 export const HudSquadCommandSlot = React.memo(function HudSquadCommandSlot({
   compactHud,
   downedActive,
+  fieldSwapOpen,
+  onFieldSwapOpenChange,
   onIssueSquadCommand,
   onSwapFieldWeapon,
 }: {
   compactHud: boolean;
   downedActive: boolean;
+  fieldSwapOpen?: boolean;
+  onFieldSwapOpenChange?: (open: boolean) => void;
   onIssueSquadCommand?: (
     order: SquadOrderType,
     source: SquadCommandSource,
@@ -1811,6 +1923,8 @@ export const HudSquadCommandSlot = React.memo(function HudSquadCommandSlot({
     <SquadCommandHud
       compactHud={compactHud}
       downedActive={downedActive}
+      swapOpen={fieldSwapOpen}
+      onSwapOpenChange={onFieldSwapOpenChange}
       onIssueCommand={deploymentMode === 'solo' ? undefined : onIssueSquadCommand}
       onSwapFieldWeapon={onSwapFieldWeapon}
     />

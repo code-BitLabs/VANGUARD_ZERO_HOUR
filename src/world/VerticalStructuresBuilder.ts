@@ -353,6 +353,57 @@ export function buildSwitchbackStaircase(
     entityId: id,
   });
 
+  // Safety guardrails along exposed outer edges of mid-landing (+runDir far back edge & both lateral flanks)
+  const railH = 1.15;
+  const railT = 0.22;
+  const addLandingRail = (
+    railId: string,
+    cx: number,
+    baseRailY: number,
+    cz: number,
+    w: number,
+    d: number
+  ) => {
+    addVisualBox(
+      grp,
+      w,
+      railH,
+      d,
+      cx,
+      baseRailY + railH * 0.5,
+      cz,
+      railMat,
+      resourceManager,
+      scope,
+      railId,
+      false
+    );
+    collisionWorld.addStaticBox({
+      id: railId,
+      minX: cx - w * 0.5,
+      minY: baseRailY,
+      minZ: cz - d * 0.5,
+      maxX: cx + w * 0.5,
+      maxY: baseRailY + railH,
+      maxZ: cz + d * 0.5,
+      layer: COLLISION_LAYER.WORLD | COLLISION_LAYER.COVER,
+      tag: 'parapet',
+      entityId: id,
+    });
+  };
+
+  if (Math.abs(runDirZ) > 0.5) {
+    const midBackZ = runDirZ > 0 ? landCenterZ + landHalfZ - railT * 0.5 : landCenterZ - landHalfZ + railT * 0.5;
+    addLandingRail(`${id}_mid_rail_back`, landCenterX, midY, midBackZ, landHalfX * 2, railT);
+    addLandingRail(`${id}_mid_rail_lat_neg`, landCenterX - landHalfX + railT * 0.5, midY, landCenterZ, railT, landHalfZ * 2);
+    addLandingRail(`${id}_mid_rail_lat_pos`, landCenterX + landHalfX - railT * 0.5, midY, landCenterZ, railT, landHalfZ * 2);
+  } else {
+    const midBackX = runDirX > 0 ? landCenterX + landHalfX - railT * 0.5 : landCenterX - landHalfX + railT * 0.5;
+    addLandingRail(`${id}_mid_rail_back`, midBackX, midY, landCenterZ, railT, landHalfZ * 2);
+    addLandingRail(`${id}_mid_rail_lat_neg`, landCenterX, midY, landCenterZ - landHalfZ + railT * 0.5, landHalfX * 2, railT);
+    addLandingRail(`${id}_mid_rail_lat_pos`, landCenterX, midY, landCenterZ + landHalfZ - railT * 0.5, landHalfX * 2, railT);
+  }
+
   // Support pillar under mid-landing (outside walk path) — Stage 9 PHYS-08: anchored to terrain + physical collider
   const pilCenterX = landCenterX + runDirX * (landSpanAlongRun * 0.42);
   const pilCenterZ = landCenterZ + runDirZ * (landSpanAlongRun * 0.42);
@@ -423,7 +474,7 @@ export function buildSwitchbackStaircase(
   // Top landing connecting f2End to (exitX, topY, exitZ)
   // Stage 9 PHYS-05: Offset top_bridge past f2End along -runDir (0.05m seam) so it NEVER
   // protrudes backward into the upper half of Flight 2 and creates a chest-high blocker!
-  const topRunSpan = 2.0;
+  const topRunSpan = 2.25;
   const topRunCenterX = f2EndX - runDirX * (topRunSpan * 0.5 - 0.05);
   const topRunCenterZ = f2EndZ - runDirZ * (topRunSpan * 0.5 - 0.05);
   const latF2 = f2EndX * latX + f2EndZ * latZ;
@@ -451,18 +502,38 @@ export function buildSwitchbackStaircase(
     scope,
     `${id}_top_bridge`
   );
+  const topMinX = topConnCenterX - topConnW * 0.5;
+  const topMaxX = topConnCenterX + topConnW * 0.5;
+  const topMinZ = topConnCenterZ - topConnD * 0.5;
+  const topMaxZ = topConnCenterZ + topConnD * 0.5;
   collisionWorld.addStaticBox({
     id: `${id}_top_bridge`,
-    minX: topConnCenterX - topConnW * 0.5,
+    minX: topMinX,
     minY: topY - 0.42,
-    minZ: topConnCenterZ - topConnD * 0.5,
-    maxX: topConnCenterX + topConnW * 0.5,
+    minZ: topMinZ,
+    maxX: topMaxX,
     maxY: topY,
-    maxZ: topConnCenterZ + topConnD * 0.5,
+    maxZ: topMaxZ,
     layer: COLLISION_LAYER.WORLD,
     tag: 'stair_landing',
     entityId: id,
   });
+
+  // Safety guardrails along exposed top-bridge edges (far -runDir back edge + outer flank away from deck/roof)
+  // Funneling players safely onto the elevated deck without accidental 9m drops while keeping deck entry open.
+  const outerLatX = -latX * latSign;
+  const outerLatZ = -latZ * latSign;
+  if (Math.abs(runDirZ) > 0.5) {
+    const topBackZ = runDirZ > 0 ? topMinZ + railT * 0.5 : topMaxZ - railT * 0.5;
+    addLandingRail(`${id}_top_rail_back`, topConnCenterX, topY, topBackZ, topConnW, railT);
+    const outerFlankX = outerLatX > 0 ? topMaxX - railT * 0.5 : topMinX + railT * 0.5;
+    addLandingRail(`${id}_top_rail_outer`, outerFlankX, topY, topConnCenterZ, railT, topConnD);
+  } else {
+    const topBackX = runDirX > 0 ? topMinX + railT * 0.5 : topMaxX - railT * 0.5;
+    addLandingRail(`${id}_top_rail_back`, topBackX, topY, topConnCenterZ, railT, topConnD);
+    const outerFlankZ = outerLatZ > 0 ? topMaxZ - railT * 0.5 : topMinZ + railT * 0.5;
+    addLandingRail(`${id}_top_rail_outer`, topConnCenterX, topY, outerFlankZ, topConnW, railT);
+  }
 
   chunkManager.registerObject(grp, (entryX + exitX) * 0.5, (entryZ + exitZ) * 0.5, scene);
 

@@ -107,6 +107,10 @@ export class ProjectileManager {
   private readonly _desired = new THREE.Vector3();
   private readonly _rotAxis = new THREE.Vector3();
   private readonly _prevDir = new THREE.Vector3();
+  private readonly proxHead = new Int32Array(6400); // 80x80 cells at 4m = [-160, 160) m
+  private proxNext = new Int32Array(128);
+  private readonly proxOverflow: number[] = [];
+  private hasArmedProximityActive = false;
 
   constructor(
     scene: THREE.Scene,
@@ -328,6 +332,36 @@ export class ProjectileManager {
     onExplode: (ev: ExplosionEvent) => void,
     proximityEntities: Array<{ position: THREE.Vector3; radius: number }>
   ): void {
+    if (this.pool.getActiveCount() === 0) return;
+
+    this.hasArmedProximityActive = false;
+    this.pool.forEachActive((p) => {
+      if (!p.detonated && p.profile.detonation.triggerMode !== 'fuse') {
+        this.hasArmedProximityActive = true;
+      }
+    });
+
+    const useProxSpatial = this.hasArmedProximityActive && proximityEntities.length > 16;
+    if (useProxSpatial) {
+      this.proxHead.fill(-1);
+      this.proxOverflow.length = 0;
+      if (this.proxNext.length < proximityEntities.length) {
+        this.proxNext = new Int32Array(Math.max(128, proximityEntities.length * 2));
+      }
+      for (let i = 0; i < proximityEntities.length; i++) {
+        const pos = proximityEntities[i].position;
+        const cx = Math.floor((pos.x + 160) * 0.25);
+        const cz = Math.floor((pos.z + 160) * 0.25);
+        if (cx < 0 || cx >= 80 || cz < 0 || cz >= 80) {
+          this.proxOverflow.push(i);
+          continue;
+        }
+        const cellIdx = cz * 80 + cx;
+        this.proxNext[i] = this.proxHead[cellIdx];
+        this.proxHead[cellIdx] = i;
+      }
+    }
+
     // Substep clamped dt for frame-rate independent ballistics & homing across 30-144 FPS
     const clampedTotal = Math.min(rawDt, 0.05);
     const subSteps = clampedTotal > 0.022 ? 2 : 1;
@@ -551,12 +585,54 @@ export class ProjectileManager {
           p.profile.detonation.triggerMode !== 'fuse' &&
           p.life >= p.profile.detonation.armingDelaySec
         ) {
-          for (let i = 0; i < proximityEntities.length; i++) {
-            const ent = proximityEntities[i];
-            const r = ent.radius + kin.collisionRadius;
-            if (p.pos.distanceToSquared(ent.position) <= r * r) {
+          if (useProxSpatial) {
+            const pcx = Math.floor((p.pos.x + 160) * 0.25);
+            const pcz = Math.floor((p.pos.z + 160) * 0.25);
+            let hitProx = false;
+            if (pcx >= -1 && pcx <= 80 && pcz >= -1 && pcz <= 80) {
+              const minCx = Math.max(0, pcx - 1);
+              const maxCx = Math.min(79, pcx + 1);
+              const minCz = Math.max(0, pcz - 1);
+              const maxCz = Math.min(79, pcz + 1);
+              for (let gz = minCz; gz <= maxCz && !hitProx; gz++) {
+                const row = gz * 80;
+                for (let gx = minCx; gx <= maxCx; gx++) {
+                  let idx = this.proxHead[row + gx];
+                  while (idx !== -1) {
+                    const ent = proximityEntities[idx];
+                    const r = ent.radius + kin.collisionRadius;
+                    if (p.pos.distanceToSquared(ent.position) <= r * r) {
+                      hitProx = true;
+                      break;
+                    }
+                    idx = this.proxNext[idx];
+                  }
+                  if (hitProx) break;
+                }
+              }
+            }
+            if (!hitProx && this.proxOverflow.length > 0) {
+              for (let k = 0; k < this.proxOverflow.length; k++) {
+                const ent = proximityEntities[this.proxOverflow[k]];
+                const r = ent.radius + kin.collisionRadius;
+                if (p.pos.distanceToSquared(ent.position) <= r * r) {
+                  hitProx = true;
+                  break;
+                }
+              }
+            }
+            if (hitProx) {
               this.detonate(p, onExplode);
               return;
+            }
+          } else {
+            for (let i = 0; i < proximityEntities.length; i++) {
+              const ent = proximityEntities[i];
+              const r = ent.radius + kin.collisionRadius;
+              if (p.pos.distanceToSquared(ent.position) <= r * r) {
+                this.detonate(p, onExplode);
+                return;
+              }
             }
           }
         }

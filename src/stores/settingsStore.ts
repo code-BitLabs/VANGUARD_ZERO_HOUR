@@ -69,11 +69,8 @@ function persistCurrent(
     'display' | 'graphics' | 'input' | 'gameplay' | 'hud' | 'accessibility' | 'developer'
   >
 ) {
-  const current = SettingsManager.load();
-  SettingsManager.save({
-    version: 2,
+  SettingsManager.patchAndSave({
     display: state.display,
-    audio: current.audio,
     graphics: state.graphics,
     input: state.input,
     gameplay: state.gameplay,
@@ -210,16 +207,8 @@ export const settingsStore = createStore<SettingsStoreState>()(
 
     updateDisplay: (patch) => {
       const nextDisplay = { ...get().display, ...patch };
-      const nextAccessibility =
-        patch.uiScale !== undefined
-          ? { ...get().accessibility, uiScale: patch.uiScale }
-          : get().accessibility;
-      set({ display: nextDisplay, accessibility: nextAccessibility });
-      persistCurrent({
-        ...get(),
-        display: nextDisplay,
-        accessibility: nextAccessibility,
-      });
+      set({ display: nextDisplay });
+      persistCurrent({ ...get(), display: nextDisplay });
     },
 
     updateGraphics: (patch, options) => {
@@ -361,71 +350,20 @@ export const settingsStore = createStore<SettingsStoreState>()(
 
     updateGameplay: (patch) => {
       const nextGameplay = { ...get().gameplay, ...patch };
-      const nextAccessibility =
-        patch.tacticalGuidanceHints !== undefined
-          ? { ...get().accessibility, tacticalHints: patch.tacticalGuidanceHints }
-          : get().accessibility;
-      set({ gameplay: nextGameplay, accessibility: nextAccessibility });
-      persistCurrent({
-        ...get(),
-        gameplay: nextGameplay,
-        accessibility: nextAccessibility,
-      });
+      set({ gameplay: nextGameplay });
+      persistCurrent({ ...get(), gameplay: nextGameplay });
     },
 
     updateHud: (patch) => {
       const nextHud = { ...get().hud, ...patch };
-      const nextAccessibility: AccessibilitySettings = {
-        ...get().accessibility,
-        ...(patch.opacity !== undefined ? { hudOpacity: patch.opacity } : {}),
-        ...(patch.showRadar !== undefined ? { showRadar: patch.showRadar } : {}),
-        ...(patch.showCompass !== undefined ? { showCompass: patch.showCompass } : {}),
-        ...(patch.preset !== undefined
-          ? {
-              hudMode:
-                patch.preset === 'immersive'
-                  ? 'minimal'
-                  : patch.preset === 'full_tactical'
-                    ? 'expanded'
-                    : 'adaptive',
-            }
-          : {}),
-      };
-      set({ hud: nextHud, accessibility: nextAccessibility });
-      persistCurrent({
-        ...get(),
-        hud: nextHud,
-        accessibility: nextAccessibility,
-      });
+      set({ hud: nextHud });
+      persistCurrent({ ...get(), hud: nextHud });
     },
 
     updateAccessibility: (patch) => {
       const next = { ...get().accessibility, ...patch };
-      const nextDisplay =
-        patch.uiScale !== undefined ? { ...get().display, uiScale: patch.uiScale } : get().display;
-      const nextHud: HudSettings = {
-        ...get().hud,
-        ...(patch.hudOpacity !== undefined ? { opacity: patch.hudOpacity } : {}),
-        ...(patch.showRadar !== undefined ? { showRadar: patch.showRadar } : {}),
-        ...(patch.showCompass !== undefined ? { showCompass: patch.showCompass } : {}),
-      };
-      const nextGameplay: GameplaySettings =
-        patch.tacticalHints !== undefined
-          ? { ...get().gameplay, tacticalGuidanceHints: patch.tacticalHints }
-          : get().gameplay;
-      set({
-        accessibility: next,
-        display: nextDisplay,
-        hud: nextHud,
-        gameplay: nextGameplay,
-      });
-      persistCurrent({
-        ...get(),
-        accessibility: next,
-        display: nextDisplay,
-        hud: nextHud,
-        gameplay: nextGameplay,
-      });
+      set({ accessibility: next });
+      persistCurrent({ ...get(), accessibility: next });
     },
 
     updateDeveloper: (patch) => {
@@ -460,34 +398,16 @@ export const settingsStore = createStore<SettingsStoreState>()(
     },
 
     resetCategory: (category) => {
-      const state = get();
       if (category === 'display') {
-        const display = DisplaySettingsSchema.parse({});
-        set({ display, accessibility: { ...state.accessibility, uiScale: display.uiScale } });
+        set({ display: DisplaySettingsSchema.parse({}) });
       } else if (category === 'graphics') {
         set({ graphics: GraphicsSettingsSchema.parse({}) });
       } else if (category === 'controls') {
         set({ input: InputSettingsSchema.parse({}) });
       } else if (category === 'gameplay') {
-        const gameplay = GameplaySettingsSchema.parse({});
-        set({
-          gameplay,
-          accessibility: {
-            ...state.accessibility,
-            tacticalHints: gameplay.tacticalGuidanceHints,
-          },
-        });
+        set({ gameplay: GameplaySettingsSchema.parse({}) });
       } else if (category === 'hud') {
-        const hud = HudSettingsSchema.parse({});
-        set({
-          hud,
-          accessibility: {
-            ...state.accessibility,
-            hudOpacity: hud.opacity,
-            showRadar: hud.showRadar,
-            showCompass: hud.showCompass,
-          },
-        });
+        set({ hud: HudSettingsSchema.parse({}) });
       } else if (category === 'accessibility') {
         set({ accessibility: AccessibilitySettingsSchema.parse({}) });
       }

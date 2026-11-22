@@ -32,6 +32,8 @@ export interface SquadCommandHudProps {
   >;
   compactHud: boolean;
   downedActive: boolean;
+  swapOpen?: boolean;
+  onSwapOpenChange?: (open: boolean) => void;
   onIssueCommand?: (
     order: SquadOrderType,
     source: SquadCommandSource,
@@ -44,6 +46,8 @@ export const SquadCommandHud = React.memo(function SquadCommandHud({
   hud: hudProp,
   compactHud,
   downedActive,
+  swapOpen: controlledSwapOpen,
+  onSwapOpenChange,
   onIssueCommand,
   onSwapFieldWeapon,
 }: SquadCommandHudProps) {
@@ -61,8 +65,19 @@ export const SquadCommandHud = React.memo(function SquadCommandHud({
   const [radialOpen, setRadialOpen] = useState(false);
   const [hoveredOrder, setHoveredOrder] = useState<SquadOrderType | null>(null);
   const [targetOperatorId, setTargetOperatorId] = useState<string | undefined>(undefined);
-  const [swapOpen, setSwapOpen] = useState(false);
+  const [internalSwapOpen, setInternalSwapOpen] = useState(false);
   const [selectedSwapSlot, setSelectedSwapSlot] = useState(0);
+
+  const isSwapControlled = onSwapOpenChange !== undefined;
+  const swapOpen = isSwapControlled ? Boolean(controlledSwapOpen) : internalSwapOpen;
+  const setSwapOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(swapOpen) : next;
+    if (isSwapControlled) {
+      onSwapOpenChange?.(resolved);
+    } else {
+      setInternalSwapOpen(resolved);
+    }
+  };
 
   const radialOpenRef = useRef(false);
   const hoveredOrderRef = useRef<SquadOrderType | null>(null);
@@ -269,10 +284,10 @@ export const SquadCommandHud = React.memo(function SquadCommandHud({
         </div>
       )}
 
-      {hud.nearSupplySwapStation && !hud.inVehicle && (
+      {hud.nearSupplySwapStation && !hud.inVehicle && (swapOpen || !isSwapControlled) && (
         <div
           className={`absolute z-30 pointer-events-auto ${
-            compactHud ? 'top-16 left-1/2 -translate-x-1/2' : 'bottom-48 left-1/2 -translate-x-1/2'
+            compactHud ? 'top-16 left-1/2 -translate-x-1/2' : 'bottom-36 left-1/2 -translate-x-1/2'
           }`}
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}

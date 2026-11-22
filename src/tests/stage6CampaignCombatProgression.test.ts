@@ -619,21 +619,22 @@ describe('TRN-33: Adaptive Background Music Director Hysteresis & Manual Overrid
 });
 
 describe('TRN-34: Save Schema Revision 3 Migration, Replay Modifiers, Challenges & Weapon Mastery', () => {
-  it('migrates legacy v1 and v2 saves cleanly to schemaRevision 3 without losing existing progress', () => {
-    const v1Migrated = migrateProgressionSave({
-      version: 1,
+  it('upgrades canonical v2 saves to schemaRevision 4 without losing existing progress', () => {
+    const v2Rev2 = migrateProgressionSave({
+      version: 2,
+      schemaRevision: 2,
       xp: 900,
       requisitionPoints: 250,
       totalKills: 42,
       totalHeadshots: 11,
     });
-    expect(v1Migrated.migratedFromV1).toBe(true);
-    expect(v1Migrated.save.version).toBe(2);
-    expect(v1Migrated.save.schemaRevision).toBe(4);
-    expect(v1Migrated.save.xp).toBe(900);
-    expect(v1Migrated.save.completedChallenges).toEqual([]);
-    expect(v1Migrated.save.activeModifiers).toEqual([]);
-    expect(v1Migrated.save.weaponMasteryKills).toEqual({});
+    expect(v2Rev2.recoveredFromCorruption).toBe(false);
+    expect(v2Rev2.save.version).toBe(2);
+    expect(v2Rev2.save.schemaRevision).toBe(4);
+    expect(v2Rev2.save.xp).toBe(900);
+    expect(v2Rev2.save.completedChallenges).toEqual([]);
+    expect(v2Rev2.save.activeModifiers).toEqual([]);
+    expect(v2Rev2.save.weaponMasteryKills).toEqual({});
 
     const v2Legacy = migrateProgressionSave({
       version: 2,

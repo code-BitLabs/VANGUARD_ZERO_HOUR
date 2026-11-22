@@ -173,7 +173,8 @@ describe('Stage 4A — TRN-12 Survivability, Recovery, TRN-10 Threat Arcs & Debr
     player.spawn(0, 1.65, 0, 0);
     enemyManager.update(0.016, player, collision, [], stubWorker, 0.1);
 
-    const targets = enemyManager.getHitscanTargets(() => {});
+    const targets: import('@/src/gameplay/WeaponSystem').HitscanTarget[] = [];
+    enemyManager.fillHitscanTargets(targets, () => {});
     expect(targets.length).toBe(1);
     const target = targets[0];
 
@@ -198,7 +199,8 @@ describe('Stage 4A — TRN-12 Survivability, Recovery, TRN-10 Threat Arcs & Debr
     input.triggerVirtualActionPress('fire');
 
     let hitRegistered = false;
-    const hitTargets = enemyManager.getHitscanTargets(() => {
+    const hitTargets: import('@/src/gameplay/WeaponSystem').HitscanTarget[] = [];
+    enemyManager.fillHitscanTargets(hitTargets, () => {
       hitRegistered = true;
     });
     weapons.update(0.016, input, player, cam, collision, hitTargets, [], () => {}, false);

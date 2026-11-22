@@ -347,6 +347,26 @@ export class MissionDirector {
     return Array.from(this.retroactiveCreditedObjectiveIds);
   }
 
+  /**
+   * Dynamically updates the tracked world marker position for incomplete objectives
+   * of the given type (e.g., live nearest convoy vehicle tracking for convoy_intercept).
+   */
+  public updateObjectiveMarkerPosition(
+    type: ObjectiveType,
+    x: number,
+    y: number,
+    z: number
+  ): void {
+    for (let i = 0; i < this.objectives.length; i++) {
+      const o = this.objectives[i];
+      if (o.type === type && !o.completed) {
+        o.markerPos.x = x;
+        o.markerPos.y = y;
+        o.markerPos.z = z;
+      }
+    }
+  }
+
   public getExtractionStatus(): 'not_applicable' | 'locked' | 'available' | 'extracting' | 'completed' {
     const extractObj = this.objectives.find((o) => o.type === 'vehicle_extract');
     if (!extractObj) return 'not_applicable';

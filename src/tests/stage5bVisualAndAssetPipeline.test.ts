@@ -1,12 +1,5 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import {
-  AssetQualityGate,
-  ProductionAssetPipeline,
-  computeContentAddressHash,
-  globalAssetPipeline,
-  selectOptimalCompressionStrategy,
-} from '@/src/assets/AssetPipeline';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { AssetManager } from '@/src/core/AssetManager';
 import { ResourceManager } from '@/src/core/ResourceManager';
@@ -60,145 +53,6 @@ import {
 import { WorldChunkManager } from '@/src/world/WorldChunkManager';
 import { buildSoldierRig } from '@/src/world/rigs/EnemyRigBuilder';
 import { buildVehicleRig } from '@/src/world/rigs/VehicleRigBuilder';
-
-describe('Stage 5B — Production Asset Pipeline & 5-Layer Domain Model (TRN-22)', () => {
-  it('validates the entire canonical asset catalog with zero quality-gate violations', () => {
-    const result = AssetQualityGate.validateCatalog();
-    expect(result.valid).toBe(true);
-    expect(result.checkedDefinitions).toBeGreaterThanOrEqual(30);
-    expect(result.checkedVariants).toBeGreaterThanOrEqual(30);
-    expect(result.checkedArtifacts).toBeGreaterThanOrEqual(90);
-    expect(result.duplicateIds).toHaveLength(0);
-    expect(result.missingDependencies).toHaveLength(0);
-    expect(result.invalidSockets).toHaveLength(0);
-    expect(result.budgetViolations).toHaveLength(0);
-    expect(result.licenseIssues).toHaveLength(0);
-    for (const report of result.perAssetReports) {
-      expect(report.passedQualityGate).toBe(true);
-      expect(report.issues).toHaveLength(0);
-      expect(report.licenseVerified).toBe(true);
-      expect(report.uvsPresent).toBe(true);
-    }
-  });
-
-  it('produces deterministic content-addressed hashes and selects appropriate compression strategies', () => {
-    const h1 = computeContentAddressHash('weapon_assault_rifle:v2:high');
-    const h2 = computeContentAddressHash('weapon_assault_rifle:v2:high');
-    const h3 = computeContentAddressHash('weapon_assault_rifle:v2:low');
-    expect(h1).toBe(h2);
-    expect(h1).not.toBe(h3);
-    expect(h1).toHaveLength(64);
-
-    expect(selectOptimalCompressionStrategy('enemy', true, 4200).compression).toBe('meshopt');
-    expect(selectOptimalCompressionStrategy('vehicle', false, 6800).compression).toBe('draco');
-    expect(selectOptimalCompressionStrategy('prop', false, 900).compression).toBe('procedural_assembly');
-    expect(selectOptimalCompressionStrategy('material', false, 0).compression).toBe('ktx2_basisu');
-  });
-
-  it('catches invalid transforms, missing UVs, and missing required sockets in AssetQualityGate.validateObject3D', () => {
-    const def = globalAssetPipeline.getDefinition('weapon_assault_rifle')!;
-    expect(def).toBeDefined();
-
-    const badRoot = new THREE.Group();
-    const badGeo = new THREE.BoxGeometry(1, 1, 1);
-    badGeo.deleteAttribute('uv');
-    const badMesh = new THREE.Mesh(badGeo, new THREE.MeshStandardMaterial());
-    badMesh.scale.set(0, 2.5, 1); // invalid non-positive scale
-    badRoot.add(badMesh);
-
-    const report = AssetQualityGate.validateObject3D(badRoot, def);
-    expect(report.valid).toBe(false);
-    expect(report.missingUvs).toBeGreaterThan(0);
-    expect(report.missingSockets.length).toBeGreaterThan(0);
-    expect(report.issues.length).toBeGreaterThan(0);
-
-    badGeo.dispose();
-    (badMesh.material as THREE.Material).dispose();
-  });
-
-  it('deduplicates concurrent loads, supports AbortSignal cancellation, and reference-counts runtime leases', async () => {
-    const pipeline = new ProductionAssetPipeline();
-    let generatorCalls = 0;
-
-    pipeline.registerGenerator('gen_arch_watchtower_9m_lod0', () => {
-      generatorCalls++;
-      const g = new THREE.Group();
-      const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
-      g.add(m);
-      return g;
-    });
-
-    const [instA, instB] = await Promise.all([
-      pipeline.acquireAssetLease('arch_watchtower_9m'),
-      pipeline.acquireAssetLease('arch_watchtower_9m'),
-    ]);
-
-    expect(generatorCalls).toBe(1);
-    expect(instA.lease.getRefCount()).toBe(2);
-
-    pipeline.releaseInstance(instA, true);
-    expect(instB.lease.getRefCount()).toBe(1);
-    expect(instB.lease.isDisposed()).toBe(false);
-
-    pipeline.releaseInstance(instB, true);
-    expect(instB.lease.getRefCount()).toBe(0);
-    expect(instB.lease.isDisposed()).toBe(true);
-
-    const abortCtrl = new AbortController();
-    abortCtrl.abort();
-    await expect(
-      pipeline.acquireAssetLease('arch_desert_bunker', {
-        signal: abortCtrl.signal,
-      })
-    ).rejects.toThrow(/abort/i);
-
-    pipeline.disposeAll();
-  });
-
-  it('evaluates FOV-aware screen-space LOD with hysteresis band and shadow culling on LOD2', async () => {
-    const pipeline = new ProductionAssetPipeline();
-    const inst = await pipeline.acquireAssetLease('veh_enemy_apc');
-
-    const lod0Mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 4), new THREE.MeshStandardMaterial());
-    const lod1Mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 4), new THREE.MeshStandardMaterial());
-    const lod2Mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 4), new THREE.MeshStandardMaterial());
-    lod0Mesh.castShadow = true;
-    lod1Mesh.castShadow = true;
-    lod2Mesh.castShadow = true;
-    inst.root.add(lod0Mesh, lod1Mesh, lod2Mesh);
-    inst.registerLodGroup(0, [lod0Mesh]);
-    inst.registerLodGroup(1, [lod1Mesh]);
-    inst.registerLodGroup(2, [lod2Mesh]);
-
-    // Close distance -> LOD0
-    const lodClose = inst.updateScreenSpaceLod(new THREE.Vector3(0, 1.7, 5), 75, 'high');
-    expect(lodClose).toBe(0);
-
-    // Far distance -> LOD2 and shadow casting disabled (> maxShadowCasterLod = 1)
-    const lodFar = inst.updateScreenSpaceLod(new THREE.Vector3(0, 1.7, 440), 75, 'high');
-    expect(lodFar).toBe(2);
-    expect(lod2Mesh.visible).toBe(true);
-    expect(lod2Mesh.castShadow).toBe(false);
-
-    pipeline.releaseInstance(inst, true);
-    pipeline.disposeAll();
-  });
-
-  it('registers all 9 weapons, 7 enemy archetypes, 8 vehicle/air rigs, and 7 architectural kits in the manifest', () => {
-    const defs = globalAssetPipeline.getAllDefinitions();
-    expect(defs.size).toBe(32);
-    for (const w of WEAPON_CATALOG) {
-      expect(defs.has(`weapon_${w.id}`)).toBe(true);
-    }
-    expect(defs.has('operator_arm_rig_v1')).toBe(true);
-    for (const e of EnemyArchetypeSchema.options) {
-      expect(defs.has(`enemy_${e}`)).toBe(true);
-    }
-    for (const v of ['jeep_turret', 'armored_truck', 'light_tank', 'enemy_apc', 'recon_drone', 'attack_helicopter', 'fighter_jet', 'heavy_bomber']) {
-      expect(defs.has(`veh_${v}`)).toBe(true);
-    }
-  });
-});
 
 describe('Stage 5B — Visual Bible, Geometry Reconciliation & 5 Mission World Transformations (TRN-18)', () => {
   it('defines distinct visual profiles for all 5 missions and preserves +9.0m watchtower standard', () => {
@@ -570,8 +424,8 @@ describe('Stage 5B — Context-Adaptive Tactical HUD, Radar Intelligence & Actio
     expect(fullSettings.rendererBackend).toBe('auto');
 
     const bundle = SettingsBundleSchema.parse({});
-    expect(bundle.accessibility.hudMode).toBe('adaptive');
-    expect(bundle.accessibility.hudOpacity).toBeGreaterThan(0);
+    expect(bundle.hud.preset).toBe('minimal_diegetic');
+    expect(bundle.hud.opacity).toBeGreaterThan(0);
 
     uiStore.getState().setTacticalOverviewOpen(false);
     expect(uiStore.getState().tacticalOverviewOpen).toBe(false);

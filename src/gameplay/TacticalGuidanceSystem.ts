@@ -26,6 +26,7 @@ export interface TacticalEvaluationContext {
   extractionBlockReason: string | null;
   isPlayerNearExtraction: boolean;
   activeObjectiveType: string | null;
+  hasPrimaryInteractPrompt?: boolean;
 }
 
 export interface Tier3MechanicCard {
@@ -249,7 +250,7 @@ export class TacticalGuidanceSystem {
       );
     }
 
-    if (ctx.isNearSabotageTarget && !ctx.isInsideVehicle) {
+    if (ctx.isNearSabotageTarget && !ctx.isInsideVehicle && !ctx.hasPrimaryInteractPrompt) {
       return this.activateCandidate(
         {
           id: 'tactical_sabotage_near',
@@ -267,12 +268,28 @@ export class TacticalGuidanceSystem {
       );
     }
 
+    const isHintConditionInvalidated = (hint: ActiveTacticalHint): boolean =>
+      (hint.id === 'critical_find_cover' && ctx.healthPct > 0.35) ||
+      (hint.id === 'critical_reload_now' && (ctx.magazineAmmo > 0 || ctx.isReloading)) ||
+      (hint.id === 'tactical_plant_charge_near' && !ctx.isNearDemolitionCache) ||
+      (hint.id === 'tactical_sabotage_near' &&
+        (!ctx.isNearSabotageTarget || Boolean(ctx.hasPrimaryInteractPrompt))) ||
+      (hint.id === 'tactical_extraction_locked' &&
+        (!ctx.isPlayerNearExtraction || ctx.extractionStatus !== 'locked')) ||
+      (hint.id === 'onboarding_air_lock' && ctx.hasEquippedStingerOrRpg) ||
+      (hint.id === 'onboarding_vehicle_board' &&
+        (!ctx.isNearVehicle || Boolean(ctx.hasPrimaryInteractPrompt)));
+
     // Suppress lower-priority onboarding hints during intense combat
     if (ctx.isIntenseCombat) {
       if (this.activeHint && this.activeHint.priority === 'onboarding') {
         this.activeHint = null;
       }
-      if (this.activeHint && ctx.nowSec < this.activeHintExpiresAtSec) {
+      if (
+        this.activeHint &&
+        ctx.nowSec < this.activeHintExpiresAtSec &&
+        !isHintConditionInvalidated(this.activeHint)
+      ) {
         return this.activeHint;
       }
       this.activeHint = null;
@@ -320,7 +337,7 @@ export class TacticalGuidanceSystem {
       if (candidate) return candidate;
     }
 
-    if (ctx.isNearVehicle && !ctx.isInsideVehicle) {
+    if (ctx.isNearVehicle && !ctx.isInsideVehicle && !ctx.hasPrimaryInteractPrompt) {
       const candidate = this.tryOnboardingCandidate(
         {
           id: 'onboarding_vehicle_board',
@@ -342,13 +359,7 @@ export class TacticalGuidanceSystem {
 
     // Keep current hint alive if it hasn't expired and its condition wasn't invalidated
     if (this.activeHint && ctx.nowSec < this.activeHintExpiresAtSec) {
-      if (
-        (this.activeHint.id === 'critical_find_cover' && ctx.healthPct > 0.35) ||
-        (this.activeHint.id === 'critical_reload_now' && (ctx.magazineAmmo > 0 || ctx.isReloading)) ||
-        (this.activeHint.id === 'tactical_plant_charge_near' && !ctx.isNearDemolitionCache) ||
-        (this.activeHint.id === 'tactical_extraction_locked' && (!ctx.isPlayerNearExtraction || ctx.extractionStatus !== 'locked')) ||
-        (this.activeHint.id === 'onboarding_air_lock' && ctx.hasEquippedStingerOrRpg)
-      ) {
+      if (isHintConditionInvalidated(this.activeHint)) {
         this.activeHint = null;
         return null;
       }

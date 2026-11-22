@@ -62,11 +62,15 @@ export const COLLISION_LAYER = {
   TRIGGER: 1 << 8,
 } as const;
 
+interface SpatialEntry {
+  box: SpatialAABB;
+  keys: number[];
+  visitStamp: number;
+}
+
 export class SpatialHash {
-  private cells = new Map<number, SpatialAABB[]>();
-  private allBoxes = new Map<string, SpatialAABB>();
-  private boxCells = new Map<string, number[]>();
-  private visitedStamp = new Map<string, number>();
+  private cells = new Map<number, SpatialEntry[]>();
+  private entries = new Map<string, SpatialEntry>();
   private stamp = 0;
 
   constructor(public readonly cellSize = 8) {}
@@ -77,10 +81,9 @@ export class SpatialHash {
   }
 
   insert(box: SpatialAABB): void {
-    if (this.allBoxes.has(box.id)) {
+    if (this.entries.has(box.id)) {
       this.removeById(box.id);
     }
-    this.allBoxes.set(box.id, box);
 
     const minCx = Math.floor(box.minX / this.cellSize);
     const maxCx = Math.floor(box.maxX / this.cellSize);
@@ -88,6 +91,13 @@ export class SpatialHash {
     const maxCz = Math.floor(box.maxZ / this.cellSize);
 
     const occupiedKeys: number[] = [];
+    const entry: SpatialEntry = {
+      box,
+      keys: occupiedKeys,
+      visitStamp: 0,
+    };
+    this.entries.set(box.id, entry);
+
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cz = minCz; cz <= maxCz; cz++) {
         const key = this.hashCell(cx, cz);
@@ -97,36 +107,34 @@ export class SpatialHash {
           list = [];
           this.cells.set(key, list);
         }
-        list.push(box);
+        list.push(entry);
       }
     }
-    this.boxCells.set(box.id, occupiedKeys);
   }
 
   private removeById(id: string): void {
-    const existing = this.allBoxes.get(id);
-    const keys = this.boxCells.get(id);
-    if (keys && existing) {
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        const list = this.cells.get(key);
-        if (!list) continue;
-        const idx = list.indexOf(existing);
-        if (idx !== -1) {
-          // Swap-remove in O(1) since broadphase cell order is irrelevant
-          const last = list.length - 1;
-          if (idx !== last) {
-            list[idx] = list[last];
-          }
-          list.pop();
+    const entry = this.entries.get(id);
+    if (!entry) return;
+
+    const keys = entry.keys;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const list = this.cells.get(key);
+      if (!list) continue;
+      const idx = list.indexOf(entry);
+      if (idx !== -1) {
+        // Swap-remove in O(1) since broadphase cell order is irrelevant
+        const last = list.length - 1;
+        if (idx !== last) {
+          list[idx] = list[last];
         }
-        if (list.length === 0) {
-          this.cells.delete(key);
-        }
+        list.pop();
+      }
+      if (list.length === 0) {
+        this.cells.delete(key);
       }
     }
-    this.boxCells.delete(id);
-    this.allBoxes.delete(id);
+    this.entries.delete(id);
   }
 
   remove(box: SpatialAABB): void {
@@ -140,16 +148,15 @@ export class SpatialHash {
     const minCz = Math.floor(box.minZ / this.cellSize);
     const maxCz = Math.floor(box.maxZ / this.cellSize);
 
-    const existing = this.allBoxes.get(box.id);
-    const prevKeys = this.boxCells.get(box.id);
-    if (existing === box && prevKeys) {
+    const entry = this.entries.get(box.id);
+    if (entry && entry.box === box) {
       const expectedCount = (maxCx - minCx + 1) * (maxCz - minCz + 1);
-      if (expectedCount === prevKeys.length) {
+      if (expectedCount === entry.keys.length) {
         let same = true;
         let idx = 0;
         for (let cx = minCx; cx <= maxCx && same; cx++) {
           for (let cz = minCz; cz <= maxCz; cz++) {
-            if (prevKeys[idx++] !== this.hashCell(cx, cz)) {
+            if (entry.keys[idx++] !== this.hashCell(cx, cz)) {
               same = false;
               break;
             }
@@ -172,7 +179,14 @@ export class SpatialHash {
     out: SpatialAABB[]
   ): SpatialAABB[] {
     out.length = 0;
-    const stamp = ++this.stamp;
+    let stamp = ++this.stamp;
+    if (stamp >= 1_000_000_000) {
+      for (const entry of this.entries.values()) {
+        entry.visitStamp = 0;
+      }
+      this.stamp = 1;
+      stamp = 1;
+    }
 
     const minCx = Math.floor(minX / this.cellSize);
     const maxCx = Math.floor(maxX / this.cellSize);
@@ -184,11 +198,11 @@ export class SpatialHash {
         const list = this.cells.get(this.hashCell(cx, cz));
         if (!list) continue;
         for (let i = 0; i < list.length; i++) {
-          const item = list[i];
-          if ((item.layer & layerMask) === 0) continue;
-          if (this.visitedStamp.get(item.id) === stamp) continue;
-          this.visitedStamp.set(item.id, stamp);
-          out.push(item);
+          const entry = list[i];
+          if ((entry.box.layer & layerMask) === 0) continue;
+          if (entry.visitStamp === stamp) continue;
+          entry.visitStamp = stamp;
+          out.push(entry.box);
         }
       }
     }
@@ -206,18 +220,20 @@ export class SpatialHash {
   }
 
   getAllBoxes(): SpatialAABB[] {
-    return Array.from(this.allBoxes.values());
+    const res: SpatialAABB[] = [];
+    for (const entry of this.entries.values()) {
+      res.push(entry.box);
+    }
+    return res;
   }
 
   getBoxCount(): number {
-    return this.allBoxes.size;
+    return this.entries.size;
   }
 
   clear(): void {
     this.cells.clear();
-    this.allBoxes.clear();
-    this.boxCells.clear();
-    this.visitedStamp.clear();
+    this.entries.clear();
     this.stamp = 0;
   }
 }

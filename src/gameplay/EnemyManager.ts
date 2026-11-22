@@ -27,7 +27,7 @@ import {
   stepEnemyLocomotionAnimation,
   updateOccludedSniperLaser,
 } from './ai/EnemyAnimationSync';
-import { stepEnemyLocomotion } from './ai/EnemyLocomotionSolver';
+import { EnemySeparationGrid, stepEnemyLocomotion } from './ai/EnemyLocomotionSolver';
 import {
   buildEnemyDebugInspectorRows,
   buildEnemyPhysicsInspectorRows,
@@ -245,6 +245,16 @@ export class EnemyManager {
     shotsFiredSinceRelocate: number;
   }> = [];
   private readonly _pathActiveUnitsScratch: EnemyUnit[] = [];
+  private readonly enemyById = new Map<string, EnemyUnit>();
+  private readonly separationGrid = new EnemySeparationGrid();
+  private readonly livingSquadmatesBySquad = new Map<string, EnemyUnit[]>();
+  private readonly _coverCandPool: Array<{
+    node: THREE.Vector3;
+    candX: number;
+    candZ: number;
+    maxScore: number;
+  }> = [];
+  private squadmatesCacheDirty = true;
   private readonly _pathQueriesScratch: Array<{
     sx: number;
     sy: number;
@@ -629,7 +639,30 @@ export class EnemyManager {
       };
       this.syncUnitHitboxes(unit);
       this.enemies.push(unit);
+      this.enemyById.set(unit.id, unit);
+      this.squadmatesCacheDirty = true;
     }
+  }
+
+  getUnitById(id: string): EnemyUnit | undefined {
+    return this.enemyById.get(id);
+  }
+
+  private rebuildLivingSquadmatesCache(): void {
+    for (const list of this.livingSquadmatesBySquad.values()) {
+      list.length = 0;
+    }
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (!e.alive) continue;
+      let list = this.livingSquadmatesBySquad.get(e.squadId);
+      if (!list) {
+        list = [];
+        this.livingSquadmatesBySquad.set(e.squadId, list);
+      }
+      list.push(e);
+    }
+    this.squadmatesCacheDirty = false;
   }
 
   fillHitscanTargets(
@@ -696,39 +729,7 @@ export class EnemyManager {
       out.push(t);
       slotIdx++;
     }
-  }
-
-  getHitscanTargets(
-    onEnemyHit: (unit: EnemyUnit, damage: number, isHeadshot: boolean, killed: boolean) => void
-  ): HitscanTarget[] {
-    const out: HitscanTarget[] = [];
-    const hitboxScale = DIFFICULTY_COMBAT_PROFILES[this.difficulty].enemyHitboxScale;
-    for (let i = 0; i < this.enemies.length; i++) {
-      const u = this.enemies[i];
-      if (!u.alive) continue;
-      const scale = (u.archetype === 'heavy_armor' ? 1.22 : 1.1) * hitboxScale;
-      out.push({
-        id: u.id,
-        kind: 'enemy',
-        name: u.displayName,
-        alive: u.alive,
-        position: u.bodyCenter,
-        hitRadius: 0.56 * scale,
-        headPosition: u.headPosition,
-        headRadius: 0.32 * scale,
-        lowerBodyPosition: u.lowerBodyCenter,
-        lowerBodyRadius: 0.42 * scale,
-        torsoBoxMin: u.torsoBoxMin,
-        torsoBoxMax: u.torsoBoxMax,
-        lowerBodyBoxMin: u.lowerBodyBoxMin,
-        lowerBodyBoxMax: u.lowerBodyBoxMax,
-        onHit: (damage, isHeadshot, hitPoint) => {
-          const killed = this.damageUnit(u, damage, isHeadshot, hitPoint);
-          onEnemyHit(u, damage, isHeadshot, killed);
-        },
-      });
-    }
-    return out;
+    return;
   }
 
   damageUnit(
@@ -826,6 +827,8 @@ export class EnemyManager {
     const px = player.position.x;
     const py = player.position.y;
     const pz = player.position.z;
+    this.separationGrid.rebuild(this.enemies);
+    this.rebuildLivingSquadmatesCache();
 
     // Evaluate coordinated squad-level tactics every 0.35s across all active squads (TRN-31)
     this.squadEvalAccum += dt;
@@ -955,7 +958,8 @@ export class EnemyManager {
             collision,
             this.enemies,
             this._whiskerRayHit,
-            this._moveResultScratch
+            this._moveResultScratch,
+            this.separationGrid
           );
         }
         stepEnemyDeathAnimation(u);
@@ -1046,7 +1050,8 @@ export class EnemyManager {
             collision,
             this.enemies,
             this._whiskerRayHit,
-            this._moveResultScratch
+            this._moveResultScratch,
+            this.separationGrid
           );
           return;
         }
@@ -1171,13 +1176,24 @@ export class EnemyManager {
       }
     }
 
-    // 3. Acoustic Hearing & Squad Radio Sighting Check (when LOS is false)
+    // 3. Acoustic Hearing, Close-Proximity Spatial Sense & Squad Radio Sighting Check (when LOS is false)
     const acousticRadius = player.getActiveAcousticRadius(nowSec);
-    const heardPlayer = player.alive && acousticRadius > 0 && dist <= acousticRadius;
+    const playerMoveSpeedSq =
+      player.velocity.x * player.velocity.x + player.velocity.z * player.velocity.z;
+    const closeProximitySense =
+      player.alive &&
+      dist <= 5.5 &&
+      Math.abs(player.position.y - u.position.y) < 3.2 &&
+      (dist <= 3.0 || playerMoveSpeedSq > 0.36 || !player.grounded);
+    const heardPlayer =
+      (player.alive && acousticRadius > 0 && dist <= acousticRadius) || closeProximitySense;
     if (heardPlayer && !rawLos) {
       if (!u.lastKnownPosition) u.lastKnownPosition = new THREE.Vector3();
       u.lastKnownPosition.set(player.position.x, player.position.y + 1.0, player.position.z);
       u.lkpTimestampSec = nowSec;
+      if (closeProximitySense) {
+        u.initialGraceTimerSec = 0;
+      }
     }
 
     const sharedSighting = sq?.getSharedSighting(nowSec) ?? null;
@@ -1208,6 +1224,10 @@ export class EnemyManager {
           if (rawLos) {
             u.state = 'ALERTED';
             u.reactionTimerSec = this.computeReactionDelay(u, dist, diffProfile, false);
+            this.audio.playSpatial('enemy_callout', u.position.x, u.position.y + 1.5, u.position.z, 3, 0.45);
+          } else if (closeProximitySense) {
+            u.state = 'ALERTED';
+            u.reactionTimerSec = Math.min(0.28, this.computeReactionDelay(u, dist, diffProfile, true));
             this.audio.playSpatial('enemy_callout', u.position.x, u.position.y + 1.5, u.position.z, 3, 0.45);
           } else if (heardPlayer || (sharedSighting && sharedSighting.ageSec < 3.0)) {
             u.state = 'SUSPICIOUS';
@@ -1507,7 +1527,9 @@ export class EnemyManager {
     }
 
     const desiredYaw = Math.atan2(lookTargetX - u.position.x, lookTargetZ - u.position.z);
-    const maxTurnRad = (u.state === 'UNAWARE' ? 2.2 : 5.5) * dt;
+    const turnSpeedRadPerSec =
+      u.state === 'UNAWARE' ? 2.2 : dist < 7.0 ? 9.5 : 5.5;
+    const maxTurnRad = turnSpeedRadPerSec * dt;
     u.yaw = this.stepYawTowards(u.yaw, desiredYaw, maxTurnRad);
 
     let moveX = 0;
@@ -1588,7 +1610,12 @@ export class EnemyManager {
       moveX = (hasWaypoint ? u.waypoint.x : u.coverTarget.x) - u.position.x;
       moveZ = (hasWaypoint ? u.waypoint.z : u.coverTarget.z) - u.position.z;
     } else if (u.state === 'REPOSITIONING') {
-      if (
+      if (dist < 6.0 && rawLos && !u.targetLiftId) {
+        // Point-blank strafe: stay facing the player instead of running straight away with back exposed
+        const side = parseInt(u.id.split('_')[1] ?? '1', 10) % 2 === 0 ? 1 : -1;
+        moveX = -toPlayerZ * side * 0.85 - toPlayerX * 0.25;
+        moveZ = toPlayerX * side * 0.85 - toPlayerZ * 0.25;
+      } else if (
         (u.role === 'flanker' ||
           u.squadOrder?.order === 'FLANK_LEFT' ||
           u.squadOrder?.order === 'FLANK_RIGHT') &&
@@ -1641,7 +1668,8 @@ export class EnemyManager {
       collision,
       this.enemies,
       this._whiskerRayHit,
-      this._moveResultScratch
+      this._moveResultScratch,
+      this.separationGrid
     );
     if (locoRes.stuckTriggered) {
       // Invalidate stale waypoint so off-thread 3D A* immediately computes an alternate route
@@ -1909,6 +1937,11 @@ export class EnemyManager {
     preferAway: boolean,
     collision: CollisionWorld
   ): THREE.Vector3 | null {
+    if (this.squadmatesCacheDirty) {
+      this.rebuildLivingSquadmatesCache();
+    }
+    const squadmates = this.livingSquadmatesBySquad.get(unit.squadId);
+
     let bestX = 0;
     let bestY = 0;
     let bestZ = 0;
@@ -1919,6 +1952,8 @@ export class EnemyManager {
       (threatPos.y > 0.4 ? threatPos.y : collision.getGroundHeightAt(threatPos.x, threatPos.z)) +
       1.45;
 
+    // Stage 1: Zero-physics heuristic upper-bound scoring over nodes
+    let candCount = 0;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       const dx = n.x - threatPos.x;
@@ -1929,6 +1964,60 @@ export class EnemyManager {
       const inv = 1 / dThreatNode;
       const candX = n.x + dx * inv * 1.1;
       const candZ = n.z + dz * inv * 1.1;
+      const dSelfXZ = Math.hypot(unit.position.x - candX, unit.position.z - candZ);
+      const dThreatCand = Math.hypot(candX - threatPos.x, candZ - threatPos.z);
+      const maxParapet = !preferAway ? 3.5 : 1.0;
+      const maxElev = n.y > 0.4 ? 2.5 : 0;
+      const maxScore =
+        (preferAway ? dThreatCand : -Math.abs(dThreatCand - 22)) -
+        dSelfXZ * 0.8 +
+        maxParapet +
+        maxElev;
+
+      let slot = this._coverCandPool[candCount];
+      if (!slot) {
+        slot = { node: n, candX, candZ, maxScore };
+        this._coverCandPool[candCount] = slot;
+      } else {
+        slot.node = n;
+        slot.candX = candX;
+        slot.candZ = candZ;
+        slot.maxScore = maxScore;
+      }
+      candCount++;
+    }
+
+    // Partial selection sort: rank top-16 candidates descending; expand only if none of top-16 succeed
+    const topLimit = Math.min(candCount, 16);
+    for (let k = 0; k < candCount; k++) {
+      if (k < topLimit) {
+        let bestIdx = k;
+        let bestMax = this._coverCandPool[k].maxScore;
+        for (let m = k + 1; m < candCount; m++) {
+          if (this._coverCandPool[m].maxScore > bestMax) {
+            bestMax = this._coverCandPool[m].maxScore;
+            bestIdx = m;
+          }
+        }
+        if (bestIdx !== k) {
+          const tmp = this._coverCandPool[k];
+          this._coverCandPool[k] = this._coverCandPool[bestIdx];
+          this._coverCandPool[bestIdx] = tmp;
+        }
+      } else if (found) {
+        break;
+      }
+
+      const cand = this._coverCandPool[k];
+      if (found && cand.maxScore <= bestScore) {
+        if (k < topLimit) break;
+        continue;
+      }
+
+      const n = cand.node;
+      const candX = cand.candX;
+      const candZ = cand.candZ;
+
       const candY =
         n.y > 0.4
           ? collision.getSupportHeightAt(
@@ -1946,24 +2035,26 @@ export class EnemyManager {
         continue;
       }
 
-      // Enforce >= 2.2m separation from any living squadmate's coverTarget or position
+      // Enforce >= 2.2m separation from any living squadmate's coverTarget or position (O(squadSize))
       let claimedBySquad = false;
-      for (let j = 0; j < this.enemies.length; j++) {
-        const other = this.enemies[j];
-        if (!other.alive || other.id === unit.id || other.squadId !== unit.squadId) continue;
-        if (other.coverTarget) {
-          const cdx = other.coverTarget.x - candX;
-          const cdz = other.coverTarget.z - candZ;
-          if (cdx * cdx + cdz * cdz < 2.2 * 2.2) {
+      if (squadmates) {
+        for (let j = 0; j < squadmates.length; j++) {
+          const other = squadmates[j];
+          if (!other.alive || other.id === unit.id) continue;
+          if (other.coverTarget) {
+            const cdx = other.coverTarget.x - candX;
+            const cdz = other.coverTarget.z - candZ;
+            if (cdx * cdx + cdz * cdz < 2.2 * 2.2) {
+              claimedBySquad = true;
+              break;
+            }
+          }
+          const pdx = other.position.x - candX;
+          const pdz = other.position.z - candZ;
+          if (pdx * pdx + pdz * pdz < 2.2 * 2.2) {
             claimedBySquad = true;
             break;
           }
-        }
-        const pdx = other.position.x - candX;
-        const pdz = other.position.z - candZ;
-        if (pdx * pdx + pdz * pdz < 2.2 * 2.2) {
-          claimedBySquad = true;
-          break;
         }
       }
       if (claimedBySquad) continue;
@@ -2110,24 +2201,8 @@ export class EnemyManager {
     }
   }
 
-  getPositionsForProximity(): Array<{ position: THREE.Vector3; radius: number }> {
-    const out: Array<{ position: THREE.Vector3; radius: number }> = [];
-    for (let i = 0; i < this.enemies.length; i++) {
-      if (this.enemies[i].alive) {
-        out.push({ position: this.enemies[i].bodyCenter, radius: 0.95 });
-      }
-    }
-    return out;
-  }
-
   fillMiniMapBlips(out: MiniMapBlip[], playerPos?: THREE.Vector3): void {
     fillEnemyMiniMapBlips(this.enemies, this._blipPool, out, playerPos);
-  }
-
-  getMiniMapBlips(playerPos?: THREE.Vector3): MiniMapBlip[] {
-    const blips: MiniMapBlip[] = [];
-    this.fillMiniMapBlips(blips, playerPos);
-    return blips.map((b) => ({ ...b }));
   }
 
   clear(): void {
@@ -2135,6 +2210,9 @@ export class EnemyManager {
       this.cargoLiftManager?.cancelRequestsForEntity(this.enemies[i].id);
     }
     this.enemies = [];
+    this.enemyById.clear();
+    this.livingSquadmatesBySquad.clear();
+    this.squadmatesCacheDirty = true;
     this.waveSeq = 0;
     this.pathSyncAccum = 0;
     this.squadEvalAccum = 0;

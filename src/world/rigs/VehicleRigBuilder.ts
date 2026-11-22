@@ -115,7 +115,6 @@ export function buildVehicleRig(
   for (const sx of [-w * 0.46, w * 0.46]) {
     const doorSill = new THREE.Mesh(sillGeo, hullMat);
     doorSill.position.set(sx, 1.16, -l * 0.04);
-    doorSill.castShadow = true;
     chassisGroup.add(doorSill);
   }
 
@@ -234,14 +233,12 @@ export function buildVehicleRig(
   // Front armored bullbar bumper
   const frontBumper = new THREE.Mesh(bumperGeo, trimMat);
   frontBumper.position.set(0, 0.76, -l * 0.5 - 0.08);
-  frontBumper.castShadow = true;
   chassisGroup.add(frontBumper);
 
   // Side armored reactive-armor skirt plates
   for (const sx of [-w * 0.51, w * 0.51]) {
     const skirt = new THREE.Mesh(skirtGeo, trimMat);
     skirt.position.set(sx, 0.88, 0);
-    skirt.castShadow = true;
     chassisGroup.add(skirt);
   }
 
@@ -294,7 +291,6 @@ export function buildVehicleRig(
     wheelAssembly.position.set(x, y, z);
 
     const tire = new THREE.Mesh(wheelGeo, tireMat);
-    tire.castShadow = true;
     wheelAssembly.add(tire);
 
     const hub = new THREE.Mesh(hubGeo, trimMat);

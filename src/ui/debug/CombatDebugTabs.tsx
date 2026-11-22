@@ -187,7 +187,7 @@ export const PhysicsDebugTab = React.memo(function PhysicsDebugTab({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <MetricTile
           label="Physics Solver"
-          value={physics.rapierInitialized ? 'Rapier3D WASM + BVH' : 'PhysicsWorld + BVH'}
+          value="PhysicsWorld + BVH"
           sub={`Fixed Step: ${Math.round(1 / physics.fixedTimestepSec)}Hz (${(physics.fixedTimestepSec * 1000).toFixed(1)}ms)`}
         />
         <MetricTile

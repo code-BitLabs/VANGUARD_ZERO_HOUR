@@ -15,7 +15,8 @@ import { settingsStore } from '@/src/stores/settingsStore';
 describe('Stage 4B: Mission Lifecycle, Stage-Gated Progression, Target-Bound Demolition & Tactical Guidance', () => {
   beforeEach(() => {
     missionSelectionStore.getState().resetDismissedHints();
-    settingsStore.getState().updateAccessibility({ tacticalHints: true, subtitles: true });
+    settingsStore.getState().updateGameplay({ tacticalGuidanceHints: true });
+    settingsStore.getState().updateAccessibility({ subtitles: true });
   });
 
   describe('TRN-13 — Mission Lifecycle State Machine Integrity', () => {

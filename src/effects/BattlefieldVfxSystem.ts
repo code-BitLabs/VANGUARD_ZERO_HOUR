@@ -101,6 +101,7 @@ export class BattlefieldVfxSystem {
       slots: ParticleSlot[];
       cursor: number;
       capacity: number;
+      activeCount: number;
     }
   >;
   private readonly textures: THREE.Texture[] = [];
@@ -109,6 +110,11 @@ export class BattlefieldVfxSystem {
 
   private readonly dummy = new THREE.Object3D();
   private readonly tmpColor = new THREE.Color();
+  private readonly _tmpUpAxis = new THREE.Vector3(0, 1, 0);
+  private readonly _tmpEmitDir = new THREE.Vector3();
+  private readonly _tmpNegDir = new THREE.Vector3();
+  private readonly _tmpWindDir = new THREE.Vector3();
+  private readonly _tmpSplashOrigin = new THREE.Vector3();
   private readonly windVector = new THREE.Vector3(2.2, 0, 0.8);
   private readonly shelters: IndoorShelterVolume[] = [];
 
@@ -219,10 +225,10 @@ export class BattlefieldVfxSystem {
   public emitEffect(
     type: BattlefieldVfxType,
     origin: THREE.Vector3,
-    direction = new THREE.Vector3(0, 1, 0),
+    direction: THREE.Vector3 = this._tmpUpAxis,
     intensity = 1.0
   ): void {
-    const dir = direction.clone().normalize();
+    const dir = this._tmpEmitDir.copy(direction).normalize();
     const scaledCount = (base: number) => Math.max(1, Math.round(base * intensity * this.densityScale));
 
     switch (type) {
@@ -334,7 +340,7 @@ export class BattlefieldVfxSystem {
         });
         break;
       case 'fire':
-        this.spawnBurst('additive', origin, new THREE.Vector3(0, 1, 0), scaledCount(5), {
+        this.spawnBurst('additive', origin, this._tmpUpAxis, scaledCount(5), {
           speed: [0.9, 2.6],
           spread: 0.38,
           life: [0.3, 0.68],
@@ -346,7 +352,7 @@ export class BattlefieldVfxSystem {
         });
         break;
       case 'smoke_plumes':
-        this.spawnBurst('smoke', origin, new THREE.Vector3(0, 1, 0), scaledCount(4), {
+        this.spawnBurst('smoke', origin, this._tmpUpAxis, scaledCount(4), {
           speed: [1.2, 2.6],
           spread: 0.32,
           life: [1.6, 3.2],
@@ -358,7 +364,8 @@ export class BattlefieldVfxSystem {
         });
         break;
       case 'rocket_trails':
-        this.spawnBurst('additive', origin, dir.clone().negate(), scaledCount(2), {
+        this._tmpNegDir.copy(dir).negate();
+        this.spawnBurst('additive', origin, this._tmpNegDir, scaledCount(2), {
           speed: [1.0, 2.8],
           spread: 0.22,
           life: [0.12, 0.25],
@@ -368,7 +375,7 @@ export class BattlefieldVfxSystem {
           scaleEnd: 0.06,
           colorHex: 0xff9a3d,
         });
-        this.spawnBurst('smoke', origin, dir.clone().negate(), scaledCount(3), {
+        this.spawnBurst('smoke', origin, this._tmpNegDir, scaledCount(3), {
           speed: [0.5, 1.5],
           spread: 0.28,
           life: [0.55, 1.25],
@@ -404,7 +411,7 @@ export class BattlefieldVfxSystem {
         });
         break;
       case 'rain_splash':
-        this.spawnBurst('smoke', origin, new THREE.Vector3(0, 1, 0), scaledCount(2), {
+        this.spawnBurst('smoke', origin, this._tmpUpAxis, scaledCount(2), {
           speed: [0.6, 1.6],
           spread: 0.8,
           life: [0.14, 0.28],
@@ -416,7 +423,8 @@ export class BattlefieldVfxSystem {
         });
         break;
       case 'searchlight_motes':
-        this.spawnBurst('smoke', origin, this.windVector.clone().normalize(), scaledCount(2), {
+        this._tmpWindDir.copy(this.windVector).normalize();
+        this.spawnBurst('smoke', origin, this._tmpWindDir, scaledCount(2), {
           speed: [0.2, 0.7],
           spread: 0.9,
           life: [1.2, 2.4],
@@ -535,8 +543,10 @@ export class BattlefieldVfxSystem {
     }
 
     const batchKinds: VfxBatchKind[] = ['additive', 'smoke', 'debris', 'casing', 'rain'];
-    for (const kind of batchKinds) {
+    for (let b = 0; b < batchKinds.length; b++) {
+      const kind = batchKinds[b];
       const batch = this.batches[kind];
+      if (batch.activeCount === 0) continue;
       let dirty = false;
       for (let i = 0; i < batch.capacity; i++) {
         const s = batch.slots[i];
@@ -545,6 +555,7 @@ export class BattlefieldVfxSystem {
         s.life += dt;
         if (s.life >= s.maxLife) {
           s.active = false;
+          batch.activeCount = Math.max(0, batch.activeCount - 1);
           this.dummy.position.set(0, -9999, 0);
           this.dummy.scale.setScalar(0.0001);
           this.dummy.updateMatrix();
@@ -564,9 +575,11 @@ export class BattlefieldVfxSystem {
         // Rain ground splash & indoor shelter cut
         if (kind === 'rain' && (s.py <= 0.1 || this.isPointSheltered(s.px, s.py, s.pz))) {
           if (s.py <= 0.1 && (i % 4 === 0)) {
-            this.emitEffect('rain_splash', new THREE.Vector3(s.px, 0.06, s.pz), new THREE.Vector3(0, 1, 0), 0.5);
+            this._tmpSplashOrigin.set(s.px, 0.06, s.pz);
+            this.emitEffect('rain_splash', this._tmpSplashOrigin, this._tmpUpAxis, 0.5);
           }
           s.active = false;
+          batch.activeCount = Math.max(0, batch.activeCount - 1);
           this.dummy.position.set(0, -9999, 0);
           this.dummy.scale.setScalar(0.0001);
           this.dummy.updateMatrix();
@@ -614,9 +627,7 @@ export class BattlefieldVfxSystem {
     let totalCapacity = 0;
     for (const batch of Object.values(this.batches)) {
       totalCapacity += batch.capacity;
-      for (const s of batch.slots) {
-        if (s.active) activeParticles += 1;
-      }
+      activeParticles += batch.activeCount;
     }
     return {
       drawCalls: 5,
@@ -628,6 +639,7 @@ export class BattlefieldVfxSystem {
 
   public clearAll(): void {
     for (const batch of Object.values(this.batches)) {
+      batch.activeCount = 0;
       for (let i = 0; i < batch.capacity; i++) {
         batch.slots[i].active = false;
         this.dummy.position.set(0, -9999, 0);
@@ -654,7 +666,7 @@ export class BattlefieldVfxSystem {
     geo: THREE.BufferGeometry,
     mat: THREE.Material,
     capacity: number
-  ): { mesh: THREE.InstancedMesh; slots: ParticleSlot[]; cursor: number; capacity: number } {
+  ): { mesh: THREE.InstancedMesh; slots: ParticleSlot[]; cursor: number; capacity: number; activeCount: number } {
     const safeCap = Math.max(16, capacity);
     const mesh = new THREE.InstancedMesh(geo, mat, safeCap);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -696,7 +708,7 @@ export class BattlefieldVfxSystem {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     this.root.add(mesh);
-    return { mesh, slots, cursor: 0, capacity: safeCap };
+    return { mesh, slots, cursor: 0, capacity: safeCap, activeCount: 0 };
   }
 
   private spawnBurst(
@@ -765,7 +777,10 @@ export class BattlefieldVfxSystem {
     const idx = batch.cursor;
     batch.cursor = (batch.cursor + 1) % batch.capacity;
     const slot = batch.slots[idx];
-    slot.active = true;
+    if (!slot.active) {
+      batch.activeCount++;
+      slot.active = true;
+    }
     slot.px = init.px;
     slot.py = init.py;
     slot.pz = init.pz;

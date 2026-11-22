@@ -11,7 +11,7 @@ function resolveBrowserLocalStorage(): Storage | null {
   return null;
 }
 
-export function isStorageQuotaError(err: unknown): boolean {
+function isStorageQuotaError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as { name?: string; code?: number };
   return (

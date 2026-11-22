@@ -118,6 +118,18 @@ export class CollisionSystem {
     normalZ: 0,
     collider: null,
   };
+  private readonly _clearanceContact2D: CircleBoxContact2D = {
+    overlaps: false,
+    penetration: 0,
+    normalX: 0,
+    normalZ: 0,
+    contactX: 0,
+    contactZ: 0,
+  };
+  private readonly _clearanceResultScratch: { clear: boolean; blocker: SpatialAABB | null } = {
+    clear: true,
+    blocker: null,
+  };
   private readonly slopeRayScratch: OrientedSlopeRayHit = {
     hit: false,
     distance: 0,
@@ -692,26 +704,24 @@ export class CollisionSystem {
 
     const headY = feetY + targetHeight;
     const minCheckY = feetY + 0.15;
-    const contact2D: CircleBoxContact2D = {
-      overlaps: false,
-      penetration: 0,
-      normalX: 0,
-      normalZ: 0,
-      contactX: 0,
-      contactZ: 0,
-    };
+    const contact2D = this._clearanceContact2D;
+    const out = this._clearanceResultScratch;
 
     for (let i = 0; i < candidates.length; i++) {
       const box = candidates[i];
       if (headY <= box.minY + 0.01 || minCheckY >= box.maxY - 0.01) continue;
       if (this.testCircleBox2D(x, z, checkRadius, box, contact2D)) {
-        return { clear: false, blocker: box };
+        out.clear = false;
+        out.blocker = box;
+        return out;
       }
     }
-    return { clear: true, blocker: null };
+    out.clear = true;
+    out.blocker = null;
+    return out;
   }
 
-  private hasVerticalCapsuleClearanceFast(
+  public hasVerticalCapsuleClearanceFast(
     spatialHash: SpatialHash,
     x: number,
     feetY: number,

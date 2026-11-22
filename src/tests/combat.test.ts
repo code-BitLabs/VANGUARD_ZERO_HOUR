@@ -707,7 +707,8 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     const unit = localEn.getUnits()[0];
     unit.position.set(0, 0, -12);
 
-    const targets = localEn.getHitscanTargets(() => {});
+    const targets: import('@/src/gameplay/WeaponSystem').HitscanTarget[] = [];
+    localEn.fillHitscanTargets(targets, () => {});
     expect(targets).toHaveLength(1);
     expect(targets[0].lowerBodyBoxMin).toBeDefined();
     expect(targets[0].torsoBoxMin).toBeDefined();
@@ -739,6 +740,8 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
     cam.position.set(0, 1.1, 0);
     cam.lookAt(0, 1.1, -12);
     cam.updateMatrixWorld(true);
+    const targets2: typeof targets = [];
+    localEn.fillHitscanTargets(targets2, () => {});
     (
       weapons as unknown as {
         fireShot: (
@@ -755,7 +758,7 @@ describe('Tactical Combat AI, Coordinator, Physical Cover Ballistics & Debug Tel
       player,
       cam,
       collision,
-      localEn.getHitscanTargets(() => {}),
+      targets2,
       () => {}
     );
     expect(unit.health).toBeLessThan(hp1);

@@ -13,8 +13,7 @@ export interface AudioSettingsStoreState extends AudioSettings {
 const initial = SettingsManager.load().audio;
 
 function persistAudio(audio: AudioSettings) {
-  const current = SettingsManager.load();
-  SettingsManager.save({ ...current, audio });
+  SettingsManager.patchAndSave({ audio });
 }
 
 export const audioSettingsStore = createStore<AudioSettingsStoreState>()(

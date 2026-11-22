@@ -503,7 +503,6 @@ export function SettingsPanel({
                     step={0.05}
                     onValueChange={(uiScale) => {
                       updateDisplay({ uiScale });
-                      updateAccessibility({ uiScale });
                     }}
                   />
                 </div>

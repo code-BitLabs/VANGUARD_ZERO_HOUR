@@ -435,9 +435,6 @@ export const InputSettingsSchema = z.object({
 });
 export type InputSettings = z.infer<typeof InputSettingsSchema>;
 
-export const HudModeSchema = z.enum(['adaptive', 'minimal', 'expanded']);
-export type HudModeSetting = z.infer<typeof HudModeSchema>;
-
 export const SubtitleSizeSchema = z.enum(['sm', 'md', 'lg']);
 export type SubtitleSize = z.infer<typeof SubtitleSizeSchema>;
 
@@ -446,16 +443,10 @@ export const AccessibilitySettingsSchema = z.object({
   subtitles: z.boolean().default(true),
   subtitleSize: SubtitleSizeSchema.default('md'),
   subtitleBackdrop: z.boolean().default(true),
-  tacticalHints: z.boolean().default(true),
   reducedMotion: z.boolean().default(false),
   highContrastBorders: z.boolean().default(false),
   largeTextMode: z.boolean().default(false),
   screenShakeReduction: z.boolean().default(false),
-  uiScale: z.number().min(0.85).max(1.25).default(1.0),
-  hudMode: HudModeSchema.default('adaptive'),
-  hudOpacity: z.number().min(0.5).max(1.0).default(0.92),
-  showRadar: z.boolean().default(true),
-  showCompass: z.boolean().default(true),
 });
 export type AccessibilitySettings = z.infer<typeof AccessibilitySettingsSchema>;
 
@@ -484,7 +475,7 @@ export const SettingsCategoryIdSchema = z.enum([
 export type SettingsCategoryId = z.infer<typeof SettingsCategoryIdSchema>;
 
 export const SettingsBundleSchema = z.object({
-  version: z.union([z.literal(1), z.literal(2)]).default(2),
+  version: z.literal(2).default(2),
   display: DisplaySettingsSchema.default(() => DisplaySettingsSchema.parse({})),
   graphics: GraphicsSettingsSchema.default(() => GraphicsSettingsSchema.parse({})),
   audio: AudioSettingsSchema.default(() => AudioSettingsSchema.parse({})),
@@ -498,83 +489,29 @@ export type SettingsBundle = z.infer<typeof SettingsBundleSchema>;
 
 export const DEFAULT_SETTINGS: SettingsBundle = SettingsBundleSchema.parse({});
 
-/**
- * Lossless v1 -> v2 Settings Migration.
- * Preserves all v1 user choices (sensitivity, bindings, volume, graphics, accessibility)
- * while hydrating new v2 Display, Gameplay, and HUD categories coherently.
- */
 export function migrateSettingsBundle(raw: unknown): {
   bundle: SettingsBundle;
-  migratedFromV1: boolean;
   recoveredFromCorruption: boolean;
 } {
   if (!raw || typeof raw !== 'object') {
     return {
       bundle: SettingsBundleSchema.parse({}),
-      migratedFromV1: false,
       recoveredFromCorruption: Boolean(raw),
     };
   }
-  const record = raw as Record<string, unknown>;
-  const isV1 = record.version === 1 || record.version === undefined;
-
-  if (isV1) {
-    const legacyAcc = (record.accessibility ?? {}) as Record<string, unknown>;
-    const legacyGfx = (record.graphics ?? {}) as Record<string, unknown>;
-    const hydrated: Record<string, unknown> = {
-      ...record,
-      version: 2,
-      display: {
-        ...(typeof record.display === 'object' && record.display ? record.display : {}),
-        uiScale: typeof legacyAcc.uiScale === 'number' ? legacyAcc.uiScale : 1.0,
-      },
-      gameplay: {
-        ...(typeof record.gameplay === 'object' && record.gameplay ? record.gameplay : {}),
-        tacticalGuidanceHints:
-          typeof legacyAcc.tacticalHints === 'boolean' ? legacyAcc.tacticalHints : true,
-      },
-      hud: {
-        ...(typeof record.hud === 'object' && record.hud ? record.hud : {}),
-        scale: typeof legacyAcc.uiScale === 'number' ? legacyAcc.uiScale : 1.0,
-        opacity: typeof legacyAcc.hudOpacity === 'number' ? legacyAcc.hudOpacity : 0.9,
-        showRadar: typeof legacyAcc.showRadar === 'boolean' ? legacyAcc.showRadar : true,
-        showCompass: typeof legacyAcc.showCompass === 'boolean' ? legacyAcc.showCompass : true,
-        preset:
-          legacyAcc.hudMode === 'minimal'
-            ? 'minimal_diegetic'
-            : legacyAcc.hudMode === 'expanded'
-              ? 'full_tactical'
-              : 'minimal_diegetic',
-      },
-      graphics: {
-        ...legacyGfx,
-        qualityProfile:
-          legacyGfx.qualityProfile ??
-          (legacyGfx.qualityMode === 'manual' ? 'manual' : 'auto_adaptive'),
-      },
-    };
-    const parsed = SettingsBundleSchema.safeParse(hydrated);
-    if (parsed.success) {
-      return {
-        bundle: { ...parsed.data, version: 2 },
-        migratedFromV1: true,
-        recoveredFromCorruption: false,
-      };
-    }
-  }
-
-  const parsed = SettingsBundleSchema.safeParse({ ...record, version: 2 });
+  const parsed = SettingsBundleSchema.safeParse({
+    ...(raw as Record<string, unknown>),
+    version: 2,
+  });
   if (parsed.success) {
     return {
-      bundle: { ...parsed.data, version: 2 },
-      migratedFromV1: false,
+      bundle: parsed.data,
       recoveredFromCorruption: false,
     };
   }
 
   return {
     bundle: SettingsBundleSchema.parse({}),
-    migratedFromV1: false,
     recoveredFromCorruption: true,
   };
 }

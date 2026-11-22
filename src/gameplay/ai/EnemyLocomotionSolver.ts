@@ -12,6 +12,101 @@ export const ENEMY_MAX_FALL_SPEED = -24.0;
 const SEPARATION_RADIUS = 0.94;
 const SEPARATION_VERTICAL_BAND = 1.65;
 
+const SEP_GRID_CELL_SIZE = 2.0;
+const SEP_GRID_INV_CELL = 1 / SEP_GRID_CELL_SIZE;
+const SEP_GRID_DIM = 160; // covers [-160, 160) m cleanly
+const SEP_GRID_HALF_EXTENT = 160;
+const SEP_GRID_CELL_COUNT = SEP_GRID_DIM * SEP_GRID_DIM;
+
+export class EnemySeparationGrid {
+  private readonly head = new Int32Array(SEP_GRID_CELL_COUNT);
+  private next = new Int32Array(128);
+  private overflowIndices: number[] = [];
+  private unitToIndex = new Map<EnemyLocomotionUnit, number>();
+
+  rebuild(units: readonly EnemyLocomotionUnit[]): void {
+    this.head.fill(-1);
+    this.overflowIndices.length = 0;
+    this.unitToIndex.clear();
+    if (this.next.length < units.length) {
+      this.next = new Int32Array(Math.max(128, units.length * 2));
+    }
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      this.unitToIndex.set(u, i);
+      if (!u.alive) continue;
+      const cx = Math.floor((u.position.x + SEP_GRID_HALF_EXTENT) * SEP_GRID_INV_CELL);
+      const cz = Math.floor((u.position.z + SEP_GRID_HALF_EXTENT) * SEP_GRID_INV_CELL);
+      if (cx < 0 || cx >= SEP_GRID_DIM || cz < 0 || cz >= SEP_GRID_DIM) {
+        this.overflowIndices.push(i);
+        continue;
+      }
+      const cellIdx = cz * SEP_GRID_DIM + cx;
+      this.next[i] = this.head[cellIdx];
+      this.head[cellIdx] = i;
+    }
+  }
+
+  accumulateSeparation(
+    u: EnemyLocomotionUnit,
+    units: readonly EnemyLocomotionUnit[],
+    out: { vx: number; vz: number }
+  ): void {
+    const cx = Math.floor((u.position.x + SEP_GRID_HALF_EXTENT) * SEP_GRID_INV_CELL);
+    const cz = Math.floor((u.position.z + SEP_GRID_HALF_EXTENT) * SEP_GRID_INV_CELL);
+    const rSqMax = SEPARATION_RADIUS * SEPARATION_RADIUS;
+
+    if (cx < 0 || cx >= SEP_GRID_DIM || cz < 0 || cz >= SEP_GRID_DIM) {
+      for (let k = 0; k < this.overflowIndices.length; k++) {
+        const other = units[this.overflowIndices[k]];
+        if (!other.alive || other.id === u.id) continue;
+        if (Math.abs(u.position.y - other.position.y) > SEPARATION_VERTICAL_BAND) continue;
+        const sdx = u.position.x - other.position.x;
+        const sdz = u.position.z - other.position.z;
+        const sDistSq = sdx * sdx + sdz * sdz;
+        if (sDistSq > 1e-5 && sDistSq < rSqMax) {
+          const sDist = Math.sqrt(sDistSq);
+          const push = ((SEPARATION_RADIUS - sDist) / SEPARATION_RADIUS) * 3.1;
+          out.vx += (sdx / sDist) * push;
+          out.vz += (sdz / sDist) * push;
+        }
+      }
+      return;
+    }
+
+    const minCx = Math.max(0, cx - 1);
+    const maxCx = Math.min(SEP_GRID_DIM - 1, cx + 1);
+    const minCz = Math.max(0, cz - 1);
+    const maxCz = Math.min(SEP_GRID_DIM - 1, cz + 1);
+
+    for (let gz = minCz; gz <= maxCz; gz++) {
+      const rowOff = gz * SEP_GRID_DIM;
+      for (let gx = minCx; gx <= maxCx; gx++) {
+        let j = this.head[rowOff + gx];
+        while (j !== -1) {
+          const other = units[j];
+          if (other.alive && other.id !== u.id) {
+            if (Math.abs(u.position.y - other.position.y) <= SEPARATION_VERTICAL_BAND) {
+              const sdx = u.position.x - other.position.x;
+              const sdz = u.position.z - other.position.z;
+              const sDistSq = sdx * sdx + sdz * sdz;
+              if (sDistSq > 1e-5 && sDistSq < rSqMax) {
+                const sDist = Math.sqrt(sDistSq);
+                const push = ((SEPARATION_RADIUS - sDist) / SEPARATION_RADIUS) * 3.1;
+                out.vx += (sdx / sDist) * push;
+                out.vz += (sdz / sDist) * push;
+              }
+            }
+          }
+          j = this.next[j];
+        }
+      }
+    }
+  }
+}
+
+const _sepAccumScratch = { vx: 0, vz: 0 };
+
 export interface EnemyLocomotionUnit {
   id: string;
   alive: boolean;
@@ -59,7 +154,8 @@ export function stepEnemyLocomotion(
   collision: CollisionWorld,
   allEnemies: readonly EnemyLocomotionUnit[],
   whiskerRayHit: RayHit,
-  moveResultScratch: CharacterMoveResult
+  moveResultScratch: CharacterMoveResult,
+  separationGrid?: EnemySeparationGrid
 ): EnemyLocomotionStepResult {
   const safeDt = Math.max(1e-4, Math.min(dt, 0.05));
   const agentProf = getAgentTraversalProfile(u.agentProfile);
@@ -189,18 +285,26 @@ export function stepEnemyLocomotion(
     vz = (steerZ / steerLen) * desiredSpeed;
 
     // Elevation-gated local enemy separation (never pushes units across vertical floor layers!)
-    for (let j = 0; j < allEnemies.length; j++) {
-      const other = allEnemies[j];
-      if (!other.alive || other.id === u.id) continue;
-      if (Math.abs(u.position.y - other.position.y) > SEPARATION_VERTICAL_BAND) continue;
-      const sdx = u.position.x - other.position.x;
-      const sdz = u.position.z - other.position.z;
-      const sDistSq = sdx * sdx + sdz * sdz;
-      if (sDistSq > 1e-5 && sDistSq < SEPARATION_RADIUS * SEPARATION_RADIUS) {
-        const sDist = Math.sqrt(sDistSq);
-        const push = ((SEPARATION_RADIUS - sDist) / SEPARATION_RADIUS) * 3.1;
-        vx += (sdx / sDist) * push;
-        vz += (sdz / sDist) * push;
+    if (separationGrid) {
+      _sepAccumScratch.vx = vx;
+      _sepAccumScratch.vz = vz;
+      separationGrid.accumulateSeparation(u, allEnemies, _sepAccumScratch);
+      vx = _sepAccumScratch.vx;
+      vz = _sepAccumScratch.vz;
+    } else {
+      for (let j = 0; j < allEnemies.length; j++) {
+        const other = allEnemies[j];
+        if (!other.alive || other.id === u.id) continue;
+        if (Math.abs(u.position.y - other.position.y) > SEPARATION_VERTICAL_BAND) continue;
+        const sdx = u.position.x - other.position.x;
+        const sdz = u.position.z - other.position.z;
+        const sDistSq = sdx * sdx + sdz * sdz;
+        if (sDistSq > 1e-5 && sDistSq < SEPARATION_RADIUS * SEPARATION_RADIUS) {
+          const sDist = Math.sqrt(sDistSq);
+          const push = ((SEPARATION_RADIUS - sDist) / SEPARATION_RADIUS) * 3.1;
+          vx += (sdx / sDist) * push;
+          vz += (sdz / sDist) * push;
+        }
       }
     }
 

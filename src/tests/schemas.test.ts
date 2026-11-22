@@ -13,9 +13,10 @@ describe('Zod 4 Schemas & Save Migration', () => {
     expect(MISSION_CATALOG.map((m) => m.id)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it('migrates v1 progression save cleanly to v2 schema', () => {
+  it('normalizes canonical v2 progression saves and backfills Stage 7 fields cleanly', () => {
     const res = migrateProgressionSave({
-      version: 1,
+      version: 2,
+      schemaRevision: 2,
       xp: 1450,
       requisitionPoints: 720,
       achievements: ['first_blood'],
@@ -26,11 +27,12 @@ describe('Zod 4 Schemas & Save Migration', () => {
         assault_rifle: { damage: 2, recoil: 1, capacity: 0, reload: 0 },
       },
     });
-    expect(res.migratedFromV1).toBe(true);
     expect(res.recoveredFromCorruption).toBe(false);
     expect(res.save.version).toBe(2);
+    expect(res.save.schemaRevision).toBe(4);
     expect(res.save.xp).toBe(1450);
     expect(res.save.missionRecords['1']?.bestGrade).toBe('A');
+    expect(res.save.squadRoster.length).toBeGreaterThanOrEqual(5);
   });
 
   it('recovers safely from corrupted save payload without throwing', () => {

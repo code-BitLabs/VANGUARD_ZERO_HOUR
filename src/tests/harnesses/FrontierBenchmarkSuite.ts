@@ -95,13 +95,13 @@ export const FRONTIER_TECHNOLOGY_DECISIONS: readonly TechnologyDecisionRecord[] 
     backendContract: 'src/assets/PbrMaterialLibrary.ts',
   },
   {
-    technology: '@radix-ui/react-* + react-hook-form + zod + xstate + zustand + motion + cva',
-    evaluatedVersion: 'Installed in package.json',
+    technology: '@radix-ui/react-dialog/slider/switch/tabs + zod + xstate + zustand + cva',
+    evaluatedVersion: 'Active in package.json',
     license: 'MIT',
     decision: 'adopted',
     evidenceSummary:
-      'All justified modern UI/state libraries are already installed; rejected redundant Base UI, Yuka, camera-controls, and nipplejs to avoid competing authorities and bundle bloat.',
-    backendContract: 'src/ui/primitives/*, src/ui/shell/commandShellMachine.ts, src/schemas/settings.schema.ts',
+      'Active UI primitives, Zod schemas, XState lifecycle FSM, and Zustand stores retained while removing unused form/dropdown/tooltip packages and obsolete shell prototypes.',
+    backendContract: 'src/ui/primitives/*, src/engine/EngineLifecycle.ts, src/schemas/settings.schema.ts',
   },
 ];
 

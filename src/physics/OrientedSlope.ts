@@ -1,5 +1,3 @@
-import type { TerrainSlopeRegion } from '@/src/engine/physics/PhysicsWorld';
-
 export interface OrientedSlopeRegion {
   id: string;
   surfaceId: number;
@@ -99,42 +97,6 @@ export function createOrientedSlopeRegion(params: CreateOrientedSlopeParams): Or
     thickness: Math.max(0.18, params.thickness ?? 0.45),
     maxSlopeDeg,
     hasSideRails: params.hasSideRails ?? false,
-  };
-}
-
-export function isOrientedSlopeRegion(
-  slope: TerrainSlopeRegion | OrientedSlopeRegion
-): slope is OrientedSlopeRegion {
-  return 'dirX' in slope && 'halfLength' in slope && 'centerX' in slope;
-}
-
-export function legacySlopeToOriented(
-  slope: TerrainSlopeRegion,
-  index = 0
-): OrientedSlopeRegion {
-  const centerX = (slope.minX + slope.maxX) * 0.5;
-  const startZ = slope.startZ;
-  const endZ = slope.endZ;
-  const dz = endZ - startZ;
-  const halfLength = Math.max(0.05, Math.abs(dz) * 0.5);
-  const dirZ = dz >= 0 ? 1 : -1;
-  const halfWidth = Math.max(0.25, (slope.maxX - slope.minX) * 0.5);
-  const rise = Math.abs(slope.endY - slope.startY);
-  const maxSlopeDeg = (Math.atan2(rise, halfLength * 2) * 180) / Math.PI;
-  return {
-    id: `legacy_slope_${index}`,
-    surfaceId: 0,
-    centerX,
-    centerZ: (startZ + endZ) * 0.5,
-    dirX: 0,
-    dirZ,
-    halfLength,
-    halfWidth,
-    startY: slope.startY,
-    endY: slope.endY,
-    thickness: 0.45,
-    maxSlopeDeg,
-    hasSideRails: false,
   };
 }
 

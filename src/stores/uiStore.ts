@@ -59,7 +59,7 @@ export interface UIStoreState {
 
 let toastSeq = 0;
 
-export function isDeveloperModeActive(): boolean {
+function isDeveloperModeActive(): boolean {
   return isDeveloperModeActiveForSetting(settingsStore.getState().developer.devModeEnabled);
 }
 

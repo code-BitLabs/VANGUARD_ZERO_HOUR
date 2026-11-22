@@ -243,6 +243,7 @@ export class FriendlySquadManager {
   };
   private readonly fireRequestsScratch: FriendlyFireRequest[] = [];
   private readonly aliveEnemyIdSet = new Set<string>();
+  private readonly enemyByIdScratch = new Map<string, SquadEnemyReadView>();
   private readonly plannerSnapshotsScratch: PlannerOperatorSnapshot[] = [];
   private readonly crossfireOffsetScratch = { x: 0, z: 0 };
   private readonly pendingTelemetry: SquadTelemetryEventBatch = {
@@ -658,10 +659,13 @@ export class FriendlySquadManager {
     // 1. Prune stale targets within 1 tick
     this.intentRouter.pruneStaleTargets(params.intentValidationCtx, this.nowSec);
 
-    // 2. Refresh shared friendly threat awareness board
+    // 2. Refresh shared friendly threat awareness board + O(1) enemy lookup cache
     this.aliveEnemyIdSet.clear();
+    this.enemyByIdScratch.clear();
     for (let i = 0; i < params.enemies.length; i++) {
-      if (params.enemies[i].alive) this.aliveEnemyIdSet.add(params.enemies[i].id);
+      const e = params.enemies[i];
+      this.enemyByIdScratch.set(e.id, e);
+      if (e.alive) this.aliveEnemyIdSet.add(e.id);
     }
     this.threatBoard.update(safeDt, this.aliveEnemyIdSet);
 
@@ -677,7 +681,7 @@ export class FriendlySquadManager {
         if (!enemy.alive) continue;
         const dist = op.position.distanceTo(enemy.position);
         if (dist > spotRange) continue;
-        const hadPrior = this.threatBoard.getAllThreats().some((t) => t.enemyId === enemy.id);
+        const hadPrior = this.threatBoard.hasThreat(enemy.id);
         this.threatBoard.reportThreat({
           enemyId: enemy.id,
           x: enemy.position.x,
@@ -1119,8 +1123,12 @@ export class FriendlySquadManager {
     enemies: readonly SquadEnemyReadView[]
   ): boolean {
     if (op.fireCooldownSec > 0 || !directive.focusEnemyId) return false;
-    const target = enemies.find((e) => e.id === directive.focusEnemyId && e.alive);
-    if (!target) return false;
+    const mapped = this.enemyByIdScratch.get(directive.focusEnemyId);
+    const target =
+      mapped && mapped.alive
+        ? mapped
+        : enemies.find((e) => e.id === directive.focusEnemyId && e.alive);
+    if (!target || !target.alive) return false;
 
     const arch = SQUAD_ARCHETYPE_FLYWEIGHTS[op.role];
     const dist = op.position.distanceTo(target.position);
@@ -1231,23 +1239,46 @@ export class FriendlySquadManager {
     this.plannerSnapshotsScratch.length = this.operators.length;
     for (let i = 0; i < this.operators.length; i++) {
       const op = this.operators[i];
-      this.plannerSnapshotsScratch[i] = {
-        id: op.id,
-        role: op.role,
-        x: op.position.x,
-        y: op.position.y,
-        z: op.position.z,
-        healthRatio: op.maxHealth > 0 ? op.health / op.maxHealth : 0,
-        suppressionLevel: op.suppressionLevel,
-        morale: op.morale,
-        state: op.state,
-        reviveChargesRemaining: op.reviveChargesRemaining,
-        inVehicleId: op.inVehicleId,
-        stuckTimerSec: op.stuckTimerSec ?? 0,
-        isDowned: op.state === 'DOWNED',
-        isMia: op.state === 'MIA',
-        bleedoutRemainingSec: op.bleedoutRemainingSec,
-      };
+      const healthRatio = op.maxHealth > 0 ? op.health / op.maxHealth : 0;
+      const isDowned = op.state === 'DOWNED';
+      const isMia = op.state === 'MIA';
+      let snap = this.plannerSnapshotsScratch[i];
+      if (!snap) {
+        snap = {
+          id: op.id,
+          role: op.role,
+          x: op.position.x,
+          y: op.position.y,
+          z: op.position.z,
+          healthRatio,
+          suppressionLevel: op.suppressionLevel,
+          morale: op.morale,
+          state: op.state,
+          reviveChargesRemaining: op.reviveChargesRemaining,
+          inVehicleId: op.inVehicleId,
+          stuckTimerSec: op.stuckTimerSec ?? 0,
+          isDowned,
+          isMia,
+          bleedoutRemainingSec: op.bleedoutRemainingSec,
+        };
+        this.plannerSnapshotsScratch[i] = snap;
+      } else {
+        snap.id = op.id;
+        snap.role = op.role;
+        snap.x = op.position.x;
+        snap.y = op.position.y;
+        snap.z = op.position.z;
+        snap.healthRatio = healthRatio;
+        snap.suppressionLevel = op.suppressionLevel;
+        snap.morale = op.morale;
+        snap.state = op.state;
+        snap.reviveChargesRemaining = op.reviveChargesRemaining;
+        snap.inVehicleId = op.inVehicleId;
+        snap.stuckTimerSec = op.stuckTimerSec ?? 0;
+        snap.isDowned = isDowned;
+        snap.isMia = isMia;
+        snap.bleedoutRemainingSec = op.bleedoutRemainingSec;
+      }
     }
   }
 
@@ -1340,8 +1371,9 @@ export class FriendlySquadManager {
       // Aim smoothly toward active focus threat when stationary in cover or suppressing
       const focusId = op.lastDirective?.focusEnemyId;
       if (focusId && enemies) {
-        const threat = enemies.find((e) => e.id === focusId && e.alive);
-        if (threat) {
+        const mapped = this.enemyByIdScratch.get(focusId);
+        const threat = mapped && mapped.alive ? mapped : enemies.find((e) => e.id === focusId && e.alive);
+        if (threat && threat.alive) {
           const aimYaw = Math.atan2(
             threat.position.x - op.position.x,
             threat.position.z - op.position.z

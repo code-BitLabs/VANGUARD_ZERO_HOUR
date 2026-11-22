@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import {
-  isOrientedSlopeRegion,
-  legacySlopeToOriented,
   OrientedSlopeRegion,
   sampleSlopeTopAt,
 } from '@/src/physics/OrientedSlope';
@@ -48,17 +46,6 @@ function ensureThreeMeshBvhPatched(): void {
   THREE.Mesh.prototype.raycast = acceleratedRaycast;
 }
 
-export interface TerrainSlopeRegion {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-  startZ: number;
-  endZ: number;
-  startY: number;
-  endY: number;
-}
-
 /**
  * Single authoritative PhysicsWorld owning CollisionSystem, SpatialHash broad-phase,
  * three-mesh-bvh static mesh acceleration, custom FPS CharacterController,
@@ -74,6 +61,12 @@ export class PhysicsWorld {
   public readonly responseSystem: CollisionResponseSystem;
 
   private slopes: OrientedSlopeRegion[] = [];
+  private readonly slopeCellSize = 8;
+  private readonly slopeCells = new Map<number, number[]>();
+  private slopeVisitStamp = new Int32Array(256);
+  private slopeStampCounter = 0;
+  private readonly _slopeQueryScratch: OrientedSlopeRegion[] = [];
+  private readonly _raySlopeScratch: OrientedSlopeRegion[] = [];
   private ladders: LadderVolume[] = [];
   private traversalIntegrityFlags: TraversalIntegrityFlag[] = [];
   private terrainHeightFn: (x: number, z: number) => number = () => 0;
@@ -93,10 +86,6 @@ export class PhysicsWorld {
   constructor() {
     ensureThreeMeshBvhPatched();
     this.responseSystem = new CollisionResponseSystem(this.collisionSystem, this.debugSystem);
-  }
-
-  isRapierInitialized(): boolean {
-    return false;
   }
 
   setWorldBoundLimit(limit: number): void {
@@ -178,12 +167,73 @@ export class PhysicsWorld {
     return this.spatialHash.getAllBoxes().map((b) => b.id);
   }
 
-  addSlope(slope: TerrainSlopeRegion | OrientedSlopeRegion): void {
-    if (isOrientedSlopeRegion(slope)) {
-      this.slopes.push(slope);
-    } else {
-      this.slopes.push(legacySlopeToOriented(slope, this.slopes.length));
+  private hashSlopeCell(cx: number, cz: number): number {
+    return ((cx + 16384) * 73856093) ^ ((cz + 16384) * 19349663);
+  }
+
+  private indexSlope(slope: OrientedSlopeRegion, idx: number): void {
+    const pad = slope.halfLength + slope.halfWidth + 0.5;
+    const minCx = Math.floor((slope.centerX - pad) / this.slopeCellSize);
+    const maxCx = Math.floor((slope.centerX + pad) / this.slopeCellSize);
+    const minCz = Math.floor((slope.centerZ - pad) / this.slopeCellSize);
+    const maxCz = Math.floor((slope.centerZ + pad) / this.slopeCellSize);
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const key = this.hashSlopeCell(cx, cz);
+        let list = this.slopeCells.get(key);
+        if (!list) {
+          list = [];
+          this.slopeCells.set(key, list);
+        }
+        list.push(idx);
+      }
     }
+  }
+
+  private querySlopesAABB(
+    minX: number,
+    minZ: number,
+    maxX: number,
+    maxZ: number,
+    out: OrientedSlopeRegion[]
+  ): OrientedSlopeRegion[] {
+    out.length = 0;
+    if (this.slopes.length === 0) return out;
+    if (this.slopes.length > this.slopeVisitStamp.length) {
+      let nextCap = this.slopeVisitStamp.length * 2;
+      while (nextCap < this.slopes.length) nextCap *= 2;
+      this.slopeVisitStamp = new Int32Array(nextCap);
+    }
+    let stamp = ++this.slopeStampCounter;
+    if (stamp >= 1_000_000_000) {
+      this.slopeVisitStamp.fill(0);
+      this.slopeStampCounter = 1;
+      stamp = 1;
+    }
+
+    const minCx = Math.floor(minX / this.slopeCellSize);
+    const maxCx = Math.floor(maxX / this.slopeCellSize);
+    const minCz = Math.floor(minZ / this.slopeCellSize);
+    const maxCz = Math.floor(maxZ / this.slopeCellSize);
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cz = minCz; cz <= maxCz; cz++) {
+        const list = this.slopeCells.get(this.hashSlopeCell(cx, cz));
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+          const idx = list[i];
+          if (this.slopeVisitStamp[idx] === stamp) continue;
+          this.slopeVisitStamp[idx] = stamp;
+          out.push(this.slopes[idx]);
+        }
+      }
+    }
+    return out;
+  }
+
+  addSlope(slope: OrientedSlopeRegion): void {
+    const idx = this.slopes.length;
+    this.slopes.push(slope);
+    this.indexSlope(slope, idx);
   }
 
   getSlopes(): readonly OrientedSlopeRegion[] {
@@ -223,8 +273,9 @@ export class PhysicsWorld {
 
   getGroundHeightAt = (x: number, z: number, referenceFeetY?: number): number => {
     let h = this.terrainHeightFn(x, z);
-    for (let i = 0; i < this.slopes.length; i++) {
-      const sh = sampleSlopeTopAt(this.slopes[i], x, z, referenceFeetY, 0.55);
+    const nearbySlopes = this.querySlopesAABB(x - 0.5, z - 0.5, x + 0.5, z + 0.5, this._slopeQueryScratch);
+    for (let i = 0; i < nearbySlopes.length; i++) {
+      const sh = sampleSlopeTopAt(nearbySlopes[i], x, z, referenceFeetY, 0.55);
       if (sh !== null && sh > h) {
         h = sh;
       }
@@ -240,8 +291,9 @@ export class PhysicsWorld {
     let bestY = this.terrainHeightFn(x, z);
 
     // Check gentle vehicle-traversable ramps only (<= 28 deg) and strictly below overhead threshold
-    for (let i = 0; i < this.slopes.length; i++) {
-      const s = this.slopes[i];
+    const nearbySlopes = this.querySlopesAABB(x - 0.5, z - 0.5, x + 0.5, z + 0.5, this._slopeQueryScratch);
+    for (let i = 0; i < nearbySlopes.length; i++) {
+      const s = nearbySlopes[i];
       if (s.maxSlopeDeg > 28) continue;
       const sh = sampleSlopeTopAt(s, x, z, refY, 0.5);
       if (sh !== null && sh > bestY && sh <= refY + 0.65) {
@@ -287,21 +339,23 @@ export class PhysicsWorld {
   ): number {
     let bestY = this.terrainHeightFn(x, z);
 
-    for (let i = 0; i < this.slopes.length; i++) {
-      const s = this.slopes[i];
+    const nearbySlopes = this.querySlopesAABB(x - 0.5, z - 0.5, x + 0.5, z + 0.5, this._slopeQueryScratch);
+    for (let i = 0; i < nearbySlopes.length; i++) {
+      const s = nearbySlopes[i];
       if (s.maxSlopeDeg > maxSlopeDeg) continue;
       const sh = sampleSlopeTopAt(s, x, z, feetY, stepHeight);
       if (sh !== null && sh > bestY) {
-        const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
-          this.spatialHash,
-          x,
-          sh,
-          z,
-          0.34,
-          capsuleHeight,
-          layerMask
-        );
-        if (clearance.clear) {
+        if (
+          this.collisionSystem.hasVerticalCapsuleClearanceFast(
+            this.spatialHash,
+            x,
+            sh,
+            z,
+            0.34,
+            capsuleHeight,
+            layerMask
+          )
+        ) {
           bestY = sh;
         }
       }
@@ -320,16 +374,17 @@ export class PhysicsWorld {
       const box = candidates[i];
       if (box.maxY > bestY && box.maxY <= feetY + stepHeight + 0.35) {
         if (this.collisionSystem.testCircleBox2D(x, z, 0.18, box, this._supportContact2D)) {
-          const clearance = this.collisionSystem.hasVerticalCapsuleClearance(
-            this.spatialHash,
-            x,
-            box.maxY,
-            z,
-            0.34,
-            capsuleHeight,
-            layerMask
-          );
-          if (clearance.clear) {
+          if (
+            this.collisionSystem.hasVerticalCapsuleClearanceFast(
+              this.spatialHash,
+              x,
+              box.maxY,
+              z,
+              0.34,
+              capsuleHeight,
+              layerMask
+            )
+          ) {
             bestY = box.maxY;
           }
         }
@@ -358,6 +413,13 @@ export class PhysicsWorld {
     outResult?: CharacterMoveResult,
     maxSlopeDeg = 45
   ): boolean {
+    const nearbySlopes = this.querySlopesAABB(
+      pos.x - radius - 1.2,
+      pos.z - radius - 1.2,
+      pos.x + radius + 1.2,
+      pos.z + radius + 1.2,
+      this._slopeQueryScratch
+    );
     return this.responseSystem.resolveCharacterCapsule(
       entityId,
       this.spatialHash,
@@ -370,7 +432,7 @@ export class PhysicsWorld {
       layerMask,
       this.getTerrainOnlyHeightAt,
       outResult,
-      this.slopes,
+      nearbySlopes,
       maxSlopeDeg
     );
   }
@@ -415,6 +477,13 @@ export class PhysicsWorld {
     maxReach = VAULT_MAX_PROBE_DISTANCE,
     layerMask = VAULT_PROBE_LAYER_MASK
   ): boolean {
+    const nearbySlopes = this.querySlopesAABB(
+      pos.x - maxReach - 1.5,
+      pos.z - maxReach - 1.5,
+      pos.x + maxReach + 1.5,
+      pos.z + maxReach + 1.5,
+      this._slopeQueryScratch
+    );
     return this.collisionSystem.probeVaultObstacle(
       this.spatialHash,
       pos.x,
@@ -429,7 +498,7 @@ export class PhysicsWorld {
       out,
       maxReach,
       layerMask,
-      this.slopes,
+      nearbySlopes,
       this.getTerrainOnlyHeightAt
     );
   }
@@ -449,6 +518,14 @@ export class PhysicsWorld {
     dt: number,
     selfCollider: SpatialAABB
   ): { newYaw: number; newSpeed: number; result: VehicleMoveResult } {
+    const pad = halfLength + halfWidth + 3.0;
+    const nearbySlopes = this.querySlopesAABB(
+      pos.x - pad,
+      pos.z - pad,
+      pos.x + pad,
+      pos.z + pad,
+      this._slopeQueryScratch
+    );
     return this.responseSystem.resolveVehicleMovement(
       vehicleId,
       this.spatialHash,
@@ -462,7 +539,7 @@ export class PhysicsWorld {
       this.worldBoundLimit - 2,
       selfCollider,
       this.getVehicleSupportHeightAt,
-      this.slopes
+      nearbySlopes
     );
   }
 
@@ -503,6 +580,19 @@ export class PhysicsWorld {
     outHit: RaycastHitResult,
     ignoreColliderId?: string | null
   ): boolean {
+    const endX = ox + dx * maxDist;
+    const endZ = oz + dz * maxDist;
+    const nearbySlopes =
+      (layerMask & COLLISION_LAYER.WORLD) !== 0 && this.slopes.length > 0
+        ? this.querySlopesAABB(
+            Math.min(ox, endX) - 0.5,
+            Math.min(oz, endZ) - 0.5,
+            Math.max(ox, endX) + 0.5,
+            Math.max(oz, endZ) + 0.5,
+            this._raySlopeScratch
+          )
+        : this._raySlopeScratch;
+    if ((layerMask & COLLISION_LAYER.WORLD) === 0) nearbySlopes.length = 0;
     return this.collisionSystem.sweptCast(
       this.spatialHash,
       ox,
@@ -516,7 +606,7 @@ export class PhysicsWorld {
       layerMask,
       outHit,
       ignoreColliderId,
-      this.slopes,
+      nearbySlopes,
       this.getTerrainOnlyHeightAt
     );
   }
@@ -534,6 +624,19 @@ export class PhysicsWorld {
     outHit: RaycastHitResult,
     ignoreColliderId?: string | null
   ): boolean {
+    const endX = ox + dx * maxDist;
+    const endZ = oz + dz * maxDist;
+    const nearbySlopes =
+      (layerMask & COLLISION_LAYER.WORLD) !== 0 && this.slopes.length > 0
+        ? this.querySlopesAABB(
+            Math.min(ox, endX) - radius - 0.5,
+            Math.min(oz, endZ) - radius - 0.5,
+            Math.max(ox, endX) + radius + 0.5,
+            Math.max(oz, endZ) + radius + 0.5,
+            this._raySlopeScratch
+          )
+        : this._raySlopeScratch;
+    if ((layerMask & COLLISION_LAYER.WORLD) === 0) nearbySlopes.length = 0;
     return this.collisionSystem.sweptCast(
       this.spatialHash,
       ox,
@@ -547,7 +650,7 @@ export class PhysicsWorld {
       layerMask,
       outHit,
       ignoreColliderId,
-      this.slopes,
+      nearbySlopes,
       this.getTerrainOnlyHeightAt
     );
   }
@@ -692,7 +795,6 @@ export class PhysicsWorld {
 
     return {
       solverBackend: 'Custom FPS Controller + SpatialHash/BVH',
-      rapierInitialized: this.isRapierInitialized(),
       fixedTimestepSec: Number(PhysicsWorld.FIXED_TIMESTEP_SEC.toFixed(4)),
       worldBoundsMin: -this.worldBoundLimit,
       worldBoundsMax: this.worldBoundLimit,
@@ -726,6 +828,9 @@ export class PhysicsWorld {
   clear(): void {
     this.spatialHash.clear();
     this.slopes = [];
+    this.slopeCells.clear();
+    this.slopeVisitStamp.fill(0);
+    this.slopeStampCounter = 0;
     this.ladders = [];
     this.traversalIntegrityFlags = [];
     this.terrainHeightFn = () => 0;

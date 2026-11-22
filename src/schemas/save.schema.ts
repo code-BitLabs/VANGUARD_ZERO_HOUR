@@ -37,15 +37,6 @@ export const MissionRecordSchema = z.object({
 });
 export type MissionRecord = z.infer<typeof MissionRecordSchema>;
 
-export const ProgressionSaveV1Schema = z.object({
-  version: z.literal(1),
-  xp: z.number().int().nonnegative().default(0),
-  requisitionPoints: z.number().int().nonnegative().default(500),
-  missionRecords: z.record(z.string(), MissionRecordSchema).default({}),
-  weaponUpgrades: z.record(z.string(), WeaponUpgradeStateSchema).default({}),
-  achievements: z.array(z.string()).default([]),
-});
-
 export const ProgressionSaveSchema = z.object({
   version: z.literal(2).default(2),
   schemaRevision: z.number().int().min(2).default(4),
@@ -171,39 +162,17 @@ function backfillStage7Fields(save: ProgressionSave): ProgressionSave {
 export function migrateProgressionSave(raw: unknown): {
   save: ProgressionSave;
   recoveredFromCorruption: boolean;
-  migratedFromV1: boolean;
 } {
   const v2 = ProgressionSaveSchema.safeParse(raw);
   if (v2.success) {
     return {
       save: backfillStage7Fields(v2.data),
       recoveredFromCorruption: false,
-      migratedFromV1: false,
     };
-  }
-
-  const v1 = ProgressionSaveV1Schema.safeParse(raw);
-  if (v1.success) {
-    const completedIds = extractCompletedMissionIds(v1.data.missionRecords);
-    const migrated = ProgressionSaveSchema.parse({
-      ...DEFAULT_PROGRESSION_SAVE,
-      version: 2,
-      schemaRevision: 4,
-      xp: v1.data.xp,
-      requisitionPoints: v1.data.requisitionPoints,
-      missionRecords: v1.data.missionRecords,
-      weaponUpgrades: v1.data.weaponUpgrades,
-      achievements: v1.data.achievements,
-      campaignLedger: synthesizeLegacyCampaignLedger(completedIds),
-      squadRoster: createDefaultCoreRoster(),
-      updatedAt: Date.now(),
-    });
-    return { save: migrated, recoveredFromCorruption: false, migratedFromV1: true };
   }
 
   return {
     save: ProgressionSaveSchema.parse({}),
     recoveredFromCorruption: raw !== null && raw !== undefined,
-    migratedFromV1: false,
   };
 }

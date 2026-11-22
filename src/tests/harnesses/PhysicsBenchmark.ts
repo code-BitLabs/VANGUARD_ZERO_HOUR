@@ -1,11 +1,10 @@
 import * as THREE from 'three';
-import { CollisionWorld } from './CollisionWorld';
-import { COLLISION_LAYER } from './SpatialHash';
+import { CollisionWorld } from '@/src/physics/CollisionWorld';
+import { COLLISION_LAYER } from '@/src/physics/SpatialHash';
 
 export interface PhysicsBenchmarkResult {
   customSpatialHashMs: number;
-  rapierWasmMs: number | null;
-  selectedBackend: 'custom_spatial_hash' | 'rapier_hybrid';
+  selectedBackend: 'custom_spatial_hash';
   notes: string;
 }
 
@@ -53,8 +52,7 @@ export async function runPhysicsBackendBenchmark(): Promise<PhysicsBenchmarkResu
 
   return {
     customSpatialHashMs: Number(customMs.toFixed(3)),
-    rapierWasmMs: null,
     selectedBackend: 'custom_spatial_hash',
-    notes: 'Single-authority PhysicsWorld + O(k) SpatialHash solver avoids WASM heap retention across mission reloads while meeting < 2ms CPU budget.',
+    notes: 'Single-authority PhysicsWorld + O(k) SpatialHash solver meets < 2ms CPU budget with zero WASM heap retention across mission reloads.',
   };
 }

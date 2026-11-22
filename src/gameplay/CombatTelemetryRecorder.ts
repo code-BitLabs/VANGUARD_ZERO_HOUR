@@ -668,7 +668,6 @@ export class CombatTelemetryRecorder {
 
   private latestPhysics: PhysicsWorldDiagnosticsSnapshot = {
     solverBackend: 'Custom FPS Controller + SpatialHash/BVH',
-    rapierInitialized: false,
     fixedTimestepSec: 0.0167,
     worldBoundsMin: -106,
     worldBoundsMax: 106,

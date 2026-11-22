@@ -96,7 +96,6 @@ export interface MissionProgressionOutcome {
 export interface ProgressionStoreState {
   save: ProgressionSave;
   recoveredFromCorruption: boolean;
-  migratedFromV1: boolean;
   recordMissionResult: (result: MissionResultPayload) => MissionProgressionOutcome;
   commitStagedCampaignRebase: (missionId: number, drafts: CampaignEventDraft[]) => number;
   upgradeWeapon: (weaponId: WeaponId, key: WeaponUpgradeKey) => boolean;
@@ -135,7 +134,6 @@ export const progressionStore = createStore<ProgressionStoreState>()(
   subscribeWithSelector((set, get) => ({
     save: loaded.save,
     recoveredFromCorruption: loaded.recoveredFromCorruption,
-    migratedFromV1: loaded.migratedFromV1,
     getUpgradeLevel: (weaponId, key) => {
       return get().save.weaponUpgrades[weaponId]?.[key] ?? 0;
     },
@@ -787,7 +785,7 @@ export const progressionStore = createStore<ProgressionStoreState>()(
     },
     resetAllProgress: () => {
       const fresh = SaveManager.resetProgression();
-      set({ save: fresh, recoveredFromCorruption: false, migratedFromV1: false });
+      set({ save: fresh, recoveredFromCorruption: false });
     },
   }))
 );

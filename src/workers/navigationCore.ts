@@ -267,6 +267,7 @@ export class NavigationSolver {
   private edgeBestCost = new Float32Array(0);
   private edgePrev = new Int32Array(0);
   private edgeClosed = new Uint8Array(0);
+  private readonly dirtySurfaces = new Set<number>();
 
   public readonly outWaypoint = new Float32Array(2);
   public readonly outWaypoint3D = new Float32Array(3);
@@ -308,6 +309,7 @@ export class NavigationSolver {
     this.portalInputs = [];
     this.directedEdges = [];
     this.edgesByPortalId.clear();
+    this.dirtySurfaces.clear();
     this.edgePairDist = new Float32Array(0);
     this.ensureCellScratchCapacity(width * height);
   }
@@ -470,7 +472,19 @@ export class NavigationSolver {
     this.edgePrev = new Int32Array(E);
     this.edgeClosed = new Uint8Array(E);
 
+    this.dirtySurfaces.clear();
     this.recomputeIntraSurfacePortalDistances(null);
+  }
+
+  private flushDirtySurfaceDistances(): void {
+    if (this.dirtySurfaces.size === 0 || this.directedEdges.length === 0) {
+      this.dirtySurfaces.clear();
+      return;
+    }
+    for (const surfaceId of this.dirtySurfaces) {
+      this.recomputeIntraSurfacePortalDistances(surfaceId);
+    }
+    this.dirtySurfaces.clear();
   }
 
   private recomputeIntraSurfacePortalDistances(onlySurfaceId: number | null): void {
@@ -513,6 +527,7 @@ export class NavigationSolver {
   }
 
   getPortalPairDistanceForTest(fromEdgeIdx: number, toEdgeIdx: number): number {
+    this.flushDirtySurfaceDistances();
     const E = this.directedEdges.length;
     if (fromEdgeIdx < 0 || fromEdgeIdx >= E || toEdgeIdx < 0 || toEdgeIdx >= E) {
       return Infinity;
@@ -525,7 +540,7 @@ export class NavigationSolver {
     if (!surf) return 0;
     const applied = applyCellUpdates(updates, surf);
     if (applied > 0 && this.directedEdges.length > 0) {
-      this.recomputeIntraSurfacePortalDistances(surfaceId);
+      this.dirtySurfaces.add(surfaceId);
     }
     return applied;
   }
@@ -874,6 +889,7 @@ export class NavigationSolver {
     // 2. Hierarchical Portal Graph Search (handles cross-elevation AND disconnected same-surface detours)
     const E = this.directedEdges.length;
     if (E > 0) {
+      this.flushDirtySurfaceDistances();
       const profile = getAgentProfileByCode(profileCode);
       for (let i = 0; i < E; i++) {
         const edge = this.directedEdges[i];

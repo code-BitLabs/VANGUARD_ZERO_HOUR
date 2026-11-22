@@ -28,7 +28,7 @@ const SECONDARY_ACTION_KEYS: Partial<Record<InputAction, readonly string[]>> = {
   left: ['ArrowLeft'],
   right: ['ArrowRight'],
   sprint: ['ShiftRight'],
-  crouch: ['ControlRight', 'KeyC'],
+  crouch: ['ControlRight'],
   handbrake: ['Space'],
 };
 

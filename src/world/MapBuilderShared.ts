@@ -87,7 +87,7 @@ export interface MapPopulationContext {
 
 export type MapPopulator = (ctx: MapPopulationContext) => void;
 
-export function findPrimaryMesh(obj: THREE.Object3D): THREE.Mesh | null {
+function findPrimaryMesh(obj: THREE.Object3D): THREE.Mesh | null {
   let found: THREE.Mesh | null = null;
   obj.traverse((child) => {
     if (!found && child instanceof THREE.Mesh && !(child instanceof THREE.InstancedMesh)) {
@@ -123,12 +123,22 @@ export function createWorldShell(
 ): WorldShellState {
   const scope: ResourceScope = `mission:${missionId}`;
   const coverNodes: THREE.Vector3[] = [];
-  const roadWaypoints: THREE.Vector3[] = [
-    new THREE.Vector3(0, 0, 58),
-    new THREE.Vector3(6, 0, 22),
-    new THREE.Vector3(-4, 0, -14),
-    new THREE.Vector3(4, 0, -52),
-  ];
+  const roadWaypoints: THREE.Vector3[] =
+    mapId === 'desert_base'
+      ? [
+          new THREE.Vector3(4, 0, 38),
+          new THREE.Vector3(4, 0, 4),
+          new THREE.Vector3(4, 0, -28),
+          new THREE.Vector3(-4, 0, -28),
+          new THREE.Vector3(-4, 0, 4),
+          new THREE.Vector3(-4, 0, 38),
+        ]
+      : [
+          new THREE.Vector3(0, 0, 58),
+          new THREE.Vector3(6, 0, 22),
+          new THREE.Vector3(-4, 0, -14),
+          new THREE.Vector3(4, 0, -52),
+        ];
   const supplyCrates: BuiltWorldData['supplyCrates'] = [];
   const animatedProps: BuiltWorldData['animatedProps'] = [];
   const elevatedSurfaces: ElevatedNavSurfaceDescriptor[] = [];
@@ -162,10 +172,13 @@ export function createWorldShell(
   const heightFn = (x: number, z: number): number => {
     const roadDist = Math.abs(x);
     if (mapId === 'desert_base') {
-      if (roadDist < 14) return 0;
+      if (roadDist <= 12) return 0;
+      const t = Math.min(1, (roadDist - 12) / 10);
+      const smooth = t * t * (3 - 2 * t);
       return (
-        Math.sin(x * 0.04) * Math.cos(z * 0.04) * 1.4 +
-        Math.max(0, (Math.hypot(x, z) - 90) * 0.14)
+        (Math.sin(x * 0.04) * Math.cos(z * 0.04) * 1.4 +
+          Math.max(0, (Math.hypot(x, z) - 90) * 0.14)) *
+        smooth
       );
     }
     if (mapId === 'jungle_zone') {
@@ -179,8 +192,8 @@ export function createWorldShell(
   };
   collisionWorld.setTerrainHeightFn(heightFn);
 
-  // Extended terrain mesh (320m x 320m at 72x72 subdivision with multi-layer splat/slope/curvature/moisture vertex colors)
-  const groundGeo = new THREE.PlaneGeometry(320, 320, 72, 72);
+  // Extended terrain mesh (320m x 320m at 128x128 subdivision for 2.5m ground fidelity matching physics heightFn)
+  const groundGeo = new THREE.PlaneGeometry(320, 320, 128, 128);
   groundGeo.rotateX(-Math.PI / 2);
   const posAttr = groundGeo.attributes.position;
   for (let i = 0; i < posAttr.count; i++) {
@@ -539,17 +552,6 @@ export function createWorldShell(
       entityId: id,
     });
 
-    if (h >= 8 && !accessibleRoof) {
-      chunkManager.registerOccluder({
-        minX: x - w * 0.44,
-        minY: y + groundH,
-        minZ: z - d * 0.44,
-        maxX: x + w * 0.44,
-        maxY: y + h * 0.9,
-        maxZ: z + d * 0.44,
-      });
-    }
-
     globalStructureReconciliation.registerStructure({
       missionId,
       structureId: id,
@@ -696,8 +698,15 @@ export function populateCommonWorldAndFinalize(shell: WorldShellState): BuiltWor
     [11, -20, -0.2],
     [-8, -38, 0],
     [9, -42, 0.25],
-    [0, -16, 0],
-    [0, 18, 0],
+    ...(mapId === 'desert_base'
+      ? ([
+          [-9.5, -16, 0.15],
+          [9.5, 18, -0.15],
+        ] as Array<[number, number, number]>)
+      : ([
+          [0, -16, 0],
+          [0, 18, 0],
+        ] as Array<[number, number, number]>)),
   ];
 
   if (mapId === 'warzone_city') {

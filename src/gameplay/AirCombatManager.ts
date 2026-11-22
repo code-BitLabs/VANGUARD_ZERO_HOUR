@@ -344,23 +344,6 @@ export class AirCombatManager {
     }
   }
 
-  getHitscanTargets(onAirHit: (unit: AirUnit, killed: boolean) => void): HitscanTarget[] {
-    return this.units
-      .filter((u) => u.alive && !u.crashing)
-      .map((u) => ({
-        id: u.id,
-        kind: 'air',
-        name: u.displayName,
-        alive: u.alive,
-        position: u.position,
-        hitRadius: u.type === 'attack_drone' ? 1.5 : u.type === 'gunship' ? 4.4 : 3.2,
-        onHit: (damage) => {
-          const killed = this.damageUnit(u, damage);
-          onAirHit(u, killed);
-        },
-      }));
-  }
-
   fillLockCandidates(
     out: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }>
   ): void {
@@ -388,17 +371,6 @@ export class AirCombatManager {
     }
   }
 
-  getLockCandidates(): Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> {
-    return this.units
-      .filter((u) => u.alive && !u.crashing)
-      .map((u) => ({
-        id: u.id,
-        alive: u.alive,
-        position: u.position,
-        label: u.displayName.toUpperCase(),
-      }));
-  }
-
   fillPositionsForProximity(out: Array<{ position: THREE.Vector3; radius: number }>): void {
     let slotIdx = 0;
     for (let i = 0; i < this.units.length; i++) {
@@ -416,15 +388,6 @@ export class AirCombatManager {
       out.push(slot);
       slotIdx++;
     }
-  }
-
-  getPositionsForProximity(): Array<{ position: THREE.Vector3; radius: number }> {
-    return this.units
-      .filter((u) => u.alive && !u.crashing)
-      .map((u) => ({
-        position: u.position,
-        radius: u.type === 'attack_drone' ? 1.8 : 3.8,
-      }));
   }
 
   getActiveBossInfo(context?: {
@@ -508,12 +471,6 @@ export class AirCombatManager {
       out.push(slot);
       slotIdx++;
     }
-  }
-
-  getMiniMapBlips(): MiniMapBlip[] {
-    return this.units
-      .filter((u) => u.alive)
-      .map((u) => ({ id: u.id, x: u.position.x, z: u.position.z, kind: 'air' }));
   }
 
   update(rawDt: number, player: PlayerController, collision?: CollisionWorld): void {

@@ -23,7 +23,7 @@ export interface MissionAtmosphereDirectives {
  * Distinct art direction, physical weather, acoustic space, and PBR palette per mission
  * (TRN-54: Zero generic city kit reuse across missions).
  */
-export const MISSION_ATMOSPHERE_DIRECTIVES: Record<number, MissionAtmosphereDirectives> = {
+const MISSION_ATMOSPHERE_DIRECTIVES: Record<number, MissionAtmosphereDirectives> = {
   1: {
     missionId: 1,
     operationCode: 'OP. IRON DAWN',

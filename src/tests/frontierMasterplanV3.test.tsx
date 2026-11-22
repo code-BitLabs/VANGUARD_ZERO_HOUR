@@ -3,7 +3,6 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createActor } from 'xstate';
 import {
   PBR_MATERIAL_PROFILES,
   PbrMaterialLibrary,
@@ -22,12 +21,11 @@ import { SurfaceDecalManager } from '@/src/effects/SurfaceDecalManager';
 import {
   FRONTIER_TECHNOLOGY_DECISIONS,
   runFrontierBenchmarkSuite,
-} from '@/src/engine/FrontierBenchmarkSuite';
+} from '@/src/tests/harnesses/FrontierBenchmarkSuite';
 import {
   HARDWARE_PROFILE_DEFAULTS,
   RenderingQualityDirector,
 } from '@/src/engine/RenderingQualityDirector';
-import { solveCharacterLocomotionIK } from '@/src/gameplay/CharacterLocomotionIK';
 import {
   DEFAULT_SETTINGS,
   applyBindingWithSwap,
@@ -37,7 +35,6 @@ import {
 import { settingsStore } from '@/src/stores/settingsStore';
 import { ArmoryScreen } from '@/src/ui/screens/ArmoryScreen';
 import { SettingsPanel } from '@/src/ui/components/SettingsPanel';
-import { commandShellMachine } from '@/src/ui/shell/commandShellMachine';
 import {
   buildMissionEnvironmentEnhancement,
   getMissionAtmosphereDirective,
@@ -60,25 +57,21 @@ beforeEach(() => {
 });
 
 describe('Frontier Masterplan V3 — Settings v2, Keybind Conflict & XState Shell', () => {
-  it('migrates legacy v1 settings losslessly to v2 and recovers cleanly from corrupted payloads', () => {
-    const legacyV1 = {
-      schemaVersion: 1,
+  it('validates canonical v2 settings losslessly and recovers cleanly from corrupted payloads', () => {
+    const validV2 = {
+      version: 2,
+      display: { uiScale: 1.15 },
       graphics: { quality: 'ultra', fov: 96, shadowsEnabled: true },
-      accessibility: {
-        colorblindMode: 'deuteranopia',
-        uiScale: 1.15,
-        hudOpacity: 0.8,
-        showRadar: false,
-      },
+      hud: { scale: 1.15, opacity: 0.8, showRadar: false },
+      accessibility: { colorblindMode: 'deuteranopia' },
     };
-    const migrated = migrateSettingsBundle(legacyV1);
-    expect(migrated.bundle.version).toBe(2);
-    expect(migrated.migratedFromV1).toBe(true);
-    expect(migrated.recoveredFromCorruption).toBe(false);
-    expect(migrated.bundle.graphics.fov).toBe(96);
-    expect(migrated.bundle.hud.scale).toBe(1.15);
-    expect(migrated.bundle.hud.opacity).toBe(0.8);
-    expect(migrated.bundle.hud.showRadar).toBe(false);
+    const normalized = migrateSettingsBundle(validV2);
+    expect(normalized.bundle.version).toBe(2);
+    expect(normalized.recoveredFromCorruption).toBe(false);
+    expect(normalized.bundle.graphics.fov).toBe(96);
+    expect(normalized.bundle.display.uiScale).toBe(1.15);
+    expect(normalized.bundle.hud.opacity).toBe(0.8);
+    expect(normalized.bundle.hud.showRadar).toBe(false);
 
     const corrupted = migrateSettingsBundle('not-an-object-at-all');
     expect(corrupted.bundle.version).toBe(2);
@@ -95,28 +88,6 @@ describe('Frontier Masterplan V3 — Settings v2, Keybind Conflict & XState Shel
     expect(swapped.swappedWith).toBe('forward');
     expect(swapped.bindings.reload).toBe('KeyW');
     expect(swapped.bindings.forward).toBe(defaults.reload);
-  });
-
-  it('guards unsaved settings navigation via commandShellMachine XState FSM', () => {
-    const actor = createActor(commandShellMachine).start();
-    actor.send({ type: 'NAVIGATE', section: 'settings' });
-    expect(actor.getSnapshot().context.activeSection).toBe('settings');
-
-    actor.send({ type: 'SET_UNSAVED_SETTINGS', dirty: true });
-    actor.send({ type: 'NAVIGATE', section: 'armory' });
-    expect(actor.getSnapshot().value).toBe('confirmingLeaveSettings');
-    expect(actor.getSnapshot().context.pendingSection).toBe('armory');
-
-    actor.send({ type: 'CANCEL_NAVIGATION' });
-    expect(actor.getSnapshot().value).toBe('browsing');
-    expect(actor.getSnapshot().context.activeSection).toBe('settings');
-
-    actor.send({ type: 'NAVIGATE', section: 'armory' });
-    actor.send({ type: 'CONFIRM_DISCARD' });
-    expect(actor.getSnapshot().value).toBe('browsing');
-    expect(actor.getSnapshot().context.activeSection).toBe('armory');
-    expect(actor.getSnapshot().context.hasUnsavedSettings).toBe(false);
-    actor.stop();
   });
 });
 
@@ -284,26 +255,6 @@ describe('Frontier Masterplan V3 — Multi-Objective Rendering Director, PBR, VF
     engine.setAcousticSpace('foundry');
     expect(engine.getAcousticSpace().id).toBe('foundry');
     engine.dispose();
-  });
-
-  it('solves ground-aware CharacterLocomotionIK on stairs without floating or root-motion drift', () => {
-    const ik = solveCharacterLocomotionIK({
-      worldPos: { x: 4, y: 1.0, z: 0 },
-      velocity: { x: 0, y: 0, z: -3.6 },
-      facingYawRad: 0,
-      isGrounded: true,
-      isCrouching: false,
-      isSprinting: false,
-      dtSec: 0.05,
-      prevStridePhase: Math.PI * 0.25,
-      probe: {
-        sampleGroundY: (x: number) => (x > 4 ? 1.25 : 0.82),
-      },
-    });
-    expect(ik.pelvisOffsetY).toBeLessThanOrEqual(0.05);
-    expect(ik.leftKneeBendRad).toBeGreaterThanOrEqual(0.05);
-    expect(ik.rightKneeBendRad).toBeGreaterThanOrEqual(0.05);
-    expect(ik.weaponGripSyncErrorM).toBe(0);
   });
 
   it('provides distinct atmospheric directives and clean disposable enhancements across all 5 missions', () => {

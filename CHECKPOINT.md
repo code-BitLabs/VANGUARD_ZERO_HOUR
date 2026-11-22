@@ -7,7 +7,7 @@
 ---
 
 ## B. Current Project State, Provenance & Recovery Baseline
-- **Phase:** **Stage 1 (`TRN-01`, `TRN-03`, `TRN-04`), Stage 2 (`TRN-05`, `TRN-06`, `TRN-02A`, `TRN-02B`), Stage 3 (`TRN-07`, `TRN-08`, `TRN-09`), Stage 4A (`TRN-12`, `TRN-10`, `TRN-11`), Stage 4B (`TRN-13`, `TRN-14`), Stage 5A (`TRN-15`, `TRN-16`, `TRN-17`), Stage 5B (`TRN-18`–`TRN-22`), and Stage 5C (`TRN-23`–`TRN-29` — Deep Physics/AI Locomotion Stabilization, Screenshot Defect Elimination `SC-01`–`SC-10`, God-File Modularization & Software-GL/Leak Hardening) Complete & Verified**
+- **Phase:** **Stage 1 (`TRN-01`, `TRN-03`, `TRN-04`), Stage 2 (`TRN-05`, `TRN-06`, `TRN-02A`, `TRN-02B`), Stage 3 (`TRN-07`, `TRN-08`, `TRN-09`), Stage 4A (`TRN-12`, `TRN-10`, `TRN-11`), Stage 4B (`TRN-13`, `TRN-14`), Stage 5A (`TRN-15`, `TRN-16`, `TRN-17`), Stage 5B (`TRN-18`–`TRN-22`), Stage 5C (`TRN-23`–`TRN-29`), and Stage 11 (Codebase Purification, Dead-Code Elimination & Algorithmic Optimization) Complete & Verified**
 - **Repository Provenance:** Workspace `/app/applet` has no persistent `.git` directory inside `/app/applet`; an external git worktree tracker (`/var/tmp/vanguard.git`) and the read-only recovery baseline (`/var/tmp/vanguard-v1-recovery-baseline`) track all changes without fabricating historical commits.
 - **Verified Project Recovery Baseline (`/var/tmp/vanguard-v1-recovery-baseline`):**
   - **Protected Archive:** `/var/tmp/vanguard-v1-recovery-baseline/vanguard-v1-baseline.tar.gz` (`chmod 0444` — local accidental-modification protection, not tamper-proof immutability)
@@ -178,7 +178,18 @@ Full 14-section technical report published in `docs/STAGE-5C-ENGINEERING-REPORT.
 
 ---
 
-## J. Last Updated
-- **Timestamp:** 2026-11-19T01:58:00Z
-- **Author:** Stage 5C (`TRN-23`–`TRN-29` Physics/AI Locomotion Stabilization, `SC-01`–`SC-10` Screenshot Defect Elimination, God-File Modularization & Software-GL/Leak Hardening) Completed & Verified
+## J. Stage 11 Codebase Purification, Dead-Code Elimination & Algorithmic Optimization
+
+Full cleanup inventory and benchmark progression published in `docs/STAGE-11-CLEANUP-CHECKLIST.md`. Executed in prioritized batches (`P0`–`P3`):
+1. **Dead Code, Test Harnesses & Orphaned Assets:** Deleted abandoned experimental modules (`AssetPipeline.ts`, `CharacterLocomotionIK.ts`, `commandShellMachine.ts`), dead UI/event files (`EventBus.ts`, `Dialog.tsx`, `OperationsPlanningPanel.tsx`), dead stubs (`isRapierInitialized()`, `setupMenuDiorama()`, `isPointOccluded()`, `Checkbox`/`TooltipProvider`, legacy allocating `get*` array duplicates), and ~1.8 MB of orphaned `public/assets/aistudio/*.png` files; relocated benchmark harnesses (`FrontierBenchmarkSuite.ts`, `AiStressArena.ts`, `PhysicsBenchmark.ts`) into `src/tests/harnesses/`.
+2. **Algorithmic Optimization (`ALG-01`–`ALG-10`):** Replaced `O(N²)` enemy separation with a flat 2D `EnemySeparationGrid` (shared with `ProjectileManager`), added squad-indexed Top-K `findTacticalCover`, unified `SpatialHash` with per-instance `SpatialEntry` `visitStamp` isolation, added a 2D slope spatial index in `PhysicsWorld`, replaced `SurfaceDecalManager` `splice(0,1)` with an `O(1)` ring buffer, keyed `BattlefieldIntelligenceBoard` relays in a `Map`, switched `NavigationSolver` `applyCellUpdates()` to lazy dirty-surface recomputation, and eliminated per-tick closures/vector clones across `GameEngine`, `FriendlySquadManager`, `VehicleManager`, and `BattlefieldVfxSystem`.
+3. **GPU Instancing & Canonical v2 Consolidation:** Converted `VFXPool`'s 248 particle/tracer `THREE.Mesh` objects into 7 `THREE.InstancedMesh` batches, added stale-tier pixel eviction in `AssetManager`, removed legacy v1 settings/save keys and dual writes (`SettingsManager` `patchAndSave` cache, strict `AtomicSaveEnvelope` in `SaveManager`), removed 6 duplicated `accessibility.*` shadow fields, and removed `TerrainSlopeRegion`.
+4. **Dependency & Build Purification:** Uninstalled 9 unused packages, moved 7 build/test packages to `devDependencies` (`34 → 19` runtime dependencies, `bun.lock` `-16` packages to `71,968 B`), and verified `38/38` Vitest suites (`284/284` tests) + `7/7` `stage11PurificationBenchmark` tests (`tsc --noEmit` = 0 errors, `vite build` in `1.96s`, `dist/` = `5.5M`, `dist/assets/` = `3.8M`). Interactive Playwright E2E WebGL QA was not re-executed during Stage 11 CLI purification.
+
+---
+
+## K. Last Updated
+- **Timestamp:** 2026-11-22T09:34:00Z
+- **Author:** Stage 11 (Codebase Purification, Dead-Code Elimination, Algorithmic Optimization & Canonical v2 Storage Consolidation) Completed & Verified (Vitest + TypeScript + Vite Build)
+
 

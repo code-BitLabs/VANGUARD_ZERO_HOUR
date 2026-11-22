@@ -184,9 +184,18 @@ export function decalKindForSurface(
  * - Corner anti-distortion thickness guard + polygonOffset depth handling.
  * - Distance-based culling and deterministic mission-reset cleanup.
  */
+const MAX_DECAL_CAPACITY = 256;
+
 export class SurfaceDecalManager {
   private readonly group = new THREE.Group();
-  private readonly active: ActiveDecalRecord[] = [];
+  private readonly slots: Array<ActiveDecalRecord | null> = new Array(MAX_DECAL_CAPACITY).fill(null);
+  private readonly nextSlot = new Int16Array(MAX_DECAL_CAPACITY).fill(-1);
+  private readonly prevSlot = new Int16Array(MAX_DECAL_CAPACITY).fill(-1);
+  private readonly freeSlots: number[] = [];
+  private readonly freeRecords: ActiveDecalRecord[] = [];
+  private headSlot = -1;
+  private tailSlot = -1;
+  private activeCount = 0;
   private readonly prewarmMeshes: THREE.Mesh[] = [];
   private readonly materials = new Map<DecalKind, THREE.MeshStandardMaterial>();
   private readonly textures = new Map<DecalKind, THREE.CanvasTexture>();
@@ -210,15 +219,18 @@ export class SurfaceDecalManager {
     cullDistanceM = 85
   ) {
     this.group.name = 'VanguardSurfaceDecals';
-    this.maxBudget = Math.max(0, Math.min(256, maxBudget));
+    this.maxBudget = Math.max(0, Math.min(MAX_DECAL_CAPACITY, maxBudget));
     this.cullDistanceSq = cullDistanceM * cullDistanceM;
+    for (let i = MAX_DECAL_CAPACITY - 1; i >= 0; i--) {
+      this.freeSlots.push(i);
+    }
     this.scene.add(this.group);
   }
 
   public setBudget(maxBudget: number, cullDistanceM = 85): void {
-    this.maxBudget = Math.max(0, Math.min(256, Math.round(maxBudget)));
+    this.maxBudget = Math.max(0, Math.min(MAX_DECAL_CAPACITY, Math.round(maxBudget)));
     this.cullDistanceSq = cullDistanceM * cullDistanceM;
-    while (this.active.length > this.maxBudget) {
+    while (this.activeCount > this.maxBudget) {
       this.evictOldest();
     }
   }
@@ -277,7 +289,7 @@ export class SurfaceDecalManager {
     this.tmpTarget.copy(point).add(n);
     this.tmpMatrix.lookAt(this.tmpTarget, point, up);
     this.tmpOrientation.setFromRotationMatrix(this.tmpMatrix);
-    this.tmpOrientation.z += (this.active.length * 1.6180339887) % (Math.PI * 2);
+    this.tmpOrientation.z += (this.activeCount * 1.6180339887) % (Math.PI * 2);
 
     const targetGeom = targetMesh.geometry;
     const triCount = targetGeom.index
@@ -315,46 +327,76 @@ export class SurfaceDecalManager {
     mesh.frustumCulled = true;
     mesh.userData.isDecal = true;
 
-    while (this.active.length >= this.maxBudget) {
+    while (this.activeCount >= this.maxBudget) {
       this.evictOldest();
     }
 
+    const slotIdx = this.freeSlots.pop();
+    if (slotIdx === undefined) {
+      this.group.remove(mesh);
+      if (!mesh.userData?.usesSharedDecalGeo) mesh.geometry.dispose();
+      return false;
+    }
+
     this.group.add(mesh);
-    this.active.push({
-      mesh,
-      kind,
-      position: point.clone(),
-      createdAtSec: this.elapsedSec,
-      lifetimeSec: DEFAULT_LIFETIME_BY_KIND[kind],
-    });
+    let rec = this.freeRecords.pop();
+    if (!rec) {
+      rec = {
+        mesh,
+        kind,
+        position: point.clone(),
+        createdAtSec: this.elapsedSec,
+        lifetimeSec: DEFAULT_LIFETIME_BY_KIND[kind],
+      };
+    } else {
+      rec.mesh = mesh;
+      rec.kind = kind;
+      rec.position.copy(point);
+      rec.createdAtSec = this.elapsedSec;
+      rec.lifetimeSec = DEFAULT_LIFETIME_BY_KIND[kind];
+    }
+
+    this.slots[slotIdx] = rec;
+    this.prevSlot[slotIdx] = this.tailSlot;
+    this.nextSlot[slotIdx] = -1;
+    if (this.tailSlot !== -1) {
+      this.nextSlot[this.tailSlot] = slotIdx;
+    } else {
+      this.headSlot = slotIdx;
+    }
+    this.tailSlot = slotIdx;
+    this.activeCount++;
     return true;
   }
 
   public update(dtSec: number, cameraPosition?: THREE.Vector3): void {
     this.elapsedSec += Math.max(0, dtSec);
-    for (let i = this.active.length - 1; i >= 0; i--) {
-      const rec = this.active[i];
-      if (this.elapsedSec - rec.createdAtSec >= rec.lifetimeSec) {
-        this.removeAt(i);
-        continue;
+    let idx = this.headSlot;
+    while (idx !== -1) {
+      const next = this.nextSlot[idx];
+      const rec = this.slots[idx];
+      if (rec) {
+        if (this.elapsedSec - rec.createdAtSec >= rec.lifetimeSec) {
+          this.removeSlot(idx);
+        } else if (cameraPosition) {
+          rec.mesh.visible = rec.position.distanceToSquared(cameraPosition) <= this.cullDistanceSq;
+        }
       }
-      if (cameraPosition) {
-        rec.mesh.visible = rec.position.distanceToSquared(cameraPosition) <= this.cullDistanceSq;
-      }
+      idx = next;
     }
   }
 
   public getStats(): { activeCount: number; maxBudget: number; materialCount: number } {
     return {
-      activeCount: this.active.length,
+      activeCount: this.activeCount,
       maxBudget: this.maxBudget,
       materialCount: this.materials.size,
     };
   }
 
   public clearMissionDecals(): void {
-    while (this.active.length > 0) {
-      this.evictOldest();
+    while (this.headSlot !== -1) {
+      this.removeSlot(this.headSlot);
     }
     this.elapsedSec = 0;
   }
@@ -398,16 +440,30 @@ export class SurfaceDecalManager {
   }
 
   private evictOldest(): void {
-    if (this.active.length === 0) return;
-    this.removeAt(0);
+    if (this.headSlot === -1) return;
+    this.removeSlot(this.headSlot);
   }
 
-  private removeAt(index: number): void {
-    const [rec] = this.active.splice(index, 1);
+  private removeSlot(slotIdx: number): void {
+    const rec = this.slots[slotIdx];
     if (!rec) return;
+    this.slots[slotIdx] = null;
+
+    const p = this.prevSlot[slotIdx];
+    const n = this.nextSlot[slotIdx];
+    if (p !== -1) this.nextSlot[p] = n;
+    else this.headSlot = n;
+    if (n !== -1) this.prevSlot[n] = p;
+    else this.tailSlot = p;
+    this.prevSlot[slotIdx] = -1;
+    this.nextSlot[slotIdx] = -1;
+    this.activeCount--;
+    this.freeSlots.push(slotIdx);
+
     this.group.remove(rec.mesh);
     if (!rec.mesh.userData?.usesSharedDecalGeo) {
       rec.mesh.geometry.dispose();
     }
+    this.freeRecords.push(rec);
   }
 }

@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { InputManager } from '@/src/engine/InputManager';
 import { DirectorTelemetrySnapshot } from '@/src/engine/RenderingQualityDirector';
@@ -66,11 +66,7 @@ export const GameHUD = React.memo(function GameHUD({
   const setTacticalOverviewOpen = useUIStore((s) => s.setTacticalOverviewOpen);
 
   const colorblind = useSettingsStore((s) => s.accessibility.colorblindMode);
-  const accessibilityScale = useSettingsStore((s) => s.accessibility.uiScale);
-  const accessibilityHudMode = useSettingsStore((s) => s.accessibility.hudMode);
-  const accessibilityHudOpacity = useSettingsStore((s) => s.accessibility.hudOpacity);
-  const accessibilityShowRadar = useSettingsStore((s) => s.accessibility.showRadar);
-  const accessibilityShowCompass = useSettingsStore((s) => s.accessibility.showCompass);
+  const displayUiScale = useSettingsStore((s) => s.display.uiScale);
 
   const hudScale = useSettingsStore((s) => s.hud.scale);
   const hudPreset = useSettingsStore((s) => s.hud.preset);
@@ -83,16 +79,16 @@ export const GameHUD = React.memo(function GameHUD({
   const showPerformanceTelemetry = useSettingsStore((s) => s.display.showPerformanceTelemetry);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
 
-  const uiScale = hudScale ?? accessibilityScale;
+  const uiScale = hudScale ?? displayUiScale;
   const hudMode: 'adaptive' | 'minimal' | 'expanded' =
     hudPreset === 'immersive'
       ? 'minimal'
       : hudPreset === 'full_tactical'
         ? 'expanded'
-        : accessibilityHudMode ?? 'adaptive';
-  const hudOpacity = hudSettingsOpacity ?? accessibilityHudOpacity ?? 0.92;
-  const showRadar = hudShowRadar ?? accessibilityShowRadar ?? true;
-  const showCompass = hudShowCompass ?? accessibilityShowCompass ?? true;
+        : 'adaptive';
+  const hudOpacity = hudSettingsOpacity ?? 0.92;
+  const showRadar = hudShowRadar ?? true;
+  const showCompass = hudShowCompass ?? true;
   const showKillFeed = hudShowKillfeed ?? true;
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
 
@@ -113,6 +109,12 @@ export const GameHUD = React.memo(function GameHUD({
   const radarSizePx = compactHud ? 52 : viewport.width < 1200 ? 74 : 98;
   const radarCenter = radarSizePx / 2;
   const radarRadius = radarCenter - 4;
+
+  const [fieldSwapOpen, setFieldSwapOpen] = useState(false);
+
+  const handleOpenFieldSwap = useCallback(() => {
+    setFieldSwapOpen(true);
+  }, []);
 
   const handleCloseOverview = useCallback(() => {
     setTacticalOverviewOpen(false);
@@ -182,7 +184,12 @@ export const GameHUD = React.memo(function GameHUD({
         onPause={onPause}
       />
 
-      <HudBottomPromptsAndRadio compactHud={compactHud} downedActive={downedActive} />
+      <HudBottomPromptsAndRadio
+        compactHud={compactHud}
+        downedActive={downedActive}
+        fieldSwapOpen={fieldSwapOpen}
+        onOpenFieldSwap={onSwapFieldWeapon ? handleOpenFieldSwap : undefined}
+      />
 
       {!compactHud && <HudDesktopVitalsPanel />}
 
@@ -209,6 +216,8 @@ export const GameHUD = React.memo(function GameHUD({
         <HudSquadCommandSlot
           compactHud={compactHud}
           downedActive={downedActive}
+          fieldSwapOpen={fieldSwapOpen}
+          onFieldSwapOpenChange={setFieldSwapOpen}
           onIssueSquadCommand={onIssueSquadCommand}
           onSwapFieldWeapon={onSwapFieldWeapon}
         />

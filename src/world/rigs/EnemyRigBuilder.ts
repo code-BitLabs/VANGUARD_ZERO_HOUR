@@ -159,10 +159,8 @@ export function buildSoldierRig(
     kneePad.position.set(0, -0.02, 0.09);
     const shin = new THREE.Mesh(shinGeo, armorMat);
     shin.position.set(0, -0.17, 0);
-    shin.castShadow = true;
     const boot = new THREE.Mesh(bootGeo, gunMat);
     boot.position.set(0, -0.37, 0.035);
-    boot.castShadow = true;
     knee.add(kneePad, shin, boot);
     hip.add(knee);
     root.add(hip);
@@ -181,7 +179,6 @@ export function buildSoldierRig(
   chestMesh.castShadow = true;
   const armorPlateMesh = new THREE.Mesh(chestPlateGeo, armorMat);
   armorPlateMesh.position.set(0, 0.36, 0.01);
-  armorPlateMesh.castShadow = true;
   torsoGroup.add(chestMesh, armorPlateMesh);
 
   // Front magazine pouches on plate carrier
@@ -194,7 +191,6 @@ export function buildSoldierRig(
   // Archetype-specific dorsal backpack / silhouette hardware
   const backpack = new THREE.Mesh(packGeo, trimMat);
   backpack.position.set(0, 0.36, -0.22);
-  backpack.castShadow = true;
   torsoGroup.add(backpack);
 
   if (archetype === 'heavy_armor') {
@@ -240,10 +236,8 @@ export function buildSoldierRig(
   const headMesh = new THREE.Group();
   headMesh.position.set(0, 0.68, 0);
   const head = new THREE.Mesh(headGeo, skinMat);
-  head.castShadow = true;
   const helmet = new THREE.Mesh(helmetGeo, armorMat);
   helmet.position.set(0, 0.09, -0.01);
-  helmet.castShadow = true;
   const visor = new THREE.Mesh(visorGeo, visorMat);
   visor.position.set(0, 0.02, 0.135);
   headMesh.add(head, helmet, visor);
@@ -262,7 +256,6 @@ export function buildSoldierRig(
   weaponArm.position.set(0.28, 0.52, 0.02);
   const rUpper = new THREE.Mesh(upperArmGeo, armorMat);
   rUpper.position.set(0, -0.14, 0);
-  rUpper.castShadow = true;
   weaponArm.add(rUpper);
 
   if (archetype === 'heavy_armor' || archetype === 'elite_assault') {
@@ -276,7 +269,6 @@ export function buildSoldierRig(
   const rFore = new THREE.Mesh(forearmGeo, skinMat);
   rFore.position.set(0, -0.04, 0.13);
   rFore.rotation.x = Math.PI / 2;
-  rFore.castShadow = true;
   rightForearm.add(rFore);
 
   const weaponPivot = new THREE.Group();
@@ -288,7 +280,6 @@ export function buildSoldierRig(
   } else {
     rifleBody.position.set(0, 0, 0.1);
   }
-  rifleBody.castShadow = true;
   weaponPivot.add(rifleBody);
 
   if (archetype !== 'rocket_trooper') {
@@ -313,7 +304,6 @@ export function buildSoldierRig(
   leftArm.position.set(-0.28, 0.52, 0.02);
   const lUpper = new THREE.Mesh(upperArmGeo, armorMat);
   lUpper.position.set(0, -0.14, 0);
-  lUpper.castShadow = true;
   leftArm.add(lUpper);
 
   if (archetype === 'heavy_armor' || archetype === 'elite_assault') {
@@ -327,7 +317,6 @@ export function buildSoldierRig(
   const lFore = new THREE.Mesh(forearmGeo, skinMat);
   lFore.position.set(0, -0.02, 0.12);
   lFore.rotation.x = Math.PI / 2;
-  lFore.castShadow = true;
   leftForearm.add(lFore);
   leftArm.add(leftForearm);
   torsoGroup.add(leftArm);

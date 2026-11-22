@@ -190,7 +190,7 @@ const RAW_MISSIONS: MissionConfig[] = [
         bonusScore: 350,
         bypassScore: 125,
         blockedExplanation: 'Intercept all 3 armored convoy vehicles first (Stage 1).',
-        markerPos: { x: 24, y: 3, z: -42 },
+        markerPos: { x: 26, y: 3, z: -49 },
         actionMeta: {
           actionKind: 'sabotage_or_shoot',
           targetLabel: 'Fuel Depot Tanks',
@@ -234,11 +234,11 @@ const RAW_MISSIONS: MissionConfig[] = [
       { type: 'attack_drone', count: 2, altitude: 12, orbitRadius: 34 },
     ],
     vehicles: [
-      { type: 'military_jeep', position: { x: 0, y: 0, z: 58 }, yaw: 0, hostile: false, isConvoyTarget: false },
+      { type: 'military_jeep', position: { x: -6, y: 0, z: 56 }, yaw: 0, hostile: false, isConvoyTarget: false },
       { type: 'armored_truck', position: { x: -16, y: 0, z: 54 }, yaw: 0, hostile: false, isConvoyTarget: false },
-      { type: 'enemy_apc', position: { x: 6, y: 0, z: 18 }, yaw: 0, hostile: true, isConvoyTarget: true },
-      { type: 'enemy_technical', position: { x: -8, y: 0, z: -4 }, yaw: 0, hostile: true, isConvoyTarget: true },
-      { type: 'enemy_technical', position: { x: 14, y: 0, z: -24 }, yaw: Math.PI, hostile: true, isConvoyTarget: true },
+      { type: 'enemy_apc', position: { x: 4, y: 0, z: 22 }, yaw: 0, hostile: true, isConvoyTarget: true },
+      { type: 'enemy_technical', position: { x: -4, y: 0, z: -4 }, yaw: Math.PI, hostile: true, isConvoyTarget: true },
+      { type: 'enemy_technical', position: { x: 4, y: 0, z: -22 }, yaw: 0, hostile: true, isConvoyTarget: true },
     ],
   },
   {

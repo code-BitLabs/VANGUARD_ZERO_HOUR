@@ -10,19 +10,9 @@ export interface WorldChunk {
   bounds: THREE.Box3;
 }
 
-export interface OccluderVolume {
-  minX: number;
-  minY: number;
-  minZ: number;
-  maxX: number;
-  maxY: number;
-  maxZ: number;
-}
-
 export class WorldChunkManager {
   public readonly chunkSize = 48;
   private chunks = new Map<string, WorldChunk>();
-  private occluders: OccluderVolume[] = [];
   private readonly frustum = new THREE.Frustum();
   private readonly projScreenMatrix = new THREE.Matrix4();
 
@@ -52,10 +42,6 @@ export class WorldChunkManager {
       this.chunks.set(key, chunk);
     }
     chunk.group.add(obj);
-  }
-
-  registerOccluder(box: OccluderVolume): void {
-    this.occluders.push(box);
   }
 
   getChunkAt(worldX: number, worldZ: number): WorldChunk | undefined {
@@ -106,54 +92,10 @@ export class WorldChunkManager {
     }
   }
 
-  isPointOccluded(camPos: THREE.Vector3, targetX: number, targetY: number, targetZ: number): boolean {
-    const dx = targetX - camPos.x;
-    const dy = targetY - camPos.y;
-    const dz = targetZ - camPos.z;
-    const dist = Math.hypot(dx, dy, dz);
-    if (dist < 18) return false;
-    const invD = 1 / dist;
-    const ndx = dx * invD;
-    const ndy = dy * invD;
-    const ndz = dz * invD;
-
-    for (let i = 0; i < this.occluders.length; i++) {
-      const b = this.occluders[i];
-      let tmin = 0;
-      let tmax = dist - 1.5;
-
-      const idx = ndx !== 0 ? 1 / ndx : 1e9;
-      let t1 = (b.minX - camPos.x) * idx;
-      let t2 = (b.maxX - camPos.x) * idx;
-      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin > tmax) continue;
-
-      const idy = ndy !== 0 ? 1 / ndy : 1e9;
-      t1 = (b.minY - camPos.y) * idy;
-      t2 = (b.maxY - camPos.y) * idy;
-      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin > tmax) continue;
-
-      const idz = ndz !== 0 ? 1 / ndz : 1e9;
-      t1 = (b.minZ - camPos.z) * idz;
-      t2 = (b.maxZ - camPos.z) * idz;
-      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin <= tmax && tmin > 0.5) return true;
-    }
-    return false;
-  }
-
   clear(scene: THREE.Scene): void {
     for (const chunk of this.chunks.values()) {
       scene.remove(chunk.group);
     }
     this.chunks.clear();
-    this.occluders = [];
   }
 }

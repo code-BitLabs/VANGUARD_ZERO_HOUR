@@ -605,18 +605,19 @@ describe('Stage 8 — Operational Immersion, Squad Experience, Campaign Balance 
     expect(corruptRes.save.schemaRevision).toBe(4);
     expect(corruptRes.save.squadRoster.length).toBeGreaterThanOrEqual(5);
 
-    const v1Res = migrateProgressionSave({
-      version: 1,
+    const v2Rev2Res = migrateProgressionSave({
+      version: 2,
+      schemaRevision: 2,
       xp: 900,
       requisitionPoints: 400,
       missionRecords: {
         '1': { missionId: 1, completed: true, bestGrade: 'A', bestScore: 3200, fastestTimeSec: 180 },
       },
     });
-    expect(v1Res.migratedFromV1).toBe(true);
-    expect(v1Res.save.version).toBe(2);
-    expect(v1Res.save.schemaRevision).toBe(4);
-    expect(v1Res.save.xp).toBe(900);
-    expect(v1Res.save.missionRecords['1']?.completed).toBe(true);
+    expect(v2Rev2Res.recoveredFromCorruption).toBe(false);
+    expect(v2Rev2Res.save.version).toBe(2);
+    expect(v2Rev2Res.save.schemaRevision).toBe(4);
+    expect(v2Rev2Res.save.xp).toBe(900);
+    expect(v2Rev2Res.save.missionRecords['1']?.completed).toBe(true);
   });
 });

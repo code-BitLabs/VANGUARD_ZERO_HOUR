@@ -23,17 +23,6 @@ export function Card({
   );
 }
 
-export function CardHeader({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn('px-5 py-4 border-b border-[var(--vg-border-hairline)]', className)}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function CardContent({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn('p-5', className)} {...props}>

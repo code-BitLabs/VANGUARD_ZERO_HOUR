@@ -89,6 +89,7 @@ export class ExplosiveManager {
 
   private previewMesh: THREE.Mesh;
   private previewValid = false;
+  private c4Priming = false;
   private previewHitPos = new THREE.Vector3();
   private previewNormal = new THREE.Vector3(0, 1, 0);
   private previewHitColliderId: string | null = null;
@@ -206,6 +207,7 @@ export class ExplosiveManager {
     this.nukeSirenAccum = 0;
     this.previewMesh.visible = false;
     this.previewValid = false;
+    this.c4Priming = false;
   }
 
   dispose(): void {
@@ -298,12 +300,30 @@ export class ExplosiveManager {
     };
   }
 
+  setC4Priming(active: boolean): void {
+    this.c4Priming = active;
+    if (!active) {
+      this.previewValid = false;
+      this.previewMesh.visible = false;
+    }
+  }
+
+  isC4Priming(): boolean {
+    return this.c4Priming;
+  }
+
+  isPreviewVisible(): boolean {
+    return this.previewMesh.visible;
+  }
+
   updatePreview(
     camera: THREE.PerspectiveCamera,
     collision: CollisionWorld,
-    inVehicle: boolean
+    inVehicle: boolean,
+    showWireframe = this.c4Priming
   ): void {
     if (
+      !showWireframe ||
       inVehicle ||
       this.c4Inventory <= 0 ||
       this.deployedC4.length >= ExplosiveManager.MAX_DEPLOYED_C4
@@ -348,7 +368,7 @@ export class ExplosiveManager {
   }
 
   /**
-   * Handles [C] press: places C4 when aiming at valid surface <=4.5m & slots remain;
+   * Handles [C] press/release: places C4 when aiming at valid surface <=4.5m & slots remain;
    * otherwise (or when forceDetonate is true) triggers staggered remote detonation of all deployed C4.
    */
   handleC4Action(
@@ -360,9 +380,18 @@ export class ExplosiveManager {
     onAlert?: (text: string, durationSec?: number) => void
   ): 'placed' | 'detonating' | 'noop' {
     const activeCount = this.getActiveC4Count();
-    if (!forceDetonate && this.previewValid && this.c4Inventory > 0 && activeCount < ExplosiveManager.MAX_DEPLOYED_C4) {
-      this.placeC4AtPreview(vehicles, scope);
-      return 'placed';
+    if (!forceDetonate && this.c4Inventory > 0 && activeCount < ExplosiveManager.MAX_DEPLOYED_C4) {
+      if (!this.previewValid) {
+        this.updatePreview(camera, collision, false, true);
+      }
+      if (this.previewValid) {
+        this.placeC4AtPreview(vehicles, scope);
+        if (!this.c4Priming) {
+          this.previewValid = false;
+          this.previewMesh.visible = false;
+        }
+        return 'placed';
+      }
     }
 
     // If at MAX_DEPLOYED_C4 and player is aiming point-blank at a placement surface without Shift+C,
@@ -395,12 +424,7 @@ export class ExplosiveManager {
 
     if (this.c4Inventory <= 0) {
       onAlert?.('NO C4 CHARGES REMAINING — COLLECT RESUPPLY CRATE', 2.2);
-    } else if (!this.previewValid) {
-      this.updatePreview(camera, collision, false);
-      if (this.previewValid && this.c4Inventory > 0 && activeCount < ExplosiveManager.MAX_DEPLOYED_C4) {
-        this.placeC4AtPreview(vehicles, scope);
-        return 'placed';
-      }
+    } else {
       onAlert?.('AIM AT SURFACE WITHIN 4.5M TO PLANT C4', 1.8);
     }
     return 'noop';
@@ -664,7 +688,7 @@ export class ExplosiveManager {
       this.nukePendingConfirmSec = Math.max(0, this.nukePendingConfirmSec - dt);
     }
 
-    this.updatePreview(camera, collision, inVehicle);
+    this.updatePreview(camera, collision, inVehicle, this.c4Priming);
 
     // Update deployed C4 charges (attachment to vehicles + LED beep)
     for (const c of this.deployedC4) {

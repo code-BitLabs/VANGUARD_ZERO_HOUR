@@ -249,9 +249,10 @@ describe('Stage 7 Adversarial Suite A — Campaign Persistence, Roster Continuit
     const afterRebaseOp2 = resolveMissionConsequences(2, rebased, 'canonical');
     expect(afterRebaseOp2.enemyCommsDelayMult).toBeGreaterThan(1.2);
 
-    // Lossless legacy migration: v1 -> v2 rev4 and v2 rev3 -> v2 rev4
-    const legacyV1 = {
-      version: 1,
+    // Lossless schema revision upgrade: v2 rev2 -> v2 rev4 and v2 rev3 -> v2 rev4
+    const legacyV2Rev2 = {
+      version: 2,
+      schemaRevision: 2,
       xp: 1200,
       requisitionPoints: 500,
       missionRecords: {
@@ -260,14 +261,15 @@ describe('Stage 7 Adversarial Suite A — Campaign Persistence, Roster Continuit
       },
       weaponUpgrades: { assault_rifle: { damage: 2, recoil: 1, capacity: 1, reload: 0 } },
     };
-    const migratedV1 = migrateProgressionSave(legacyV1);
-    expect(migratedV1.save.version).toBe(2);
-    expect(migratedV1.save.schemaRevision).toBe(4);
-    expect(migratedV1.save.xp).toBe(1200);
-    expect(migratedV1.save.requisitionPoints).toBe(500);
-    expect(migratedV1.save.missionRecords['1']?.completed).toBe(true);
-    expect(migratedV1.save.squadRoster).toHaveLength(5);
-    expect(migratedV1.save.campaignLedger.events.length).toBeGreaterThanOrEqual(2);
+    const migratedRev2 = migrateProgressionSave(legacyV2Rev2);
+    expect(migratedRev2.recoveredFromCorruption).toBe(false);
+    expect(migratedRev2.save.version).toBe(2);
+    expect(migratedRev2.save.schemaRevision).toBe(4);
+    expect(migratedRev2.save.xp).toBe(1200);
+    expect(migratedRev2.save.requisitionPoints).toBe(500);
+    expect(migratedRev2.save.missionRecords['1']?.completed).toBe(true);
+    expect(migratedRev2.save.squadRoster).toHaveLength(5);
+    expect(migratedRev2.save.campaignLedger.events.length).toBeGreaterThanOrEqual(2);
 
     const legacyV2Rev3 = {
       ...ProgressionSaveSchema.parse({}),

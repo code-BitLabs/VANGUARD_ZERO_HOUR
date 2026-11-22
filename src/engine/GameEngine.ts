@@ -156,6 +156,89 @@ export class GameEngine {
   private readonly _squadRayOriginScratch = new THREE.Vector3();
   private readonly _squadRayDirScratch = new THREE.Vector3();
   private readonly _squadEnemyViewsScratch: SquadEnemyReadView[] = [];
+  private readonly _seenGunshotSquadsScratch = new Set<string>();
+  private readonly _gunshotCentroidsPool: Array<{
+    squadId: string;
+    spotterUnitId: string;
+    x: number;
+    y: number;
+    z: number;
+  }> = [];
+  private readonly _gunshotCentroidsScratch: Array<{
+    squadId: string;
+    spotterUnitId: string;
+    x: number;
+    y: number;
+    z: number;
+  }> = [];
+  private readonly _emptyProxScratch: Array<{ position: THREE.Vector3; radius: number }> = [];
+  private readonly _squadValidationPlayerPos = { x: 0, y: 0, z: 0 };
+  private readonly _cachedSquadValidationCtx = {
+    playerPos: this._squadValidationPlayerPos,
+    isEnemyAlive: (id: string) => {
+      const u = this.enemies.getUnitById(id);
+      return Boolean(u && u.alive);
+    },
+    getEnemyPos: (id: string) => {
+      const u = this.enemies.getUnitById(id);
+      return u && u.alive ? { x: u.position.x, y: u.position.y, z: u.position.z } : null;
+    },
+    isVehicleBoardable: (id: string) => {
+      const v = this.vehicles.getVehicleById(id);
+      return Boolean(
+        v && v.alive && !v.hostile && v.passengerOccupantIds.length < v.maxPassengerSeats
+      );
+    },
+    getVehiclePos: (id: string) => {
+      const v = this.vehicles.getVehicleById(id);
+      return v && v.alive ? { x: v.position.x, y: v.position.y, z: v.position.z } : null;
+    },
+  };
+  private readonly _sustainmentPlayerVehSlot: SustainmentVehicleTarget & { _veh: VehicleEntity | null } = {
+    _veh: null,
+    id: '',
+    alive: false,
+    hostile: false,
+    displayName: '',
+    health: 0,
+    maxHealth: 1,
+    speed: 0,
+    position: new THREE.Vector3(),
+    turretAmmo: 0,
+    maxTurretAmmo: 0,
+    lastDamagedAtSec: 0,
+    repairAndRearm: (hullFraction, turretAmmoFraction) =>
+      this._sustainmentPlayerVehSlot._veh
+        ? this.vehicles.repairAndRearmVehicle(
+            this._sustainmentPlayerVehSlot._veh,
+            hullFraction,
+            turretAmmoFraction
+          )
+        : { hullAdded: 0, turretAmmoAdded: 0, alreadyFull: false },
+  };
+  private readonly _sustainmentNearbyVehSlot: SustainmentVehicleTarget & { _veh: VehicleEntity | null } = {
+    _veh: null,
+    id: '',
+    alive: false,
+    hostile: false,
+    displayName: '',
+    health: 0,
+    maxHealth: 1,
+    speed: 0,
+    position: new THREE.Vector3(),
+    turretAmmo: 0,
+    maxTurretAmmo: 0,
+    lastDamagedAtSec: 0,
+    repairAndRearm: (hullFraction, turretAmmoFraction) =>
+      this._sustainmentNearbyVehSlot._veh
+        ? this.vehicles.repairAndRearmVehicle(
+            this._sustainmentNearbyVehSlot._veh,
+            hullFraction,
+            turretAmmoFraction
+          )
+        : { hullAdded: 0, turretAmmoAdded: 0, alreadyFull: false },
+  };
+  private _sustainmentCtxScratch: SustainmentContext | null = null;
   private readonly playtestTracker = new PlaytestExperienceTracker();
   private readonly hudPublisher = new HudSnapshotPublisher();
   private readonly combatDamage: CombatDamageResolver;
@@ -167,6 +250,8 @@ export class GameEngine {
   private activeModifiers: ReplayModifierId[] = [];
   private activeModifierEffects: CombinedModifierEffects = computeCombinedModifierEffects([]);
   private lastExtractionAttemptLogged = false;
+  private c4KeyPriming = false;
+  private readonly _convoyMarkerScratch = new THREE.Vector3();
 
   private readonly pbrLibrary = new PbrMaterialLibrary();
   private readonly spatialAcoustics = new SpatialAcousticEngine();
@@ -194,8 +279,6 @@ export class GameEngine {
   private attemptContext: MissionAttemptContext | null = null;
   private activeCheckpointSnapshot: MissionCheckpointSnapshot | null = null;
   private pendingDefeatPayload: MissionResultPayload | null = null;
-  private dioramaAngle = 0;
-  private dioramaLoaded = false;
   private reinforcementTimer = 28;
   private suppressAutoPauseOnUnlock = false;
   private downedTimerSec = 0;
@@ -543,10 +626,9 @@ export class GameEngine {
     this.lifecycle.start();
     this.lifecycle.send({ type: 'READY' });
 
-    // Load live background 3D diorama for Title/Menu screens, then capture shared baseline
-    this.setupMenuDiorama();
+    // Keep the 3D scene cleared and GameLoop idle on opaque menu screens (started when deploying into a mission)
+    this.clearWorldState();
     this.resourceManager.recordBaseline();
-    // Keep GameLoop idle on opaque menu screens (started when deploying into a mission)
     this.loop.stop();
   }
 
@@ -705,13 +787,6 @@ export class GameEngine {
       },
       'shared'
     );
-  }
-
-  private setupMenuDiorama(): void {
-    // Opaque full-bleed artwork & Command HQ overlays cover all menu screens;
-    // keep the 3D scene unloaded on menus to eliminate hidden GPU/CPU memory & frame burn (VIS-016).
-    this.clearWorldState();
-    this.dioramaLoaded = false;
   }
 
   async startMission(
@@ -994,6 +1069,7 @@ export class GameEngine {
     this.monitor.reset();
     this.rulesEngine.reset();
     this.explosives.reset();
+    this.c4KeyPriming = false;
     this.coordinator.reset();
     this.coordinator.setDifficulty(difficulty);
     this.coordinator.setSoloConstraints(this.soloDirector.getEngagementConstraints());
@@ -1223,7 +1299,6 @@ export class GameEngine {
       this.captureCheckpointSnapshot();
     }
     this.reinforcementTimer = 28;
-    this.dioramaLoaded = false;
 
     // PERF-01 & AUD-02: Prewarm decal/destruction/vehicle/projectile shaders and register CSM during load
     this.missionLoader.prewarmCombatShaders();
@@ -1377,7 +1452,7 @@ export class GameEngine {
     this.lifecycle.send({ type: 'UNLOADED' });
     this.loop.setPaused(true);
     this.loop.stop();
-    this.setupMenuDiorama();
+    this.clearWorldState();
     uiStore.getState().setScreen(targetScreen);
   }
 
@@ -1460,8 +1535,12 @@ export class GameEngine {
     const sandboxAuthorized = devActive && settings.developer.sandboxOrdnanceAuthorized;
     const req = progressionStore.getState().save.requisitionPoints;
 
-    // [C] / [Shift+C] / Touch C4 Detonate
+    // [C] Hold to aim/prime C4 wireframe, release (or touch tap) to place/detonate; [Shift+C] / Touch Detonate detonates immediately
+    const c4Held = !inVehicle && this.input.isActionHeld('c4');
+    const shiftHeldForC4 = this.input.isKeyHeld('ShiftLeft') || this.input.isKeyHeld('ShiftRight');
     if (!inVehicle && this.input.wasActionPressed('c4Detonate')) {
+      this.c4KeyPriming = false;
+      this.explosives.setC4Priming(false);
       this.explosives.handleC4Action(
         this.renderer.camera,
         this.collisionWorld,
@@ -1470,14 +1549,41 @@ export class GameEngine {
         true,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
-    } else if (!inVehicle && this.input.wasActionPressed('c4')) {
-      const shiftHeld = this.input.isKeyHeld('ShiftLeft') || this.input.isKeyHeld('ShiftRight');
+    } else if (!inVehicle && shiftHeldForC4 && this.input.wasActionPressed('c4')) {
+      this.c4KeyPriming = false;
+      this.explosives.setC4Priming(false);
       this.explosives.handleC4Action(
         this.renderer.camera,
         this.collisionWorld,
         this.vehicles,
         this.activeScope,
-        shiftHeld,
+        true,
+        (msg, dur) => this.missionDirector?.showAlert(msg, dur)
+      );
+    } else if (c4Held && !shiftHeldForC4) {
+      this.c4KeyPriming = true;
+      this.explosives.setC4Priming(true);
+    } else if (this.c4KeyPriming) {
+      this.c4KeyPriming = false;
+      this.explosives.setC4Priming(false);
+      if (!inVehicle) {
+        this.explosives.handleC4Action(
+          this.renderer.camera,
+          this.collisionWorld,
+          this.vehicles,
+          this.activeScope,
+          false,
+          (msg, dur) => this.missionDirector?.showAlert(msg, dur)
+        );
+      }
+    } else if (!inVehicle && this.input.wasActionPressed('c4')) {
+      // Touch tap fallback where 'c4' is pulsed via justPressed without a held key frame
+      this.explosives.handleC4Action(
+        this.renderer.camera,
+        this.collisionWorld,
+        this.vehicles,
+        this.activeScope,
+        false,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
     }
@@ -1772,48 +1878,30 @@ export class GameEngine {
   }
 
   private buildSquadIntentValidationCtx() {
-    return {
-      playerPos: {
-        x: this.player.position.x,
-        y: this.player.position.y,
-        z: this.player.position.z,
-      },
-      isEnemyAlive: (id: string) => {
-        const u = this.enemies.getUnits().find((e) => e.id === id);
-        return Boolean(u && u.alive);
-      },
-      getEnemyPos: (id: string) => {
-        const u = this.enemies.getUnits().find((e) => e.id === id && e.alive);
-        return u ? { x: u.position.x, y: u.position.y, z: u.position.z } : null;
-      },
-      isVehicleBoardable: (id: string) => {
-        const v = this.vehicles.getVehicles().find((veh) => veh.id === id);
-        return Boolean(v && v.alive && !v.hostile && v.passengerOccupantIds.length < v.maxPassengerSeats);
-      },
-      getVehiclePos: (id: string) => {
-        const v = this.vehicles.getVehicles().find((veh) => veh.id === id && veh.alive);
-        return v ? { x: v.position.x, y: v.position.y, z: v.position.z } : null;
-      },
-    };
+    this._squadValidationPlayerPos.x = this.player.position.x;
+    this._squadValidationPlayerPos.y = this.player.position.y;
+    this._squadValidationPlayerPos.z = this.player.position.z;
+    return this._cachedSquadValidationCtx;
   }
 
-  private wrapVehicleForSustainment(veh: VehicleEntity | null): SustainmentVehicleTarget | null {
+  private fillSustainmentVehicleSlot(
+    slot: SustainmentVehicleTarget & { _veh: VehicleEntity | null },
+    veh: VehicleEntity | null
+  ): SustainmentVehicleTarget | null {
+    slot._veh = veh;
     if (!veh) return null;
-    return {
-      id: veh.id,
-      alive: veh.alive,
-      hostile: veh.hostile,
-      displayName: veh.displayName,
-      health: veh.health,
-      maxHealth: veh.maxHealth,
-      speed: veh.speed,
-      position: veh.position,
-      turretAmmo: veh.turretAmmo,
-      maxTurretAmmo: veh.maxTurretAmmo,
-      lastDamagedAtSec: veh.lastDamagedAtSec,
-      repairAndRearm: (hullFraction, turretAmmoFraction) =>
-        this.vehicles.repairAndRearmVehicle(veh, hullFraction, turretAmmoFraction),
-    };
+    slot.id = veh.id;
+    slot.alive = veh.alive;
+    slot.hostile = veh.hostile;
+    slot.displayName = veh.displayName;
+    slot.health = veh.health;
+    slot.maxHealth = veh.maxHealth;
+    slot.speed = veh.speed;
+    slot.position = veh.position;
+    slot.turretAmmo = veh.turretAmmo;
+    slot.maxTurretAmmo = veh.maxTurretAmmo;
+    slot.lastDamagedAtSec = veh.lastDamagedAtSec;
+    return slot;
   }
 
   private buildSustainmentContext(): SustainmentContext {
@@ -1821,16 +1909,33 @@ export class GameEngine {
     const nearbyFriendly = !playerVeh
       ? this.vehicles.getNearestFriendlyVehicle(this.player.position, 7.5)
       : null;
-    return {
-      player: this.player,
-      weapons: this.weapons,
-      explosives: this.explosives,
-      playerVehicle: this.wrapVehicleForSustainment(playerVeh),
-      nearbyFriendlyVehicle: this.wrapVehicleForSustainment(nearbyFriendly),
-      difficulty: missionSelectionStore.getState().difficulty,
-      nowSec: this.telemetry.getElapsedSec(),
-      ammoGrantScale: this.activeModifierEffects.ammoGrantScale,
-    };
+    const pTarget = this.fillSustainmentVehicleSlot(this._sustainmentPlayerVehSlot, playerVeh);
+    const nTarget = this.fillSustainmentVehicleSlot(this._sustainmentNearbyVehSlot, nearbyFriendly);
+    const diff = missionSelectionStore.getState().difficulty;
+    const nowSec = this.telemetry.getElapsedSec();
+    const scale = this.activeModifierEffects.ammoGrantScale;
+    if (!this._sustainmentCtxScratch) {
+      this._sustainmentCtxScratch = {
+        player: this.player,
+        weapons: this.weapons,
+        explosives: this.explosives,
+        playerVehicle: pTarget,
+        nearbyFriendlyVehicle: nTarget,
+        difficulty: diff,
+        nowSec,
+        ammoGrantScale: scale,
+      };
+    } else {
+      this._sustainmentCtxScratch.player = this.player;
+      this._sustainmentCtxScratch.weapons = this.weapons;
+      this._sustainmentCtxScratch.explosives = this.explosives;
+      this._sustainmentCtxScratch.playerVehicle = pTarget;
+      this._sustainmentCtxScratch.nearbyFriendlyVehicle = nTarget;
+      this._sustainmentCtxScratch.difficulty = diff;
+      this._sustainmentCtxScratch.nowSec = nowSec;
+      this._sustainmentCtxScratch.ammoGrantScale = scale;
+    }
+    return this._sustainmentCtxScratch;
   }
 
   private tryContextualInteract(): boolean {
@@ -1971,16 +2076,6 @@ export class GameEngine {
     this.audio.tick(dt);
     const screen = uiStore.getState().screen;
     if (screen !== 'playing' || !this.missionDirector || !this.activeMission) {
-      // Gentle menu diorama orbit pan
-      if (this.dioramaLoaded) {
-        this.dioramaAngle += dt * 0.08;
-        this.renderer.camera.position.set(
-          Math.cos(this.dioramaAngle) * 52,
-          22,
-          Math.sin(this.dioramaAngle) * 52
-        );
-        this.renderer.camera.lookAt(0, 6, 0);
-      }
       return;
     }
 
@@ -2034,20 +2129,35 @@ export class GameEngine {
       inVehicle
     );
     if (this.weapons.shotsFired > shotsBefore) {
-      const seenSquads = new Set<string>();
-      const squadCentroids: Array<{ squadId: string; spotterUnitId: string; x: number; y: number; z: number }> = [];
-      for (const u of this.enemies.getUnits()) {
+      this._seenGunshotSquadsScratch.clear();
+      this._gunshotCentroidsScratch.length = 0;
+      const units = this.enemies.getUnits();
+      let cIdx = 0;
+      for (let i = 0; i < units.length; i++) {
+        const u = units[i];
         if (!u.alive) continue;
         const sqId = u.squadId || 'default';
-        if (seenSquads.has(sqId)) continue;
-        seenSquads.add(sqId);
-        squadCentroids.push({
-          squadId: sqId,
-          spotterUnitId: u.id,
-          x: u.position.x,
-          y: u.position.y,
-          z: u.position.z,
-        });
+        if (this._seenGunshotSquadsScratch.has(sqId)) continue;
+        this._seenGunshotSquadsScratch.add(sqId);
+        let slot = this._gunshotCentroidsPool[cIdx];
+        if (!slot) {
+          slot = {
+            squadId: sqId,
+            spotterUnitId: u.id,
+            x: u.position.x,
+            y: u.position.y,
+            z: u.position.z,
+          };
+          this._gunshotCentroidsPool[cIdx] = slot;
+        } else {
+          slot.squadId = sqId;
+          slot.spotterUnitId = u.id;
+          slot.x = u.position.x;
+          slot.y = u.position.y;
+          slot.z = u.position.z;
+        }
+        this._gunshotCentroidsScratch.push(slot);
+        cIdx++;
       }
       this.encounterDirector.intelBoard.emitAcousticEvent({
         source: 'gunshot',
@@ -2055,7 +2165,7 @@ export class GameEngine {
         y: this.player.position.y,
         z: this.player.position.z,
         soundRadiusMeters: this.weapons.getActiveWeaponSoundRadiusMeters(),
-        squadCentroids,
+        squadCentroids: this._gunshotCentroidsScratch,
         observedPlayerInVehicle: inVehicle,
         observedFriendlySuppressor: this.friendlySuppressorActiveThisTick,
       });
@@ -2075,6 +2185,20 @@ export class GameEngine {
       settings.graphics.fov,
       hadManualLookInput
     );
+
+    // Dynamically lock convoy_intercept objective marker onto the nearest surviving convoy vehicle
+    const nearestConvoyPos = this.vehicles.getNearestConvoyTargetPosition(
+      this.player.position,
+      this._convoyMarkerScratch
+    );
+    if (nearestConvoyPos) {
+      this.missionDirector.updateObjectiveMarkerPosition(
+        'convoy_intercept',
+        nearestConvoyPos.x,
+        nearestConvoyPos.y,
+        nearestConvoyPos.z
+      );
+    }
 
     // Collectible 3D Heart Health Pickups
     const nowDrivingVehicle = this.vehicles.getPlayerVehicle() !== null;
@@ -2150,7 +2274,10 @@ export class GameEngine {
 
     // Pooled projectiles (rockets, guided missiles, grenades, aerial bombs, TRIDENT-X)
     const tProj0 = performance.now();
-    const proxScratch = this.combatDamage.collectProximityPositions();
+    const proxScratch =
+      this.projectiles.getActiveCount() > 0
+        ? this.combatDamage.collectProximityPositions()
+        : this._emptyProxScratch;
     const explosiveCallbacks = this.combatDamage.getExplosiveCallbacks();
     this.projectiles.update(
       dt,
@@ -2466,16 +2593,29 @@ export class GameEngine {
 
     this.renderer.camera.getWorldDirection(this._squadForwardScratch);
     const enemyUnits = this.enemies.getUnits();
-    this._squadEnemyViewsScratch.length = 0;
+    this._squadEnemyViewsScratch.length = enemyUnits.length;
+    const playerY = this.player.position.y;
     for (let i = 0; i < enemyUnits.length; i++) {
       const eu = enemyUnits[i];
-      this._squadEnemyViewsScratch.push({
-        id: eu.id,
-        alive: eu.alive,
-        position: eu.position,
-        isArmoredOrVehicle: eu.archetype === 'heavy_armor' || eu.archetype === 'rocket_trooper',
-        isElevated: eu.position.y - this.player.position.y > 2.2,
-      });
+      const isArmored = eu.archetype === 'heavy_armor' || eu.archetype === 'rocket_trooper';
+      const isElev = eu.position.y - playerY > 2.2;
+      let slot = this._squadEnemyViewsScratch[i];
+      if (!slot) {
+        slot = {
+          id: eu.id,
+          alive: eu.alive,
+          position: eu.position,
+          isArmoredOrVehicle: isArmored,
+          isElevated: isElev,
+        };
+        this._squadEnemyViewsScratch[i] = slot;
+      } else {
+        slot.id = eu.id;
+        slot.alive = eu.alive;
+        slot.position = eu.position;
+        slot.isArmoredOrVehicle = isArmored;
+        slot.isElevated = isElev;
+      }
     }
     const seatViews = this.vehicles.getFriendlySeatViews();
     this.friendlySquad.stepPlayerRescue(
@@ -2592,8 +2732,8 @@ export class GameEngine {
     }
     for (let i = 0; i < squadOut.fireRequests.length; i++) {
       const req = squadOut.fireRequests[i];
-      const targetEnemy = enemyUnits.find((eu) => eu.id === req.enemyId && eu.alive);
-      if (targetEnemy) {
+      const targetEnemy = this.enemies.getUnitById(req.enemyId);
+      if (targetEnemy && targetEnemy.alive) {
         const killed = this.enemies.damageUnit(targetEnemy, req.damage, false);
         if (killed) {
           const isHvt =

@@ -93,6 +93,9 @@ export interface VehicleEntity {
   lastColliderHit: string | null;
   activeContacts: number;
   waypointIndex: number;
+  stuckTimerSec: number;
+  avoidanceTimerSec: number;
+  avoidanceSteerDir: number;
   collider: SpatialAABB;
   meshRoot: THREE.Group;
   chassisGroup: THREE.Group;
@@ -136,6 +139,9 @@ export class VehicleManager {
   }> = [];
   private readonly _lockPool: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> = [];
   private readonly _blipPool: MiniMapBlip[] = [];
+  private readonly vehicleById = new Map<string, VehicleEntity>();
+  private readonly _seatViewById = new Map<string, SquadVehicleSeatView>();
+  private readonly _seatViewsScratch: SquadVehicleSeatView[] = [];
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -221,47 +227,60 @@ export class VehicleManager {
     return this.vehicles;
   }
 
+  getVehicleById(id: string): VehicleEntity | undefined {
+    return this.vehicleById.get(id);
+  }
+
   /**
    * TRN-37: Exposes friendly vehicle passenger seat occupancy views to FriendlySquadManager
-   * with atomic seat reservation and safe lateral egress points.
+   * with atomic seat reservation and safe lateral egress points (reuses cached wrappers).
    */
   getFriendlySeatViews(): SquadVehicleSeatView[] {
-    const out: SquadVehicleSeatView[] = [];
+    this._seatViewsScratch.length = 0;
     for (let i = 0; i < this.vehicles.length; i++) {
       const v = this.vehicles[i];
       if (v.hostile) continue;
-      out.push({
-        id: v.id,
-        alive: v.alive,
-        hostile: v.hostile,
-        position: v.position,
-        yaw: v.yaw,
-        healthRatio: v.maxHealth > 0 ? v.health / v.maxHealth : 0,
-        maxPassengerSeats: v.maxPassengerSeats,
-        occupantIds: v.passengerOccupantIds,
-        tryBoardSeat: (operatorId: string) => {
-          if (!v.alive || v.hostile) return false;
-          if (v.passengerOccupantIds.includes(operatorId)) return true;
-          if (v.passengerOccupantIds.length >= v.maxPassengerSeats) return false;
-          v.passengerOccupantIds.push(operatorId);
-          return true;
-        },
-        releaseSeat: (operatorId: string) => {
-          const idx = v.passengerOccupantIds.indexOf(operatorId);
-          if (idx >= 0) {
-            v.passengerOccupantIds.splice(idx, 1);
-          }
-          const sideSign = idx % 2 === 0 ? 1 : -1;
-          const exitDist = v.halfWidth + 1.5;
-          return {
-            x: v.position.x + Math.cos(v.yaw) * exitDist * sideSign,
-            y: v.position.y,
-            z: v.position.z - Math.sin(v.yaw) * exitDist * sideSign,
-          };
-        },
-      });
+      let view = this._seatViewById.get(v.id);
+      if (!view) {
+        view = {
+          id: v.id,
+          alive: v.alive,
+          hostile: v.hostile,
+          position: v.position,
+          yaw: v.yaw,
+          healthRatio: v.maxHealth > 0 ? v.health / v.maxHealth : 0,
+          maxPassengerSeats: v.maxPassengerSeats,
+          occupantIds: v.passengerOccupantIds,
+          tryBoardSeat: (operatorId: string) => {
+            if (!v.alive || v.hostile) return false;
+            if (v.passengerOccupantIds.includes(operatorId)) return true;
+            if (v.passengerOccupantIds.length >= v.maxPassengerSeats) return false;
+            v.passengerOccupantIds.push(operatorId);
+            return true;
+          },
+          releaseSeat: (operatorId: string) => {
+            const idx = v.passengerOccupantIds.indexOf(operatorId);
+            if (idx >= 0) {
+              v.passengerOccupantIds.splice(idx, 1);
+            }
+            const sideSign = idx % 2 === 0 ? 1 : -1;
+            const exitDist = v.halfWidth + 1.5;
+            return {
+              x: v.position.x + Math.cos(v.yaw) * exitDist * sideSign,
+              y: v.position.y,
+              z: v.position.z - Math.sin(v.yaw) * exitDist * sideSign,
+            };
+          },
+        };
+        this._seatViewById.set(v.id, view);
+      } else {
+        view.alive = v.alive;
+        view.yaw = v.yaw;
+        view.healthRatio = v.maxHealth > 0 ? v.health / v.maxHealth : 0;
+      }
+      this._seatViewsScratch.push(view);
     }
-    return out;
+    return this._seatViewsScratch;
   }
 
   spawnVehicle(
@@ -398,7 +417,10 @@ export class VehicleManager {
       lastDamageTimeSec: null,
       lastColliderHit: null,
       activeContacts: 0,
-      waypointIndex: 0,
+      waypointIndex: -1,
+      stuckTimerSec: 0,
+      avoidanceTimerSec: 0,
+      avoidanceSteerDir: this.seq % 2 === 0 ? 1 : -1,
       collider,
       meshRoot: rig.root,
       chassisGroup: rig.chassisGroup,
@@ -413,6 +435,7 @@ export class VehicleManager {
       maxPassengerSeats: hostile ? 0 : isHeavy ? 3 : 2,
     };
     this.vehicles.push(entity);
+    this.vehicleById.set(entity.id, entity);
     return entity;
   }
 
@@ -729,23 +752,6 @@ export class VehicleManager {
     }
   }
 
-  getHitscanTargets(onHitCallback: (veh: VehicleEntity, killed: boolean) => void): HitscanTarget[] {
-    return this.vehicles
-      .filter((v) => v.alive && v.hostile)
-      .map((v) => ({
-        id: v.id,
-        kind: 'vehicle',
-        name: v.displayName,
-        alive: v.alive,
-        position: v.centerPos,
-        hitRadius: 2.35,
-        onHit: (damage) => {
-          const killed = this.damageVehicle(v, damage * 0.65);
-          onHitCallback(v, killed);
-        },
-      }));
-  }
-
   fillLockCandidates(
     out: Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }>
   ): void {
@@ -771,17 +777,6 @@ export class VehicleManager {
       out.push(slot);
       slotIdx++;
     }
-  }
-
-  getLockCandidates(): Array<{ id: string; alive: boolean; position: THREE.Vector3; label: string }> {
-    return this.vehicles
-      .filter((v) => v.alive && v.hostile)
-      .map((v) => ({
-        id: v.id,
-        alive: v.alive,
-        position: v.centerPos,
-        label: v.displayName.toUpperCase(),
-      }));
   }
 
   update(
@@ -957,21 +952,60 @@ export class VehicleManager {
           v.initialGraceTimerSec = Math.max(0, v.initialGraceTimerSec - dt);
         }
         if (roadWaypoints.length > 0) {
+          // Initialize staggered nearest waypoint along forward lane on first tick
+          if (v.waypointIndex < 0) {
+            let bestIdx = 0;
+            let bestScore = Infinity;
+            const fwdX = -Math.sin(v.yaw);
+            const fwdZ = -Math.cos(v.yaw);
+            for (let wi = 0; wi < roadWaypoints.length; wi++) {
+              const cand = roadWaypoints[wi];
+              const cdx = cand.x - v.position.x;
+              const cdz = cand.z - v.position.z;
+              const cDist = Math.hypot(cdx, cdz);
+              if (cDist < 4) continue;
+              const dot = (cdx * fwdX + cdz * fwdZ) / cDist;
+              const score = cDist + (dot < 0 ? 35 : 0);
+              if (score < bestScore) {
+                bestScore = score;
+                bestIdx = wi;
+              }
+            }
+            v.waypointIndex = bestIdx;
+          }
+
           const wp = roadWaypoints[v.waypointIndex % roadWaypoints.length];
           const dx = wp.x - v.position.x;
           const dz = wp.z - v.position.z;
           const distWp = Math.hypot(dx, dz);
-          if (distWp < 6) {
+          if (distWp < 6.5) {
             v.waypointIndex = (v.waypointIndex + 1) % roadWaypoints.length;
+            v.stuckTimerSec = 0;
           } else {
-            const targetYaw = Math.atan2(-dx, -dz);
+            let desiredSpeed = v.maxSpeed;
+            let targetYaw = Math.atan2(-dx, -dz);
+
+            if (v.avoidanceTimerSec > 0) {
+              v.avoidanceTimerSec = Math.max(0, v.avoidanceTimerSec - dt);
+              // Reverse slightly then steer around the obstacle
+              if (v.avoidanceTimerSec > 0.45) {
+                desiredSpeed = -5.0;
+                v.yaw += v.avoidanceSteerDir * 1.45 * dt;
+              } else {
+                targetYaw = v.yaw + v.avoidanceSteerDir * 0.75;
+                desiredSpeed = v.maxSpeed * 0.65;
+              }
+            }
+
             let yawDiff = targetYaw - v.yaw;
             while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
             while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-            const yawStep = THREE.MathUtils.clamp(yawDiff, -2.2 * dt, 2.2 * dt);
-            v.steerAngle = THREE.MathUtils.clamp(-yawDiff * 0.45, -0.5, 0.5);
-            v.yaw += yawStep;
-            v.speed = THREE.MathUtils.lerp(v.speed, v.maxSpeed, Math.min(1, dt * 4.5));
+            if (v.avoidanceTimerSec <= 0.45) {
+              const yawStep = THREE.MathUtils.clamp(yawDiff, -2.4 * dt, 2.4 * dt);
+              v.steerAngle = THREE.MathUtils.clamp(-yawDiff * 0.45, -0.5, 0.5);
+              v.yaw += yawStep;
+            }
+            v.speed = THREE.MathUtils.lerp(v.speed, desiredSpeed, Math.min(1, dt * 4.5));
             const moveRes = collision.resolveVehicleMovement(
               v.position,
               v.yaw,
@@ -986,6 +1020,19 @@ export class VehicleManager {
             v.yaw = moveRes.newYaw;
             v.lastColliderHit = moveRes.lastBlockerId;
             v.activeContacts = moveRes.hitObstacle ? 1 : 0;
+
+            if (moveRes.hitObstacle && Math.abs(moveRes.newSpeed) < 2.2) {
+              v.stuckTimerSec += dt;
+              if (v.stuckTimerSec >= 0.65 && v.avoidanceTimerSec <= 0) {
+                v.stuckTimerSec = 0;
+                v.avoidanceTimerSec = 0.85;
+                v.avoidanceSteerDir = -v.avoidanceSteerDir;
+                v.waypointIndex = (v.waypointIndex + 1) % roadWaypoints.length;
+              }
+            } else {
+              v.stuckTimerSec = Math.max(0, v.stuckTimerSec - dt * 0.5);
+            }
+
             this.syncVehicleCollider(v, collision);
           }
           this.updateVehicleSuspension(v, dt, collision, 0.35, 0);
@@ -1272,6 +1319,32 @@ export class VehicleManager {
     return this.vehicles.filter((v) => v.alive && v.hostile);
   }
 
+  /**
+   * Returns the world position (elevated above roof turret for clean 3D marker visibility)
+   * of the nearest alive convoy target vehicle, or null when all convoy targets are destroyed.
+   */
+  getNearestConvoyTargetPosition(
+    fromPos: THREE.Vector3,
+    out: THREE.Vector3 = new THREE.Vector3()
+  ): THREE.Vector3 | null {
+    let best: VehicleEntity | null = null;
+    let bestDistSq = Infinity;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (!v.alive || !v.isConvoyTarget) continue;
+      const dx = v.position.x - fromPos.x;
+      const dy = v.position.y - fromPos.y;
+      const dz = v.position.z - fromPos.z;
+      const dSq = dx * dx + dy * dy + dz * dz;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        best = v;
+      }
+    }
+    if (!best) return null;
+    return out.set(best.position.x, best.position.y + 2.4, best.position.z);
+  }
+
   fillMiniMapBlips(out: MiniMapBlip[]): void {
     let slotIdx = 0;
     for (let i = 0; i < this.vehicles.length; i++) {
@@ -1293,21 +1366,13 @@ export class VehicleManager {
     }
   }
 
-  getMiniMapBlips(): MiniMapBlip[] {
-    return this.vehicles
-      .filter((v) => v.alive)
-      .map((v) => ({
-        id: v.id,
-        x: v.position.x,
-        z: v.position.z,
-        kind: v.hostile ? 'vehicle' : 'friendly_vehicle',
-      }));
-  }
-
   clear(): void {
     this.removePrewarmProbe();
     this.cameraRig.onVehicleExit(this.getPlayerVehicle());
     this.vehicles = [];
+    this.vehicleById.clear();
+    this._seatViewById.clear();
+    this._seatViewsScratch.length = 0;
     for (let i = 0; i < this._hitscanPool.length; i++) {
       this._hitscanPool[i].veh = null;
       this._hitscanPool[i].cb = null;

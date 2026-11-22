@@ -7,7 +7,7 @@ import { VFXPool } from '@/src/effects/VFXPool';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { HealthPickupManager } from '@/src/gameplay/HealthPickupManager';
-import { runAiPhysicsStressArena } from '@/src/gameplay/ai/AiStressArena';
+import { runAiPhysicsStressArena } from '@/src/tests/harnesses/AiStressArena';
 import {
   computeGroundedHipY,
   EnemyAnimTarget,
@@ -193,36 +193,41 @@ describe('Stage 5C — Physics, AI Locomotion, VFX, Diagnostics & Resource Scope
     // Let those particles expire back into pool
     vfx.update(2.0);
 
-    // Now spawn blood mist & verify EVERY active particle mesh has compact scale (never inherited 5m smoke scale)
+    // Now spawn blood mist & verify EVERY active instanced blood particle matrix has compact scale (never inherited 5m smoke scale)
     vfx.spawnImpact(0, 1.4, 0, 'blood');
     const rootGroup = scene.children[0] as THREE.Group;
-    const bloodMat = rootGroup.userData.bloodMat as THREE.Material;
-    const activeBloodMeshes = rootGroup.children.filter(
-      (c): c is THREE.Mesh => c instanceof THREE.Mesh && c.visible && c.material === bloodMat
-    );
-    expect(activeBloodMeshes.length).toBeGreaterThan(0);
-    for (const m of activeBloodMeshes) {
-      expect(m.scale.x).toBeLessThanOrEqual(0.2);
-      expect(m.scale.y).toBeLessThanOrEqual(0.2);
-      expect(m.scale.z).toBeLessThanOrEqual(0.2);
+    const bloodBatchMesh = rootGroup.getObjectByName('vfx_blood_instanced') as THREE.InstancedMesh;
+    expect(bloodBatchMesh).toBeInstanceOf(THREE.InstancedMesh);
+    expect(bloodBatchMesh.visible).toBe(true);
+    expect(bloodBatchMesh.count).toBeGreaterThan(0);
+
+    const mat4 = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    for (let i = 0; i < bloodBatchMesh.count; i++) {
+      bloodBatchMesh.getMatrixAt(i, mat4);
+      mat4.decompose(pos, quat, scale);
+      expect(scale.x).toBeLessThanOrEqual(0.2);
+      expect(scale.y).toBeLessThanOrEqual(0.2);
+      expect(scale.z).toBeLessThanOrEqual(0.2);
     }
 
     // Spawn a 65m long-range shot tracer and confirm it is rendered as a short traveling streak (<= 3.8m), NEVER a 65m beam
     vfx.spawnTracer(0, 1.6, 0, 0, 1.6, -65);
-    const activeTracers = rootGroup.children.filter(
-      (c): c is THREE.Mesh =>
-        c instanceof THREE.Mesh &&
-        c.visible &&
-        c.geometry instanceof THREE.BoxGeometry &&
-        c.scale.z >= 0.8
-    );
-    expect(activeTracers.length).toBe(1);
-    expect(activeTracers[0].scale.z).toBeLessThanOrEqual(3.81);
-    expect(activeTracers[0].scale.x).toBeLessThanOrEqual(1.1);
+    const tracerBatchMesh = rootGroup.getObjectByName('vfx_tracer_instanced') as THREE.InstancedMesh;
+    expect(tracerBatchMesh).toBeInstanceOf(THREE.InstancedMesh);
+    expect(tracerBatchMesh.visible).toBe(true);
+    expect(tracerBatchMesh.count).toBe(1);
+    tracerBatchMesh.getMatrixAt(0, mat4);
+    mat4.decompose(pos, quat, scale);
+    expect(scale.z).toBeLessThanOrEqual(3.81);
+    expect(scale.x).toBeLessThanOrEqual(1.1);
 
     // Advance past tracer lifetime -> must deactivate cleanly
     vfx.update(0.5);
-    expect(activeTracers[0].visible).toBe(false);
+    expect(tracerBatchMesh.count).toBe(0);
+    expect(tracerBatchMesh.visible).toBe(false);
 
     res.disposeAll();
   });

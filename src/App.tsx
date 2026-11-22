@@ -15,7 +15,6 @@ import { MissionIntroOverlay } from '@/src/ui/components/MissionIntroOverlay';
 import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { GameHUD } from '@/src/ui/hud/GameHUD';
 import { ErrorBoundary } from '@/src/ui/primitives/ErrorBoundary';
-import { TooltipProvider } from '@/src/ui/primitives/Controls';
 import { ToastAndRecoveryLayer } from '@/src/ui/screens/ToastAndRecoveryLayer';
 import { TitleScreen } from '@/src/ui/screens/TitleScreen';
 
@@ -65,7 +64,11 @@ export default function App() {
   const touchHudOverride = useUIStore((s) => s.touchHudOverride);
   const devModeEnabled = useSettingsStore((s) => s.developer.devModeEnabled);
   const touchMode = useSettingsStore((s) => s.input.touchMode);
-  const accessibility = useSettingsStore((s) => s.accessibility);
+  const colorblindMode = useSettingsStore((s) => s.accessibility.colorblindMode);
+  const highContrastBorders = useSettingsStore((s) => s.accessibility.highContrastBorders);
+  const reducedMotion = useSettingsStore((s) => s.accessibility.reducedMotion);
+  const largeTextMode = useSettingsStore((s) => s.accessibility.largeTextMode);
+  const uiScale = useSettingsStore((s) => s.display.uiScale);
   const devModeActive = isEnvDevModeAllowed() && devModeEnabled;
   const [deploymentKey, setDeploymentKey] = useState(0);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
@@ -75,17 +78,11 @@ export default function App() {
   // Sync accessibility modes and typography scale globally onto documentElement
   useEffect(() => {
     const root = document.documentElement;
-    root.dataset.colorblind = accessibility.colorblindMode;
-    root.dataset.highContrast = accessibility.highContrastBorders ? 'true' : 'false';
-    root.dataset.reducedMotion = accessibility.reducedMotion ? 'true' : 'false';
-    root.style.setProperty('--vg-ui-scale', String(accessibility.largeTextMode ? 1.12 : accessibility.uiScale));
-  }, [
-    accessibility.colorblindMode,
-    accessibility.highContrastBorders,
-    accessibility.reducedMotion,
-    accessibility.largeTextMode,
-    accessibility.uiScale,
-  ]);
+    root.dataset.colorblind = colorblindMode;
+    root.dataset.highContrast = highContrastBorders ? 'true' : 'false';
+    root.dataset.reducedMotion = reducedMotion ? 'true' : 'false';
+    root.style.setProperty('--vg-ui-scale', String(largeTextMode ? 1.12 : uiScale));
+  }, [colorblindMode, highContrastBorders, reducedMotion, largeTextMode, uiScale]);
 
   const viewport = useViewportMode();
   const [portraitGateDismissed, setPortraitGateDismissed] = useState(false);
@@ -241,8 +238,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <TooltipProvider>
-        <div className="relative w-full h-[100dvh] overflow-hidden bg-[#0B0E11] select-none">
+      <div className="relative w-full h-[100dvh] overflow-hidden bg-[#0B0E11] select-none">
           {/* Isolated WebGL Three.js Canvas Sibling */}
           <div
             ref={canvasContainerRef}
@@ -438,8 +434,7 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
-      </TooltipProvider>
+      </div>
     </ErrorBoundary>
   );
 }

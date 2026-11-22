@@ -1,10 +1,8 @@
 import React from 'react';
 import * as SliderPrimitive from '@radix-ui/react-slider';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
-import * as CheckboxPrimitive from '@radix-ui/react-checkbox';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import * as ProgressPrimitive from '@radix-ui/react-progress';
-import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from './cn';
 
@@ -59,29 +57,6 @@ export function Switch({
     >
       <SwitchPrimitive.Thumb className="block w-3.5 h-3.5 bg-white rounded-full transition-transform translate-x-0.5 data-[state=checked]:translate-x-5" />
     </SwitchPrimitive.Root>
-  );
-}
-
-export function Checkbox({
-  checked,
-  onCheckedChange,
-  id,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  id?: string;
-}) {
-  return (
-    <CheckboxPrimitive.Root
-      id={id}
-      checked={checked}
-      onCheckedChange={(v) => onCheckedChange(Boolean(v))}
-      className="w-4 h-4 rounded-sm bg-zinc-900 border border-zinc-600 flex items-center justify-center data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-400 cursor-pointer"
-    >
-      <CheckboxPrimitive.Indicator>
-        <Check className="w-3 h-3 text-zinc-950 stroke-[3]" />
-      </CheckboxPrimitive.Indicator>
-    </CheckboxPrimitive.Root>
   );
 }
 
@@ -149,25 +124,5 @@ export function ProgressBar({
         style={{ transform: `translateX(-${100 - clamped}%)` }}
       />
     </ProgressPrimitive.Root>
-  );
-}
-
-export function TooltipProvider({ children }: { children: React.ReactNode }) {
-  return <TooltipPrimitive.Provider delayDuration={250}>{children}</TooltipPrimitive.Provider>;
-}
-
-export function Tooltip({ content, children }: { content: string; children: React.ReactNode }) {
-  return (
-    <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content
-          sideOffset={6}
-          className="z-50 bg-[#0B0E11] border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-200 rounded-sm shadow-lg"
-        >
-          {content}
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
   );
 }

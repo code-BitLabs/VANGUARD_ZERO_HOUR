@@ -165,7 +165,6 @@ export interface TraversalIntegrityFlag {
 
 export interface PhysicsWorldDiagnosticsSnapshot {
   solverBackend: 'Custom FPS Controller + SpatialHash/BVH';
-  rapierInitialized: boolean;
   fixedTimestepSec: number;
   worldBoundsMin: number;
   worldBoundsMax: number;

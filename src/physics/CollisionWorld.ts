@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PhysicsWorld, TerrainSlopeRegion } from '@/src/engine/physics/PhysicsWorld';
+import { PhysicsWorld } from '@/src/engine/physics/PhysicsWorld';
 import { PHYSICS_MASKS } from '@/src/engine/physics/PhysicsLayers';
 import {
   VAULT_MAX_PROBE_DISTANCE,
@@ -33,7 +33,7 @@ export interface RayHit {
   collider: SpatialAABB | null;
 }
 
-export type SlopeRegion = TerrainSlopeRegion | OrientedSlopeRegion;
+export type SlopeRegion = OrientedSlopeRegion;
 
 /**
  * Authoritative CollisionWorld facade backed by the unified PhysicsWorld.

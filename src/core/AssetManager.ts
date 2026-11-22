@@ -287,6 +287,14 @@ export class AssetManager {
     const cached = this.synthesizedPixelCache.get(baseKey);
     if (cached) return cached;
 
+    // Evict stale resolution caches for the same pattern when quality tier changes
+    const prefix = `${pattern}:`;
+    for (const existingKey of this.synthesizedPixelCache.keys()) {
+      if (existingKey.startsWith(prefix) && existingKey !== baseKey) {
+        this.synthesizedPixelCache.delete(existingKey);
+      }
+    }
+
     const pixelCount = size * size;
     const heightField = new Float32Array(pixelCount);
     const albedoData = new Uint8Array(pixelCount * 4);

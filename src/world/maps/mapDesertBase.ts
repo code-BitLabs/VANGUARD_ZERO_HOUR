@@ -74,9 +74,9 @@ export function populateDesertBase(ctx: MapPopulationContext): void {
   }
 
   [
-    { x: 20, z: -42 },
-    { x: 26, z: -48 },
-    { x: 32, z: -42 },
+    { x: 18, z: -48 },
+    { x: 26, z: -50 },
+    { x: 34, z: -48 },
   ].forEach((pos, i) => {
     const tankY = heightFn(pos.x, pos.z);
     const tank = buildFuelTank(assetManager, resourceManager, scope);

@@ -274,11 +274,15 @@ export class RenderingQualityDirector {
       this.sustainedHeadroomSec = Math.max(0, this.sustainedHeadroomSec - dtSec * 0.5);
     }
 
-    const cooldownSatisfied = this.elapsedSec - this.lastTransitionSec >= this.stepCooldownSec;
+    const severePressure = p95 > Math.max(40, this.targetFrameBudgetMs * 2.2);
+    const effectiveCooldownSec = severePressure ? 2.0 : this.stepCooldownSec;
+    const effectiveStabilizationSec = severePressure ? 1.2 : this.stabilizationWindowSec;
+
+    const cooldownSatisfied = this.elapsedSec - this.lastTransitionSec >= effectiveCooldownSec;
     if (!cooldownSatisfied) return false;
 
-    if (this.sustainedPressureSec >= this.stabilizationWindowSec && this.degradationStep < 6) {
-      this.degradationStep += 1;
+    if (this.sustainedPressureSec >= effectiveStabilizationSec && this.degradationStep < 6) {
+      this.degradationStep = Math.min(6, this.degradationStep + (severePressure ? 2 : 1));
       this.sustainedPressureSec = 0;
       this.lastTransitionSec = this.elapsedSec;
       this.recomputeDimensions();

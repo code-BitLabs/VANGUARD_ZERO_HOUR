@@ -70,30 +70,59 @@ export interface OperatorTacticalDirective {
  */
 export class SharedFriendlyThreatBoard {
   private readonly threats = new Map<string, SharedFriendlyThreatEntry>();
+  private cachedThreatsList: SharedFriendlyThreatEntry[] = [];
+  private listDirty = false;
 
   reset(): void {
     this.threats.clear();
+    this.cachedThreatsList.length = 0;
+    this.listDirty = false;
+  }
+
+  hasThreat(enemyId: string): boolean {
+    return this.threats.has(enemyId);
   }
 
   reportThreat(entry: Omit<SharedFriendlyThreatEntry, 'ageSec'>): void {
+    const existing = this.threats.get(entry.enemyId);
+    if (existing) {
+      existing.x = entry.x;
+      existing.y = entry.y;
+      existing.z = entry.z;
+      existing.isArmoredOrVehicle = entry.isArmoredOrVehicle;
+      existing.isElevated = entry.isElevated;
+      existing.spottedByOperatorId = entry.spottedByOperatorId;
+      existing.ageSec = 0;
+      return;
+    }
     this.threats.set(entry.enemyId, { ...entry, ageSec: 0 });
+    this.listDirty = true;
   }
 
   update(dt: number, aliveEnemyIds: ReadonlySet<string>): void {
     for (const [id, entry] of this.threats.entries()) {
       if (!aliveEnemyIds.has(id)) {
         this.threats.delete(id);
+        this.listDirty = true;
         continue;
       }
       entry.ageSec += dt;
       if (entry.ageSec > 10.0) {
         this.threats.delete(id);
+        this.listDirty = true;
       }
     }
   }
 
   getAllThreats(): SharedFriendlyThreatEntry[] {
-    return Array.from(this.threats.values());
+    if (this.listDirty) {
+      this.cachedThreatsList.length = 0;
+      for (const entry of this.threats.values()) {
+        this.cachedThreatsList.push(entry);
+      }
+      this.listDirty = false;
+    }
+    return this.cachedThreatsList;
   }
 
   selectBestThreatForRole(

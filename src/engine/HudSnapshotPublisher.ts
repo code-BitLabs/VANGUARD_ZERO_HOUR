@@ -273,7 +273,7 @@ export class HudSnapshotPublisher {
         if (
           d.state !== 'DESTROYED' &&
           d.isObjectiveTarget &&
-          d.position.distanceTo(ctx.player.position) < 6.5
+          d.position.distanceTo(ctx.player.position) <= 4.8
         ) {
           if (d.kind === 'weapons_cache') {
             nearDemolitionCache = true;
@@ -342,7 +342,7 @@ export class HudSnapshotPublisher {
     const activeTacticalHint = this.guidance.evaluateTier1Hint({
       nowSec: missionDirector.elapsedSec,
       controlScheme: effectiveDevice === 'touch' ? 'touch' : 'desktop_kb_mouse',
-      tacticalHintsEnabled: settings.accessibility.tacticalHints ?? true,
+      tacticalHintsEnabled: settings.gameplay.tacticalGuidanceHints ?? true,
       isIntenseCombat: incomingThreat !== null,
       isPlayerDowned: downedActive,
       isNukeActive: ordnanceHud.nukeCountdownSec > 0,
@@ -364,6 +364,7 @@ export class HudSnapshotPublisher {
       extractionBlockReason,
       isPlayerNearExtraction: nearExtractionZone,
       activeObjectiveType: firstActiveObjType,
+      hasPrimaryInteractPrompt: Boolean(interactPrompt),
     });
 
     const waveStatus = missionDirector.evaluateWaveProgression(
