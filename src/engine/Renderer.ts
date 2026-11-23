@@ -231,11 +231,34 @@ export class EngineRenderer {
     shadowsSetting: boolean,
     bloomSetting: boolean,
     lights?: SceneLights | null,
-    options?: { deferResize?: boolean; allowShadowToggle?: boolean }
+    options?: { deferResize?: boolean; allowShadowToggle?: boolean; lockSurfaceAndShadows?: boolean }
   ): void {
-    this.renderScale = this.isSoftwareGl ? Math.min(profile.renderScale, 0.6) : profile.renderScale;
+    const lockStructural = options?.lockSurfaceAndShadows === true;
     this.bloomEnabled = !this.isSoftwareGl && profile.bloomEnabled && bloomSetting;
     this.lightBudgetManager?.setQualityTier(profile.tier);
+
+    if (this.bloomPass) {
+      this.bloomPass.enabled = this.bloomEnabled;
+    }
+    if (this.bloomEffect) {
+      this.bloomEffect.blendMode.opacity.value = this.bloomEnabled ? 1 : 0;
+    }
+    if (this.vignettePass) {
+      this.vignettePass.enabled = true;
+    }
+
+    const nextFar = Math.max(520, profile.drawDistance + 40);
+    if (Math.abs(this.camera.far - nextFar) > 0.5) {
+      this.camera.far = nextFar;
+      this.camera.updateProjectionMatrix();
+    }
+
+    // Live combat lock: never reallocate canvas/composer FBOs or dispose shadow depth maps mid-firefight
+    if (lockStructural) {
+      return;
+    }
+
+    this.renderScale = this.isSoftwareGl ? Math.min(profile.renderScale, 0.6) : profile.renderScale;
     const shadowsActive = !this.isSoftwareGl && shadowsSetting && profile.shadowMapSize >= 512;
     const csmActive = Boolean(this.shadowCascades?.isCsmActive());
     if (options?.allowShadowToggle !== false) {
@@ -261,21 +284,6 @@ export class EngineRenderer {
       }
     }
 
-    const nextFar = Math.max(520, profile.drawDistance + 40);
-    if (Math.abs(this.camera.far - nextFar) > 0.5) {
-      this.camera.far = nextFar;
-      this.camera.updateProjectionMatrix();
-    }
-
-    if (this.bloomPass) {
-      this.bloomPass.enabled = this.bloomEnabled;
-    }
-    if (this.bloomEffect) {
-      this.bloomEffect.blendMode.opacity.value = this.bloomEnabled ? 1 : 0;
-    }
-    if (this.vignettePass) {
-      this.vignettePass.enabled = true;
-    }
     if (options?.deferResize) {
       this.scheduleResize();
     } else {
@@ -357,18 +365,23 @@ export class EngineRenderer {
     maxDpr?: number,
     lights?: SceneLights | null,
     shadowsEnabled = true,
-    options?: { allowCsmRebuild?: boolean; deferResize?: boolean }
+    options?: { allowCsmRebuild?: boolean; deferResize?: boolean; lockSurfaceAndShadows?: boolean }
   ): void {
     const dims = this.qualityDirector.getActiveDimensions();
-    this.renderScale = this.isSoftwareGl ? Math.min(dims.renderScale, 0.6) : dims.renderScale;
-    this.maxDprCap = maxDpr ?? dims.maxDpr;
     this.bloomEnabled = !this.isSoftwareGl && dims.bloomEnabled;
     if (this.bloomPass) this.bloomPass.enabled = this.bloomEnabled;
     if (this.bloomEffect) this.bloomEffect.blendMode.opacity.value = this.bloomEnabled ? 1 : 0;
 
-    // During live combat (allowCsmRebuild === false), keep the active CSM cascade count stable
-    // so we never trigger a 500-900ms full-scene shader recompile or sun-light swap blink.
-    // Shadow map resolution still adapts cleanly in-place with zero shader recompilation.
+    // Live combat lock: keep canvas dimensions, DPR, shadow map textures, and CSM cascades
+    // completely frozen during gameplay so zero buffer wipes (blinks) or GPU reallocations occur.
+    if (options?.lockSurfaceAndShadows) {
+      return;
+    }
+
+    this.renderScale = this.isSoftwareGl ? Math.min(dims.renderScale, 0.6) : dims.renderScale;
+    this.maxDprCap = maxDpr ?? dims.maxDpr;
+
+    // When allowCsmRebuild === false, keep active CSM cascade count stable to prevent shader recompiles.
     const lockCsmCount =
       options?.allowCsmRebuild === false && Boolean(this.shadowCascades?.isCsmActive());
     const targetCascades = lockCsmCount

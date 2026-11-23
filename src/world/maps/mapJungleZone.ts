@@ -39,9 +39,9 @@ export function populateJungleZone(ctx: MapPopulationContext): void {
     );
   }
 
-  const campConfigs: Array<[number, number, number, 'single_ramp' | 'lift_only']> = [
-    [-22, -16, 5.0, 'single_ramp'],
-    [22, -18, 5.0, 'single_ramp'],
+  const campConfigs: Array<[number, number, number, 'switchback_stair' | 'lift_only']> = [
+    [-22, -16, 5.0, 'switchback_stair'],
+    [22, -18, 5.0, 'switchback_stair'],
     [0, -46, 8.5, 'lift_only'],
   ];
   for (const [cx, cz, ch, accessType] of campConfigs) {
@@ -58,7 +58,7 @@ export function populateJungleZone(ctx: MapPopulationContext): void {
       accessType,
       liftBridgeZ: cz,
       ladderAccess:
-        accessType === 'single_ramp'
+        accessType === 'switchback_stair'
           ? { side: '+z', offsetAlongWall: cx < 0 ? -3.0 : 3.0 }
           : undefined,
     });

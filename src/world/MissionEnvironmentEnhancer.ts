@@ -210,17 +210,19 @@ export function buildMissionEnvironmentEnhancement(
       group.add(puddle);
     }
   } else if (missionId === 2) {
-    // OP. RED DUST: Elevated overhead industrial fuel pipelines & weathered steel support gantries anchored to local terrain elevation
+    // OP. RED DUST: Elevated overhead industrial fuel pipelines & weathered steel support gantries
+    // routed along outer refinery flanks (x = ±38.5) clear of bunker_0/bunker_1 roofs (±21..±35)
+    // and LNG Horton spheres (±42.2..±53.8).
     const pipeGeo = new THREE.CylinderGeometry(0.38, 0.38, 54, 12);
     geometries.push(pipeGeo);
-    for (const xOff of [-22, 22]) {
+    for (const xOff of [-38.5, 38.5]) {
       const supportZs = [-40, -22, -4] as const;
       let maxGroundY = -Infinity;
       for (const zOff of supportZs) {
         maxGroundY = Math.max(maxGroundY, groundAt(xOff, zOff));
       }
       if (!Number.isFinite(maxGroundY)) maxGroundY = 0;
-      const pipeY = maxGroundY + 6.8;
+      const pipeY = maxGroundY + 7.2;
 
       const pipe = new THREE.Mesh(pipeGeo, accentMat);
       pipe.rotation.x = Math.PI / 2;
@@ -259,13 +261,14 @@ export function buildMissionEnvironmentEnhancement(
     geometries.push(coneGeo);
     localMaterials.push(coneMat);
 
-    for (const [sx, sz] of [
-      [-26, -34],
-      [26, -42],
+    // Anchor sweeping volumetric searchlight pivots atop north perimeter buildings clear of solid walls
+    for (const [sx, syOffset, sz] of [
+      [-26, 26.2, -42],
+      [26, 20.2, -44],
     ] as const) {
       const gy = groundAt(sx, sz);
       const pivot = new THREE.Group();
-      pivot.position.set(sx, gy + 14.5, sz);
+      pivot.position.set(sx, gy + syOffset, sz);
       const cone = new THREE.Mesh(coneGeo, coneMat);
       cone.rotation.z = sx < 0 ? 0.42 : -0.42;
       pivot.add(cone);
@@ -290,8 +293,8 @@ export function buildMissionEnvironmentEnhancement(
       group.add(puddle);
     }
   } else if (missionId === 5) {
-    // OP. BLACKOUT: Molten foundry floor slag channels & industrial overhead beams
-    const slagGeo = new THREE.PlaneGeometry(2.2, 42);
+    // OP. BLACKOUT: Molten foundry floor slag channels flanking central aisle clear of cargo lifts (±17.6) & fuel tanks
+    const slagGeo = new THREE.PlaneGeometry(2.2, 38);
     const slagMat = new THREE.MeshStandardMaterial({
       color: 0xff5a1f,
       emissive: 0xff4500,
@@ -306,11 +309,11 @@ export function buildMissionEnvironmentEnhancement(
     localMaterials.push(slagMat);
     animatedHazards.push(slagMat);
 
-    for (const sx of [-16, 16]) {
-      const gy = groundAt(sx, -24);
+    for (const sx of [-10.5, 10.5]) {
+      const gy = groundAt(sx, -25);
       const channel = new THREE.Mesh(slagGeo, slagMat);
       channel.rotation.x = -Math.PI / 2;
-      channel.position.set(sx, gy + 0.04, -24);
+      channel.position.set(sx, gy + 0.04, -25);
       group.add(channel);
     }
   }

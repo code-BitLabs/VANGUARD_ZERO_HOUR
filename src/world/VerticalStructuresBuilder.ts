@@ -239,14 +239,15 @@ export function buildSwitchbackStaircase(
   const latX = -runDirZ;
   const latZ = runDirX;
   const sep = stairWidth + 0.35;
-  const midY = baseY + (topY - baseY) * 0.5;
 
   // Flight 1: entry -> mid-landing along +runDir
-  // Stage 9 PHYS-05: Anchor ground entry strictly to actual terrain elevation at (entryX, entryZ)
+  // Anchor ground entry strictly to actual terrain elevation at (entryX, entryZ), then split
+  // total ground-to-roof rise evenly across both flights so sloped terrain never steepens Flight 1.
   const f1StartX = entryX;
   const f1StartZ = entryZ;
   const f1StartY =
     fromSurfaceId === 0 ? collisionWorld.getTerrainHeightOnly(f1StartX, f1StartZ) : baseY;
+  const midY = f1StartY + (topY - f1StartY) * 0.5;
   const f1EndX = entryX + runDirX * runLength;
   const f1EndZ = entryZ + runDirZ * runLength;
 
@@ -569,129 +570,6 @@ export function buildSwitchbackStaircase(
   });
 }
 
-/**
- * Adds a single-flight exterior ramp from ground to an accessible bunker/building roof or deck.
- */
-export function buildSingleFlightRamp(
-  ctx: VerticalWorldContext,
-  id: string,
-  fromSurfaceId: number,
-  toSurfaceId: number,
-  startX: number,
-  startY: number,
-  startZ: number,
-  endX: number,
-  endY: number,
-  endZ: number,
-  width = 2.6,
-  kind: 'ramp' | 'stair' = 'ramp'
-): void {
-  const { assetManager, resourceManager, collisionWorld, chunkManager, scene, scope } = ctx;
-  const deckMat = assetManager.getSharedMaterial('ramp_concrete_steel', {
-    pattern: 'concrete',
-    repeat: [2, 4],
-    roughness: 0.78,
-    metalness: 0.18,
-    color: 0x7c7468,
-  });
-  const railMat = assetManager.getSharedMaterial('stair_rail_amber', {
-    color: 0xd97706,
-    roughness: 0.45,
-    metalness: 0.4,
-  });
-
-  const grp = new THREE.Group();
-  grp.name = `${id}_ramp`;
-  const thickness = 0.45;
-  // Stage 9 PHYS-05: Anchor ground ramp nose directly to actual terrain elevation
-  const anchoredStartY =
-    fromSurfaceId === 0 ? collisionWorld.getTerrainHeightOnly(startX, startZ) : startY;
-  if (fromSurfaceId === 0) {
-    const apron = addVisualBox(
-      grp,
-      width + 0.1,
-      0.9,
-      1.0,
-      startX,
-      anchoredStartY - 0.45,
-      startZ,
-      deckMat,
-      resourceManager,
-      scope,
-      `${id}_entry_apron`,
-      false
-    );
-    apron.userData.skipBvh = true;
-    apron.matrixAutoUpdate = false;
-    apron.updateMatrix();
-  }
-  addRampVisualFlight(
-    grp,
-    startX,
-    anchoredStartY,
-    startZ,
-    endX,
-    endY,
-    endZ,
-    width,
-    thickness,
-    deckMat,
-    railMat,
-    resourceManager,
-    scope,
-    id,
-    ctx.colliderMeshes
-  );
-  chunkManager.registerObject(grp, (startX + endX) * 0.5, (startZ + endZ) * 0.5, scene);
-
-  const slope = createOrientedSlopeRegion({
-    id,
-    surfaceId: toSurfaceId,
-    startX,
-    startZ,
-    endX,
-    endZ,
-    width,
-    startY: anchoredStartY,
-    endY,
-    thickness,
-    hasSideRails: true,
-  });
-  collisionWorld.addSlope(slope);
-
-  const dx = endX - startX;
-  const dz = endZ - startZ;
-  const len = Math.max(0.5, Math.hypot(dx, dz));
-  const ux = dx / len;
-  const uz = dz / len;
-
-  ctx.navPortals.push({
-    portalId: ctx.nextPortalId(),
-    portalKey: `portal_${id}`,
-    kind,
-    fromSurfaceId,
-    toSurfaceId,
-    fromX: startX - ux * 1.0,
-    fromY: anchoredStartY,
-    fromZ: startZ - uz * 1.0,
-    toX: endX + ux * 1.0,
-    toY: endY,
-    toZ: endZ + uz * 1.0,
-    fromFloorIndex: 0,
-    toFloorIndex: 1,
-    width,
-    clearanceHeight: 2.6,
-    slopeDeg: slope.maxSlopeDeg,
-    baseCost: len + 2.0,
-    dynamicWaitCost: 0,
-    allowedProfilesMask: INFANTRY_PORTAL_MASK,
-    maxConcurrentOccupants: 6,
-    activeOccupants: 0,
-    enabled: true,
-    bidirectional: true,
-  });
-}
-
 export interface RooftopAccessOptions {
   buildingId: string;
   x: number;
@@ -701,7 +579,7 @@ export interface RooftopAccessOptions {
   depth: number;
   roofY: number;
   accessSide: '+x' | '-x';
-  accessType: 'switchback_stair' | 'single_ramp' | 'lift_only';
+  accessType: 'switchback_stair' | 'lift_only';
   parapetHeight?: number;
   liftBridgeZ?: number;
   /** Optional secondary exterior tactical climbable ladder (auto-cuts parapet opening) */
@@ -713,8 +591,8 @@ export interface RooftopAccessOptions {
 
 /**
  * Adds a walkable rooftop deck collider (`roofY`), `1.15m` perimeter parapets with firing embrasure gaps
- * and stair/ramp/lift entry opening, rooftop cover nodes, `ElevatedNavSurfaceDescriptor`,
- * and exterior stairs/ramp connecting ground `0` -> rooftop `surfaceId` (when not `lift_only`).
+ * and stair/lift entry opening, rooftop cover nodes, `ElevatedNavSurfaceDescriptor`,
+ * and exterior switchback staircase connecting ground `0` -> rooftop `surfaceId` (when not `lift_only`).
  */
 export function buildBuildingRooftopAccess(
   ctx: VerticalWorldContext,
@@ -737,23 +615,19 @@ export function buildBuildingRooftopAccess(
   const grp = new THREE.Group();
   grp.name = `${opts.buildingId}_rooftop_parapets`;
 
-  // Stage 9 PHYS-05: Compute stair/ramp exit Z BEFORE building parapets so the parapet opening
-  // is ALWAYS centered directly on the physical top landing with zero blockage!
+  // Compute stair exit Z BEFORE building parapets so the parapet opening
+  // is ALWAYS centered directly on the physical top landing with zero blockage.
   const sideSign = opts.accessSide === '+x' ? 1 : -1;
   const stairRunLen = Math.min(8.2, Math.max(6.2, (opts.roofY - opts.baseY) * 1.1));
   const clampedStairEntryZ = Math.max(
     opts.z - halfD + 2.5,
     Math.min(opts.z + halfD - 2.5, opts.z - stairRunLen * 0.5)
   );
-  const rampRunLen = Math.max(9.5, (opts.roofY - opts.baseY) * 2.0);
-  const rampEndZ = opts.z - 0.5;
 
   const gapCenterZ =
     opts.accessType === 'switchback_stair'
       ? clampedStairEntryZ
-      : opts.accessType === 'single_ramp'
-        ? rampEndZ
-        : (opts.liftBridgeZ ?? opts.z);
+      : (opts.liftBridgeZ ?? opts.z);
   const gateGapHalfZ = 2.05;
 
   const parapetParts: StaticPartSpec[] = [];
@@ -914,52 +788,6 @@ export function buildBuildingRooftopAccess(
       stairRunLen,
       2.4
     );
-  } else if (opts.accessType === 'single_ramp') {
-    const rampStartZ = opts.z + rampRunLen * 0.5;
-    // Top landing pad connecting ramp end into parapet opening
-    addVisualBox(
-      grp,
-      3.4,
-      0.42,
-      3.0,
-      opts.x + sideSign * (halfW + 0.5),
-      opts.roofY - 0.21,
-      rampEndZ,
-      parapetMat,
-      resourceManager,
-      scope,
-      `${opts.buildingId}_ramp_top_pad`
-    );
-    collisionWorld.addStaticBox({
-      id: `${opts.buildingId}_ramp_top_pad`,
-      minX: opts.x + sideSign * (halfW + 0.5) - 1.7,
-      minY: opts.roofY - 0.42,
-      minZ: rampEndZ - 1.5,
-      maxX: opts.x + sideSign * (halfW + 0.5) + 1.7,
-      maxY: opts.roofY,
-      maxZ: rampEndZ + 1.5,
-      layer: COLLISION_LAYER.WORLD,
-      tag: 'stair_landing',
-      entityId: opts.buildingId,
-    });
-    buildSingleFlightRamp(
-      ctx,
-      `${opts.buildingId}_ramp`,
-      0,
-      surfaceId,
-      stairEdgeX,
-      opts.baseY,
-      rampStartZ,
-      stairEdgeX,
-      opts.roofY,
-      rampEndZ + 1.2,
-      2.6,
-      'ramp'
-    );
-    // Shift last portal exit onto the rooftop deck
-    const p = ctx.navPortals[ctx.navPortals.length - 1];
-    p.toX = deckEntryX;
-    p.toZ = rampEndZ;
   }
 
   // Optional secondary vertical climbable ladder aligned with the parapet opening

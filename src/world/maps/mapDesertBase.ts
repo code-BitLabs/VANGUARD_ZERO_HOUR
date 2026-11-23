@@ -38,7 +38,7 @@ export function populateDesertBase(ctx: MapPopulationContext): void {
     depth: 12,
     roofY: bunkerBaseYs[0] + 6.0,
     accessSide: '+x',
-    accessType: 'single_ramp',
+    accessType: 'switchback_stair',
     ladderAccess: { side: '+z', offsetAlongWall: -3.4 },
   });
   buildBuildingRooftopAccess(verticalCtx, {
@@ -50,7 +50,7 @@ export function populateDesertBase(ctx: MapPopulationContext): void {
     depth: 12,
     roofY: bunkerBaseYs[1] + 6.0,
     accessSide: '-x',
-    accessType: 'single_ramp',
+    accessType: 'switchback_stair',
     ladderAccess: { side: '+z', offsetAlongWall: 3.4 },
   });
   placeSupplyCrateAt('supply_m2_bunker0_roof', -28, bunkerBaseYs[0] + 6.0, -32);

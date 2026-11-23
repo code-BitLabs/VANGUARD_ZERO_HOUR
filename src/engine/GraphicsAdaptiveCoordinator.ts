@@ -153,6 +153,7 @@ export class GraphicsAdaptiveCoordinator {
       renderer.applyDirectorDimensions(dims.maxDpr, lights, graphicsSettings.shadowsEnabled, {
         allowCsmRebuild: false,
         deferResize: true,
+        lockSurfaceAndShadows: true,
       });
       battlefieldVfx.setDensityScales(dims.particleDensityScale, dims.rainDensityScale);
       surfaceDecals.setBudget(dims.decalBudget);
@@ -163,14 +164,14 @@ export class GraphicsAdaptiveCoordinator {
       const prof = governor.getProfile();
       vfx.setBudgetRatio(prof.particleBudgetRatio);
       // In auto_adaptive mode, RenderingQualityDirector owns renderer visual scaling so
-      // PerformanceGovernor does not fight it or trigger redundant resizes/blinks.
+      // PerformanceGovernor does not fight it. During live combat, canvas & shadow allocations stay locked.
       if (graphicsSettings.qualityProfile !== 'auto_adaptive') {
         renderer.applyGovernorProfile(
           prof,
           graphicsSettings.shadowsEnabled,
           graphicsSettings.bloomEnabled,
           lights,
-          { deferResize: true, allowShadowToggle: false }
+          { deferResize: true, allowShadowToggle: false, lockSurfaceAndShadows: true }
         );
       }
     }
