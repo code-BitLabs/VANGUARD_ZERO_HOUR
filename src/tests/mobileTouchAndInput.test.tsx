@@ -347,7 +347,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     }
   });
 
-  it('supports Two-Finger (Thumb), Three-Finger (Claw), and independent Left/Right Fire settings, prevents top-left HUD obstruction, and eliminates ADS-vs-Sprint deadlock', () => {
+  it('supports Two-Finger (Thumb), Three-Finger (Claw), and independent Left/Right Fire settings, prevents top-left HUD obstruction, and eliminates ADS-vs-Sprint deadlock', async () => {
     const rm = new ResourceManager();
     const audio = new AudioManager(rm, AudioSettingsSchema.parse({ muted: true }));
     const scene = new THREE.Scene();
@@ -388,7 +388,7 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     render(<GameHUD onRequestPointerLock={() => {}} inputManager={input} touchControlsVisible={true} />);
 
     // Verify Left Fire button is in Three-Finger upper-left claw position & top-left HUD shifts rightward to avoid collision
-    const fireBtn = screen.getByTestId('touch-btn-fire');
+    const fireBtn = await screen.findByTestId('touch-btn-fire');
     expect(fireBtn.getAttribute('data-profile')).toBe('three_finger');
     expect(fireBtn.getAttribute('data-control-id')).toBe('fire_left');
     expect(screen.queryByTestId('touch-btn-fire-right')).toBeNull();

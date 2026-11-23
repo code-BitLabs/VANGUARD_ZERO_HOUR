@@ -36,8 +36,20 @@ export interface DestructibleEntity {
   collider: SpatialAABB;
 }
 
+interface DestructibleIntactSnapshot {
+  readonly maxY: number;
+  readonly scaleX: number;
+  readonly scaleY: number;
+  readonly scaleZ: number;
+  readonly rotX: number;
+  readonly rotY: number;
+  readonly rotZ: number;
+  readonly meshMaterials: ReadonlyArray<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }>;
+}
+
 export class DestructionSystem {
   private entities = new Map<string, DestructibleEntity>();
+  private intactSnapshots = new Map<string, DestructibleIntactSnapshot>();
   private cachedEntitiesList: DestructibleEntity[] = [];
   private entitiesDirty = false;
   private charredMaterial: THREE.MeshStandardMaterial | null = null;
@@ -119,6 +131,26 @@ export class DestructionSystem {
   }
 
   register(entity: DestructibleEntity): void {
+    entity.meshGroup.userData.noMerge = true;
+    entity.meshGroup.userData.isDestructible = true;
+    const meshMaterials: Array<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }> = [];
+    entity.meshGroup.traverse((c) => {
+      if (c instanceof THREE.Mesh) {
+        c.userData.noMerge = true;
+        c.userData.isDestructible = true;
+        meshMaterials.push({ mesh: c, material: c.material });
+      }
+    });
+    this.intactSnapshots.set(entity.id, {
+      maxY: entity.collider.maxY,
+      scaleX: entity.meshGroup.scale.x,
+      scaleY: entity.meshGroup.scale.y,
+      scaleZ: entity.meshGroup.scale.z,
+      rotX: entity.meshGroup.rotation.x,
+      rotY: entity.meshGroup.rotation.y,
+      rotZ: entity.meshGroup.rotation.z,
+      meshMaterials,
+    });
     this.entities.set(entity.id, entity);
     this.entitiesDirty = true;
     this.insertCollider(entity.collider);
@@ -269,11 +301,60 @@ export class DestructionSystem {
     return out;
   }
 
+  /**
+   * Restores every registered destructible to its original intact health, visual materials,
+   * transforms, visibility, and full collider bounds in place (<1ms, zero geometry rebuild).
+   */
+  restoreAllIntact(): number {
+    let restored = 0;
+    for (const ent of this.entities.values()) {
+      const snap = this.intactSnapshots.get(ent.id);
+      const wasDestroyed = ent.state === 'DESTROYED';
+      const wasDamaged = ent.state === 'DAMAGED';
+      if (wasDestroyed || wasDamaged) {
+        restored++;
+      }
+
+      ent.health = ent.maxHealth;
+      ent.state = 'INTACT';
+      ent.meshGroup.visible = true;
+
+      if (snap) {
+        ent.collider.maxY = snap.maxY;
+        ent.meshGroup.scale.set(snap.scaleX, snap.scaleY, snap.scaleZ);
+        ent.meshGroup.rotation.set(snap.rotX, snap.rotY, snap.rotZ);
+        for (let i = 0; i < snap.meshMaterials.length; i++) {
+          const rec = snap.meshMaterials[i];
+          rec.mesh.material = rec.material;
+          rec.mesh.visible = true;
+        }
+      } else {
+        ent.meshGroup.scale.set(1, 1, 1);
+      }
+
+      if (ent.kind === 'searchlight_tower') {
+        const beam = ent.meshGroup.getObjectByName('searchlight_beam');
+        if (beam) beam.visible = true;
+        const head = ent.meshGroup.getObjectByName('searchlight_head');
+        if (head) head.visible = true;
+      }
+
+      if (wasDestroyed) {
+        this.insertCollider(ent.collider);
+        this.onColliderRegionChanged?.(ent.collider);
+      } else if (wasDamaged) {
+        this.syncUpdatedCollider(ent.collider);
+      }
+    }
+    return restored;
+  }
+
   clear(): void {
     for (const ent of this.entities.values()) {
       this.removeSyncedCollider(ent.collider);
     }
     this.entities.clear();
+    this.intactSnapshots.clear();
     this.cachedEntitiesList.length = 0;
     this.entitiesDirty = false;
     this.removePrewarmProbe();

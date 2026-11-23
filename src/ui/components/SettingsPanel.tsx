@@ -16,6 +16,7 @@ import { GpuCapabilityReport } from '@/src/engine/GpuCapabilityDetector';
 import { DirectorTelemetrySnapshot } from '@/src/engine/RenderingQualityDirector';
 import { ColorblindModeSchema, QualityTierSchema } from '@/src/schemas/common.schema';
 import {
+  AntiAliasingModeSchema,
   AudioDynamicRangeSchema,
   AudioSettingsSchema,
   ControlBindings,
@@ -733,6 +734,30 @@ export function SettingsPanel({
                   aria-label="Color Grading"
                   checked={graphics.colorGrading}
                   onCheckedChange={(colorGrading) => updateGraphics({ colorGrading })}
+                />
+              </SettingRow>
+
+              <SettingRow
+                label="Anti-Aliasing"
+                hint="Hardware-adaptive MSAA 4x/2x or SMAA post-process edge smoothing (applies between firefights)."
+              >
+                <Select
+                  aria-label="Anti-Aliasing"
+                  value={graphics.antiAliasingMode ?? 'auto'}
+                  onValueChange={(v) => {
+                    const antiAliasingMode = AntiAliasingModeSchema.parse(v);
+                    updateGraphics({
+                      antiAliasingMode,
+                      antialiasing: antiAliasingMode !== 'off',
+                    });
+                  }}
+                  options={[
+                    { value: 'auto', label: 'Auto (Hardware-Adaptive)' },
+                    { value: 'msaa4', label: 'MSAA 4x' },
+                    { value: 'msaa2', label: 'MSAA 2x' },
+                    { value: 'smaa', label: 'SMAA' },
+                    { value: 'off', label: 'Off' },
+                  ]}
                 />
               </SettingRow>
 

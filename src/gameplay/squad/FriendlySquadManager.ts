@@ -1053,10 +1053,19 @@ export class FriendlySquadManager {
       if (shouldMove && (op.stuckTimerSec ?? 0) >= UNREACHABLE_STUCK_THRESHOLD_SEC) {
         op.stuckTimerSec = 0;
         op.unreachableFallbackCount++;
-        // Choose nearest valid cover/rally anchor with open local clearance
-        op.recoveryAnchorX = op.position.x + (stepRes.hitWall ? -dx / Math.max(1, horizDist) * 2.2 : 0);
+        // Choose deterministic lateral tangent + backoff recovery anchor so corners,
+        // stair rails, and rooftop edges clear cleanly without ever teleporting.
+        const invDist = 1 / Math.max(0.5, horizDist);
+        const fwdX = dx * invDist;
+        const fwdZ = dz * invDist;
+        const sideSign = op.unreachableFallbackCount % 2 === 0 ? 1 : -1;
+        const tangentX = -fwdZ * sideSign;
+        const tangentZ = fwdX * sideSign;
+        const backScale = stepRes.hitWall ? 1.8 : 0.7;
+        const sideScale = stepRes.hitWall ? 1.35 : 2.0;
+        op.recoveryAnchorX = op.position.x - fwdX * backScale + tangentX * sideScale;
         op.recoveryAnchorY = op.position.y;
-        op.recoveryAnchorZ = op.position.z + (stepRes.hitWall ? -dz / Math.max(1, horizDist) * 2.2 : 0);
+        op.recoveryAnchorZ = op.position.z - fwdZ * backScale + tangentZ * sideScale;
         op.recoveryHoldSec = 2.4;
         op.state = 'RECOVER_UNREACHABLE';
         this.emitCallout(

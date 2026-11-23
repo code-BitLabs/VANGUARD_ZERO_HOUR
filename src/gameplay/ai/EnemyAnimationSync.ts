@@ -17,6 +17,7 @@ export interface EnemyAnimTarget {
   isReloading: boolean;
   hitReactTimer: number;
   deathTimer: number;
+  deathFallSign?: 1 | -1;
   walkPhase: number;
   actualHorizSpeed?: number;
   actualVertSpeed?: number;
@@ -86,8 +87,7 @@ export function stepEnemyDeathAnimation(u: EnemyAnimTarget): void {
 
   const rawT = Math.min(1, u.deathTimer / 0.52);
   const t = rawT * rawT * (3 - 2 * rawT);
-  const idNum = parseInt(u.id.split('_')[1] ?? '1', 10) || 1;
-  const fallForwardSign = idNum % 2 === 0 ? 1 : -1;
+  const fallForwardSign = u.deathFallSign ?? ((u.id.charCodeAt(u.id.length - 1) & 1) === 0 ? 1 : -1);
 
   const hipY = THREE.MathUtils.lerp(u.hipRestY, 0.16, t);
   u.meshRoot.position.copy(u.position);

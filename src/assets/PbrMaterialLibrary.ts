@@ -651,20 +651,22 @@ export class PbrMaterialLibrary {
     const effectiveRoughness =
       spec.roughness + (spec.wetRoughness - spec.roughness) * wetBucket;
 
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: albedo ?? undefined,
-      roughnessMap: roughnessMap ?? undefined,
-      bumpMap: roughnessMap ?? undefined,
+    const matParams: THREE.MeshStandardMaterialParameters = {
+      color: albedo ? 0xffffff : spec.baseColorHex,
       bumpScale: spec.bumpScale * (1 - wetBucket * 0.35),
       roughness: effectiveRoughness,
       metalness: spec.metalness + wetBucket * 0.06,
       transparent: Boolean(spec.transparent),
       opacity: spec.opacity ?? 1,
-    });
-    if (!albedo) {
-      mat.color.setHex(spec.baseColorHex);
+    };
+    if (albedo) {
+      matParams.map = albedo;
     }
+    if (roughnessMap) {
+      matParams.roughnessMap = roughnessMap;
+      matParams.bumpMap = roughnessMap;
+    }
+    const mat = new THREE.MeshStandardMaterial(matParams);
     mat.userData.profileId = profileId;
     mat.userData.surfaceMaterial = spec.surfaceMaterial;
     mat.userData.provenanceId = spec.provenance.assetId;

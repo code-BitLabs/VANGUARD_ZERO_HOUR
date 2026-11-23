@@ -173,21 +173,26 @@ function semiToRatio(semitones: number): number {
   return Math.pow(2, semitones / 12);
 }
 
+export interface SynthesizedMusicPcm {
+  readonly left: Float32Array;
+  readonly right: Float32Array;
+  readonly sampleRate: number;
+  readonly durationSec: number;
+}
+
 /**
- * Synthesizes an original, subtle, seamlessly loopable stereo tactical score AudioBuffer.
- * Uses a compact 22050 Hz sample rate (~2.8 MB per stereo 32s track) and deterministic phase math
- * with smooth loop-boundary crossfade so there are zero clicks or pops.
+ * Pure deterministic stereo PCM synthesizer with zero DOM/WebAudio dependencies.
+ * Can run identically inside a Web Worker (zero-copy ArrayBuffer transfer) or synchronously in tests.
  */
-export function synthesizeMusicTrackBuffer(
-  ctx: Pick<AudioContext, 'createBuffer' | 'sampleRate'>,
-  track: MusicTrackMetadata
-): AudioBuffer {
+export function synthesizeMusicTrackPcm(
+  track: MusicTrackMetadata,
+  targetSampleRate = 22050
+): SynthesizedMusicPcm {
   const arr = TRACK_ARRANGEMENTS[track.id] ?? TRACK_ARRANGEMENTS.zero_hour_overture;
-  const sampleRate = Math.min(22050, Math.max(11025, Math.round(ctx.sampleRate || 22050)));
+  const sampleRate = Math.min(22050, Math.max(11025, Math.round(targetSampleRate || 22050)));
   const totalSamples = Math.max(sampleRate, Math.floor(sampleRate * track.durationSec));
-  const buffer = ctx.createBuffer(2, totalSamples, sampleRate);
-  const left = buffer.getChannelData(0);
-  const right = buffer.getChannelData(1);
+  const left = new Float32Array(totalSamples);
+  const right = new Float32Array(totalSamples);
 
   const beatsPerSec = track.bpm / 60;
   const chordBars = arr.progressionSemis.length;
@@ -295,5 +300,26 @@ export function synthesizeMusicTrackBuffer(
     right[i] = Math.tanh(lpR * 1.15) * 0.68 * edgeGain;
   }
 
+  return {
+    left,
+    right,
+    sampleRate,
+    durationSec: totalSamples / sampleRate,
+  };
+}
+
+/**
+ * Synthesizes an original, subtle, seamlessly loopable stereo tactical score AudioBuffer.
+ * Uses a compact 22050 Hz sample rate (~2.8 MB per stereo 32s track) and deterministic phase math
+ * with smooth loop-boundary crossfade so there are zero clicks or pops.
+ */
+export function synthesizeMusicTrackBuffer(
+  ctx: Pick<AudioContext, 'createBuffer' | 'sampleRate'>,
+  track: MusicTrackMetadata
+): AudioBuffer {
+  const pcm = synthesizeMusicTrackPcm(track, ctx.sampleRate || 22050);
+  const buffer = ctx.createBuffer(2, pcm.left.length, pcm.sampleRate);
+  buffer.getChannelData(0).set(pcm.left);
+  buffer.getChannelData(1).set(pcm.right);
   return buffer;
 }

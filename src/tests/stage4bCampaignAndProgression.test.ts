@@ -1,7 +1,6 @@
-import { createActor } from 'xstate';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { getMissionById, MISSION_CATALOG } from '@/src/data/missions';
-import { engineLifecycleMachine } from '@/src/engine/EngineLifecycle';
+import { createActor, engineLifecycleMachine } from '@/src/engine/EngineLifecycle';
 import { MissionCheckpointSnapshot, selectMissionCheckpointAnchor } from '@/src/gameplay/MissionCheckpoint';
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
 import {

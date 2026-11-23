@@ -15,6 +15,7 @@ export class WorldChunkManager {
   private chunks = new Map<string, WorldChunk>();
   private readonly frustum = new THREE.Frustum();
   private readonly projScreenMatrix = new THREE.Matrix4();
+  private readonly _expandBoxScratch = new THREE.Box3();
 
   registerObject(obj: THREE.Object3D, worldX: number, worldZ: number, parentScene: THREE.Scene): void {
     const cx = Math.floor(worldX / this.chunkSize);
@@ -42,6 +43,16 @@ export class WorldChunkManager {
       this.chunks.set(key, chunk);
     }
     chunk.group.add(obj);
+    // Dynamically expand chunk bounds so oversized landmarks/structures never frustum-pop at chunk edges
+    obj.updateMatrixWorld(true);
+    this._expandBoxScratch.setFromObject(obj);
+    if (!this._expandBoxScratch.isEmpty()) {
+      chunk.bounds.union(this._expandBoxScratch);
+    }
+  }
+
+  getChunks(): IterableIterator<WorldChunk> {
+    return this.chunks.values();
   }
 
   getChunkAt(worldX: number, worldZ: number): WorldChunk | undefined {

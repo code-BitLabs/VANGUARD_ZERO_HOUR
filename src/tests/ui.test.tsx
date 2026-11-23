@@ -63,7 +63,7 @@ describe('Tactical UI Screens & HUD', () => {
     expect(onQuickDeploy).toHaveBeenCalledTimes(1);
   });
 
-  it('renders GameHUD live telemetry, Pause button, Touch HUD toggle, and MobileTouchControls when enabled', () => {
+  it('renders GameHUD live telemetry, Pause button, Touch HUD toggle, and MobileTouchControls when enabled', async () => {
     gameSessionStore.getState().updateHudSnapshot({
       ...gameSessionStore.getState().hud,
       health: 84,
@@ -91,7 +91,7 @@ describe('Tactical UI Screens & HUD', () => {
     expect(screen.getAllByText('AX-50').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Destroy AA Radar Relays')).toBeTruthy();
     expect(screen.getByText('1/2')).toBeTruthy();
-    expect(screen.getByTestId('mobile-touch-controls')).toBeTruthy();
+    expect(await screen.findByTestId('mobile-touch-controls')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Pause Mission/i }));
     expect(onPause).toHaveBeenCalledTimes(1);

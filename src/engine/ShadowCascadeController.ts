@@ -86,7 +86,10 @@ export class ShadowCascadeController {
   private csmGeneration = 0;
   private readonly lastCamPos = new THREE.Vector3(Infinity, Infinity, Infinity);
   private readonly lastCamQuat = new THREE.Quaternion();
+  private readonly lastFarCamPos = new THREE.Vector3(Infinity, Infinity, Infinity);
+  private readonly lastFarCamQuat = new THREE.Quaternion();
   private csmDirty = true;
+  private staggerFrameCounter = 0;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -155,10 +158,13 @@ export class ShadowCascadeController {
         for (const light of this.csm.lights) {
           light.color.setHex(this.config.lightColor);
           light.shadow.normalBias = this.config.normalBias;
+          light.shadow.autoUpdate = false;
+          light.shadow.needsUpdate = true;
         }
         this.backend = 'webgl_csm';
         this.initializedMaterials = new WeakSet<THREE.Material>();
         this.csmDirty = true;
+        this.staggerFrameCounter = 0;
       } catch {
         this.disposeCsmOnly();
         this.backend = 'webgl_single_fallback';
@@ -245,14 +251,49 @@ export class ShadowCascadeController {
     });
   }
 
+  public forceUpdateAllCascades(): void {
+    if (!this.csm) return;
+    this.csm.update();
+    for (let i = 0; i < this.csm.lights.length; i++) {
+      this.csm.lights[i].shadow.needsUpdate = true;
+    }
+    this.lastCamPos.copy(this.camera.position);
+    this.lastCamQuat.copy(this.camera.quaternion);
+    this.lastFarCamPos.copy(this.camera.position);
+    this.lastFarCamQuat.copy(this.camera.quaternion);
+    this.csmDirty = false;
+  }
+
   public update(): void {
     if (!this.csm) return;
-    const posMoved = this.camera.position.distanceToSquared(this.lastCamPos) > 1e-4;
+    const posMovedSq = this.camera.position.distanceToSquared(this.lastCamPos);
     const rotDot = Math.abs(this.camera.quaternion.dot(this.lastCamQuat));
-    if (!this.csmDirty && !posMoved && rotDot > 0.999999) {
+    if (!this.csmDirty && posMovedSq <= 4e-4 && rotDot > 0.99999) {
       return;
     }
     this.csm.update();
+    this.staggerFrameCounter++;
+
+    const farMoveSq = this.camera.position.distanceToSquared(this.lastFarCamPos);
+    const farRotDot = Math.abs(this.camera.quaternion.dot(this.lastFarCamQuat));
+    const majorJump = this.csmDirty || farMoveSq > 2.25 || farRotDot < 0.985;
+
+    const lights = this.csm.lights;
+    for (let i = 0; i < lights.length; i++) {
+      if (
+        majorJump ||
+        i === 0 ||
+        (i === 1 && (this.staggerFrameCounter & 1) === 0) ||
+        (i >= 2 && (this.staggerFrameCounter & 3) === 0)
+      ) {
+        lights[i].shadow.needsUpdate = true;
+      }
+    }
+
+    if (majorJump || (this.staggerFrameCounter & 3) === 0) {
+      this.lastFarCamPos.copy(this.camera.position);
+      this.lastFarCamQuat.copy(this.camera.quaternion);
+    }
     this.lastCamPos.copy(this.camera.position);
     this.lastCamQuat.copy(this.camera.quaternion);
     this.csmDirty = false;

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ResourceManager } from '@/src/core/ResourceManager';
 import { ImpactSurfaceMaterial } from './SurfaceDecalManager';
 
 export type BattlefieldVfxType =
@@ -21,6 +22,8 @@ export type BattlefieldVfxType =
   | 'searchlight_motes';
 
 export type VfxBatchKind = 'additive' | 'smoke' | 'debris' | 'casing' | 'rain';
+
+const BATCH_KINDS: readonly VfxBatchKind[] = ['additive', 'smoke', 'debris', 'casing', 'rain'];
 
 interface ParticleSlot {
   active: boolean;
@@ -125,7 +128,8 @@ export class BattlefieldVfxSystem {
 
   constructor(
     private readonly scene: THREE.Scene,
-    isSoftwareGl = false
+    isSoftwareGl = false,
+    private readonly resourceManager?: ResourceManager
   ) {
     this.root.name = 'VanguardInstancedVfx';
     this.scene.add(this.root);
@@ -133,8 +137,14 @@ export class BattlefieldVfxSystem {
     const capScale = isSoftwareGl ? 0.35 : 1.0;
     const sparkTex = createSoftParticleTexture('spark');
     const puffTex = createSoftParticleTexture('puff');
-    if (sparkTex) this.textures.push(sparkTex);
-    if (puffTex) this.textures.push(puffTex);
+    if (sparkTex) {
+      this.textures.push(sparkTex);
+      this.resourceManager?.registerTexture(sparkTex, 'shared');
+    }
+    if (puffTex) {
+      this.textures.push(puffTex);
+      this.resourceManager?.registerTexture(puffTex, 'shared');
+    }
 
     const additiveGeo = new THREE.PlaneGeometry(0.45, 0.45);
     const smokeGeo = new THREE.IcosahedronGeometry(0.35, 1);
@@ -142,9 +152,12 @@ export class BattlefieldVfxSystem {
     const casingGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.042, 6);
     const rainGeo = new THREE.BoxGeometry(0.012, 0.68, 0.012);
     this.geometries.push(additiveGeo, smokeGeo, debrisGeo, casingGeo, rainGeo);
+    for (const geo of this.geometries) {
+      this.resourceManager?.registerGeometry(geo, 'shared');
+    }
 
     const additiveMat = new THREE.MeshBasicMaterial({
-      map: sparkTex ?? undefined,
+      ...(sparkTex ? { map: sparkTex } : {}),
       color: 0xffffff,
       transparent: true,
       opacity: 0.92,
@@ -153,7 +166,7 @@ export class BattlefieldVfxSystem {
       side: THREE.DoubleSide,
     });
     const smokeMat = new THREE.MeshStandardMaterial({
-      map: puffTex ?? undefined,
+      ...(puffTex ? { map: puffTex } : {}),
       color: 0xffffff,
       roughness: 0.95,
       metalness: 0.0,
@@ -178,6 +191,9 @@ export class BattlefieldVfxSystem {
       depthWrite: false,
     });
     this.materials.push(additiveMat, smokeMat, debrisMat, casingMat, rainMat);
+    for (const mat of this.materials) {
+      this.resourceManager?.registerMaterial(mat, 'shared');
+    }
 
     this.batches = {
       additive: this.createBatch(additiveGeo, additiveMat, Math.round(220 * capScale)),
@@ -542,24 +558,25 @@ export class BattlefieldVfxSystem {
       }
     }
 
-    const batchKinds: VfxBatchKind[] = ['additive', 'smoke', 'debris', 'casing', 'rain'];
-    for (let b = 0; b < batchKinds.length; b++) {
-      const kind = batchKinds[b];
+    for (let b = 0; b < BATCH_KINDS.length; b++) {
+      const kind = BATCH_KINDS[b];
       const batch = this.batches[kind];
-      if (batch.activeCount === 0) continue;
-      let dirty = false;
-      for (let i = 0; i < batch.capacity; i++) {
+      if (batch.activeCount === 0) {
+        if (batch.mesh.count !== 0 || batch.mesh.visible) {
+          batch.mesh.count = 0;
+          batch.mesh.visible = false;
+        }
+        continue;
+      }
+
+      let colorDirty = false;
+      for (let i = 0; i < batch.activeCount; i++) {
         const s = batch.slots[i];
-        if (!s.active) continue;
-        dirty = true;
         s.life += dt;
         if (s.life >= s.maxLife) {
-          s.active = false;
-          batch.activeCount = Math.max(0, batch.activeCount - 1);
-          this.dummy.position.set(0, -9999, 0);
-          this.dummy.scale.setScalar(0.0001);
-          this.dummy.updateMatrix();
-          batch.mesh.setMatrixAt(i, this.dummy.matrix);
+          this.removeSlotAt(batch, i);
+          colorDirty = true;
+          i--;
           continue;
         }
 
@@ -574,16 +591,13 @@ export class BattlefieldVfxSystem {
 
         // Rain ground splash & indoor shelter cut
         if (kind === 'rain' && (s.py <= 0.1 || this.isPointSheltered(s.px, s.py, s.pz))) {
-          if (s.py <= 0.1 && (i % 4 === 0)) {
+          if (s.py <= 0.1 && (i & 3) === 0) {
             this._tmpSplashOrigin.set(s.px, 0.06, s.pz);
             this.emitEffect('rain_splash', this._tmpSplashOrigin, this._tmpUpAxis, 0.5);
           }
-          s.active = false;
-          batch.activeCount = Math.max(0, batch.activeCount - 1);
-          this.dummy.position.set(0, -9999, 0);
-          this.dummy.scale.setScalar(0.0001);
-          this.dummy.updateMatrix();
-          batch.mesh.setMatrixAt(i, this.dummy.matrix);
+          this.removeSlotAt(batch, i);
+          colorDirty = true;
+          i--;
           continue;
         }
 
@@ -611,26 +625,43 @@ export class BattlefieldVfxSystem {
         this.dummy.updateMatrix();
         batch.mesh.setMatrixAt(i, this.dummy.matrix);
       }
-      if (dirty) {
+
+      batch.mesh.count = batch.activeCount;
+      batch.mesh.visible = batch.activeCount > 0;
+      if (batch.activeCount > 0) {
         batch.mesh.instanceMatrix.needsUpdate = true;
+        if (colorDirty && batch.mesh.instanceColor) {
+          batch.mesh.instanceColor.needsUpdate = true;
+        }
       }
     }
   }
 
   public getStats(): {
     drawCalls: number;
+    activeDrawCalls: number;
+    gpuInstancesSubmitted: number;
     activeParticles: number;
     totalCapacity: number;
     sheltersRegistered: number;
   } {
     let activeParticles = 0;
     let totalCapacity = 0;
-    for (const batch of Object.values(this.batches)) {
+    let activeDrawCalls = 0;
+    let gpuInstancesSubmitted = 0;
+    for (let i = 0; i < BATCH_KINDS.length; i++) {
+      const batch = this.batches[BATCH_KINDS[i]];
       totalCapacity += batch.capacity;
       activeParticles += batch.activeCount;
+      if (batch.mesh.visible && batch.mesh.count > 0) {
+        activeDrawCalls++;
+        gpuInstancesSubmitted += batch.mesh.count;
+      }
     }
     return {
-      drawCalls: 5,
+      drawCalls: BATCH_KINDS.length,
+      activeDrawCalls,
+      gpuInstancesSubmitted,
       activeParticles,
       totalCapacity,
       sheltersRegistered: this.shelters.length,
@@ -638,28 +669,52 @@ export class BattlefieldVfxSystem {
   }
 
   public clearAll(): void {
-    for (const batch of Object.values(this.batches)) {
-      batch.activeCount = 0;
-      for (let i = 0; i < batch.capacity; i++) {
+    for (let b = 0; b < BATCH_KINDS.length; b++) {
+      const batch = this.batches[BATCH_KINDS[b]];
+      for (let i = 0; i < batch.activeCount; i++) {
         batch.slots[i].active = false;
-        this.dummy.position.set(0, -9999, 0);
-        this.dummy.scale.setScalar(0.0001);
-        this.dummy.updateMatrix();
-        batch.mesh.setMatrixAt(i, this.dummy.matrix);
       }
-      batch.mesh.instanceMatrix.needsUpdate = true;
+      batch.activeCount = 0;
+      batch.cursor = 0;
+      batch.mesh.count = 0;
+      batch.mesh.visible = false;
     }
   }
 
   public dispose(): void {
     this.clearAll();
-    for (const batch of Object.values(this.batches)) {
+    for (let b = 0; b < BATCH_KINDS.length; b++) {
+      const batch = this.batches[BATCH_KINDS[b]];
       this.root.remove(batch.mesh);
+      batch.mesh.dispose();
     }
     for (const geo of this.geometries) geo.dispose();
     for (const mat of this.materials) mat.dispose();
     for (const tex of this.textures) tex.dispose();
     this.scene.remove(this.root);
+  }
+
+  private removeSlotAt(
+    batch: {
+      mesh: THREE.InstancedMesh;
+      slots: ParticleSlot[];
+      cursor: number;
+      capacity: number;
+      activeCount: number;
+    },
+    idx: number
+  ): void {
+    const lastIdx = batch.activeCount - 1;
+    const dead = batch.slots[idx];
+    dead.active = false;
+    if (idx < lastIdx) {
+      const moved = batch.slots[lastIdx];
+      batch.slots[idx] = moved;
+      batch.slots[lastIdx] = dead;
+      this.tmpColor.setHex(moved.colorHex);
+      batch.mesh.setColorAt(idx, this.tmpColor);
+    }
+    batch.activeCount = lastIdx;
   }
 
   private createBatch(
@@ -673,6 +728,8 @@ export class BattlefieldVfxSystem {
     mesh.frustumCulled = false;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
+    mesh.count = 0;
+    mesh.visible = false;
 
     const slots: ParticleSlot[] = [];
     this.dummy.position.set(0, -9999, 0);
@@ -774,13 +831,16 @@ export class BattlefieldVfxSystem {
     }
   ): void {
     const batch = this.batches[kind];
-    const idx = batch.cursor;
-    batch.cursor = (batch.cursor + 1) % batch.capacity;
-    const slot = batch.slots[idx];
-    if (!slot.active) {
+    let idx: number;
+    if (batch.activeCount < batch.capacity) {
+      idx = batch.activeCount;
       batch.activeCount++;
-      slot.active = true;
+    } else {
+      idx = batch.cursor;
+      batch.cursor = (batch.cursor + 1) % batch.capacity;
     }
+    const slot = batch.slots[idx];
+    slot.active = true;
     slot.px = init.px;
     slot.py = init.py;
     slot.pz = init.pz;
@@ -801,8 +861,18 @@ export class BattlefieldVfxSystem {
     slot.scaleEnd = init.scaleEnd;
     slot.colorHex = init.colorHex;
 
+    this.dummy.position.set(slot.px, slot.py, slot.pz);
+    this.dummy.rotation.set(0, 0, 0);
+    this.dummy.scale.setScalar(Math.max(0.001, slot.scaleStart));
+    this.dummy.updateMatrix();
+    batch.mesh.setMatrixAt(idx, this.dummy.matrix);
+    batch.mesh.instanceMatrix.needsUpdate = true;
+
     this.tmpColor.setHex(init.colorHex);
     batch.mesh.setColorAt(idx, this.tmpColor);
     if (batch.mesh.instanceColor) batch.mesh.instanceColor.needsUpdate = true;
+
+    batch.mesh.count = batch.activeCount;
+    batch.mesh.visible = batch.activeCount > 0;
   }
 }

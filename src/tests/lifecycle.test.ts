@@ -147,8 +147,7 @@ describe('Engine Lifecycle, Pooling & Spatial Physics', () => {
   });
 
   it('transitions EngineLifecycle cleanly across deploy, pause, restart, debrief, retry, and unload without ignored events', async () => {
-    const { createActor } = await import('xstate');
-    const { engineLifecycleMachine } = await import('@/src/engine/EngineLifecycle');
+    const { createActor, engineLifecycleMachine } = await import('@/src/engine/EngineLifecycle');
 
     const actor = createActor(engineLifecycleMachine);
     actor.start();

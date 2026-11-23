@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -31,10 +31,13 @@ import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { getMissionVisualProfile } from '@/src/world/VisualBible';
 type MissionVisualProfile = ReturnType<typeof getMissionVisualProfile>;
 import { computeMobileHudLayout } from './mobileHudLayoutEngine';
-import { MobileTouchControls } from './MobileTouchControls';
 import { SquadCommandHud } from './SquadCommandHud';
 import { TacticalMiniMap } from './TacticalMiniMap';
 import { DownedActionOverlay, TacticalOverviewDrawer } from './TacticalOverlays';
+
+const LazyMobileTouchControls = React.lazy(() =>
+  import('./MobileTouchControls').then((m) => ({ default: m.MobileTouchControls }))
+);
 
 type ObjectiveItem = HudSnapshot['objectives'][number];
 
@@ -1944,10 +1947,12 @@ export const HudTouchControlsSlot = React.memo(function HudTouchControlsSlot({
 }) {
   const hud = useGameSessionStore((s) => s.hud);
   return (
-    <MobileTouchControls
-      inputManager={inputManager}
-      hud={hud}
-      onIssueSquadCommand={hud.deploymentMode === 'solo' ? undefined : onIssueSquadCommand}
-    />
+    <Suspense fallback={null}>
+      <LazyMobileTouchControls
+        inputManager={inputManager}
+        hud={hud}
+        onIssueSquadCommand={hud.deploymentMode === 'solo' ? undefined : onIssueSquadCommand}
+      />
+    </Suspense>
   );
 });

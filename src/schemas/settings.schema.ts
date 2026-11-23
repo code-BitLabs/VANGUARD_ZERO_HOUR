@@ -145,6 +145,9 @@ export type TargetRefreshRateSetting = z.infer<typeof TargetRefreshRateSchema>;
 export const ShadowMapResolutionSchema = z.union([z.literal(512), z.literal(1024), z.literal(2048)]);
 export type ShadowMapResolution = z.infer<typeof ShadowMapResolutionSchema>;
 
+export const AntiAliasingModeSchema = z.enum(['auto', 'msaa4', 'msaa2', 'smaa', 'off']);
+export type AntiAliasingMode = z.infer<typeof AntiAliasingModeSchema>;
+
 export const GraphicsSettingsSchema = z.object({
   qualityMode: QualityModeSchema.default('auto'),
   qualityProfile: QualityPresetProfileSchema.default('auto_adaptive'),
@@ -166,6 +169,7 @@ export const GraphicsSettingsSchema = z.object({
   renderScale: z.number().min(0.5).max(1.0).default(1.0),
   textureQuality: SubQualityLevelSchema.default('high'),
   antialiasing: z.boolean().default(true),
+  antiAliasingMode: AntiAliasingModeSchema.default('auto'),
   effectsQuality: SubQualityLevelSchema.default('high'),
   drawDistance: DrawDistanceSettingSchema.default('auto'),
   fpsCap: FpsCapSchema.default(0),

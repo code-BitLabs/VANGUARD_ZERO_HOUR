@@ -5,12 +5,20 @@ import {
   EffectComposer,
   EffectPass,
   RenderPass,
+  SMAAEffect,
+  SMAAPreset,
   ToneMappingEffect,
   ToneMappingMode,
   VignetteEffect,
 } from 'postprocessing';
 import { ResourceManager } from '@/src/core/ResourceManager';
+import { QualityTier } from '@/src/schemas/common.schema';
+import { AntiAliasingMode } from '@/src/schemas/settings.schema';
 import { SceneLights } from '@/src/world/LightingRig';
+import {
+  resolveAntiAliasingPolicy,
+  ResolvedAntiAliasingConfig,
+} from './AntiAliasingPolicy';
 import { GovernorProfile } from './PerformanceGovernor';
 import { RenderingQualityDirector } from './RenderingQualityDirector';
 import { ShadowCascadeController } from './ShadowCascadeController';
@@ -34,9 +42,11 @@ export class EngineRenderer {
 
   private composer: EffectComposer | null = null;
   private bloomEffect: BloomEffect | null = null;
+  private smaaEffect: SMAAEffect | null = null;
   private vignetteEffect: VignetteEffect | null = null;
   private toneMappingEffect: ToneMappingEffect | null = null;
   private bloomPass: EffectPass | null = null;
+  private smaaPass: EffectPass | null = null;
   private vignettePass: EffectPass | null = null;
   private envRT: THREE.WebGLRenderTarget | null = null;
   private renderScale = 1.0;
@@ -52,6 +62,19 @@ export class EngineRenderer {
   private lastTriangles = 0;
   private backendPreference: RendererBackendOption = 'auto';
   private verticalSliceReport: RenderingVerticalSliceReport;
+  private readonly maxMsaaSamples: number;
+  private msaaFramebufferSupported = true;
+  private requestedAaMode: AntiAliasingMode = 'auto';
+  private requestedAaEnabled = true;
+  private requestedAaQualityTier: QualityTier = 'high';
+  private adaptiveAaDowngradeStep = 0;
+  private activeAaConfig: ResolvedAntiAliasingConfig = {
+    activeMode: 'off',
+    multisampling: 0,
+    useSmaa: false,
+    reason: 'uninitialized',
+  };
+  private pendingAaRebuild = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -62,21 +85,28 @@ export class EngineRenderer {
     this.width = Math.max(320, container.clientWidth || window.innerWidth);
     this.height = Math.max(240, container.clientHeight || window.innerHeight);
 
+    // Backbuffer MSAA is unused when EffectComposer renders offscreen; AA is owned by EffectComposer MSAA / SMAAEffect.
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: false,
       powerPreference: 'high-performance',
       stencil: false,
     });
     const gl = this.renderer.getContext();
     let rendererString = '';
+    let maxSamples = 0;
     try {
       const dbgExt = gl.getExtension('WEBGL_debug_renderer_info');
       rendererString = dbgExt
         ? String(gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) ?? '')
         : String(gl.getParameter(gl.RENDERER) ?? '');
+      if (this.renderer.capabilities.isWebGL2 && 'MAX_SAMPLES' in gl) {
+        maxSamples = Number(gl.getParameter((gl as WebGL2RenderingContext).MAX_SAMPLES) ?? 0) || 0;
+      }
     } catch {
       rendererString = '';
+      maxSamples = 0;
     }
+    this.maxMsaaSamples = maxSamples;
     this.isSoftwareGl = /swiftshader|llvmpipe|software|mesa offscreen|basic render driver/i.test(
       rendererString
     );
@@ -158,16 +188,134 @@ export class EngineRenderer {
     pmrem.dispose();
   }
 
-  private buildPostProcessing(): void {
+  private computeDesiredAaConfig(): ResolvedAntiAliasingConfig {
+    const isCoarse =
+      typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+    const dpr = this.appliedEffectiveDpr || this.renderer.getPixelRatio() || 1;
+    const pixelCount = Math.round(this.width * dpr) * Math.round(this.height * dpr);
+    return resolveAntiAliasingPolicy({
+      requestedMode: this.requestedAaMode,
+      antialiasingEnabled: this.requestedAaEnabled,
+      isSoftwareGl: this.isSoftwareGl,
+      isWebGL2: Boolean(this.renderer.capabilities?.isWebGL2),
+      maxSamples: this.maxMsaaSamples,
+      msaaFramebufferSupported: this.msaaFramebufferSupported,
+      canvasPixelCount: pixelCount,
+      isMobileOrCoarse: isCoarse,
+      qualityTier: this.requestedAaQualityTier,
+      adaptiveDowngradeStep: this.adaptiveAaDowngradeStep,
+    });
+  }
+
+  public applyAntiAliasingPreference(
+    mode: AntiAliasingMode,
+    antialiasingEnabled: boolean,
+    qualityTier: QualityTier,
+    options?: { lockSurfaceAndShadows?: boolean }
+  ): ResolvedAntiAliasingConfig {
+    this.requestedAaMode = mode;
+    this.requestedAaEnabled = antialiasingEnabled;
+    this.requestedAaQualityTier = qualityTier;
+    const desired = this.computeDesiredAaConfig();
+    if (this.isSoftwareGl) {
+      this.activeAaConfig = desired;
+      this.pendingAaRebuild = false;
+      return desired;
+    }
+
+    const changed =
+      desired.multisampling !== this.activeAaConfig.multisampling ||
+      desired.useSmaa !== this.activeAaConfig.useSmaa;
+    if (!changed) {
+      this.activeAaConfig = desired;
+      this.pendingAaRebuild = false;
+      return this.activeAaConfig;
+    }
+
+    if (options?.lockSurfaceAndShadows) {
+      // Combat lock: never reallocate EffectComposer FBOs mid-firefight
+      this.pendingAaRebuild = true;
+      return this.activeAaConfig;
+    }
+
+    this.buildPostProcessing(desired);
+    return this.activeAaConfig;
+  }
+
+  public flagAdaptiveAaDowngrade(degradationStep: number): void {
+    const clamped = Math.max(0, Math.min(6, Math.round(degradationStep)));
+    if (clamped > this.adaptiveAaDowngradeStep) {
+      this.adaptiveAaDowngradeStep = clamped;
+      const desired = this.computeDesiredAaConfig();
+      if (
+        desired.multisampling !== this.activeAaConfig.multisampling ||
+        desired.useSmaa !== this.activeAaConfig.useSmaa
+      ) {
+        this.pendingAaRebuild = true;
+      }
+    }
+  }
+
+  public flushPendingAntiAliasingTransition(): void {
+    if (!this.pendingAaRebuild || this.isSoftwareGl) return;
+    this.pendingAaRebuild = false;
+    this.buildPostProcessing(this.computeDesiredAaConfig());
+  }
+
+  public getAntiAliasingState(): ResolvedAntiAliasingConfig & {
+    maxSamples: number;
+    pendingTransition: boolean;
+  } {
+    return {
+      ...this.activeAaConfig,
+      maxSamples: this.maxMsaaSamples,
+      pendingTransition: this.pendingAaRebuild,
+    };
+  }
+
+  private disposePostProcessing(): void {
     this.bloomPass?.dispose();
+    this.smaaPass?.dispose();
     this.vignettePass?.dispose();
     this.bloomEffect?.dispose();
+    this.smaaEffect?.dispose();
     this.vignetteEffect?.dispose();
     this.toneMappingEffect?.dispose();
     this.composer?.dispose();
-    const composer = new EffectComposer(this.renderer, {
-      frameBufferType: THREE.HalfFloatType,
-    });
+    this.bloomPass = null;
+    this.smaaPass = null;
+    this.vignettePass = null;
+    this.bloomEffect = null;
+    this.smaaEffect = null;
+    this.vignetteEffect = null;
+    this.toneMappingEffect = null;
+    this.composer = null;
+  }
+
+  private buildPostProcessing(explicitConfig?: ResolvedAntiAliasingConfig): void {
+    this.disposePostProcessing();
+    let config = explicitConfig ?? this.computeDesiredAaConfig();
+    let composer: EffectComposer;
+    try {
+      composer = new EffectComposer(this.renderer, {
+        frameBufferType: THREE.HalfFloatType,
+        multisampling: config.multisampling,
+      });
+    } catch {
+      // Safe driver fallback if HalfFloat + MSAA FBO fails on a constrained WebGL2 driver
+      this.msaaFramebufferSupported = false;
+      config = {
+        activeMode: config.activeMode === 'off' ? 'off' : 'smaa',
+        multisampling: 0,
+        useSmaa: config.activeMode !== 'off',
+        reason: 'msaa_fbo_init_failed_fallback_smaa',
+      };
+      composer = new EffectComposer(this.renderer, {
+        frameBufferType: THREE.HalfFloatType,
+        multisampling: 0,
+      });
+    }
+
     const renderPass = new RenderPass(this.scene, this.camera);
     const bloom = new BloomEffect({
       intensity: 0.36,
@@ -183,21 +331,41 @@ export class EngineRenderer {
     const toneMapping = new ToneMappingEffect({
       mode: ToneMappingMode.ACES_FILMIC,
     });
-    // Separate passes so disabling Bloom completely skips mipmap blur GPU work while keeping ACES Filmic ToneMapping + Vignette active on all hardware tiers
+
     const bloomPass = new EffectPass(this.camera, bloom);
     bloomPass.enabled = this.bloomEnabled;
     const vignettePass = new EffectPass(this.camera, vignette, toneMapping);
     vignettePass.enabled = true;
+
     composer.addPass(renderPass);
     composer.addPass(bloomPass);
     composer.addPass(vignettePass);
 
+    let smaaEffect: SMAAEffect | null = null;
+    let smaaPass: EffectPass | null = null;
+    if (config.useSmaa) {
+      try {
+        smaaEffect = new SMAAEffect({ preset: SMAAPreset.MEDIUM });
+        smaaPass = new EffectPass(this.camera, smaaEffect);
+        smaaPass.enabled = true;
+        composer.addPass(smaaPass);
+      } catch {
+        smaaEffect = null;
+        smaaPass = null;
+      }
+    }
+
+    composer.setSize(this.width, this.height);
     this.composer = composer;
     this.bloomEffect = bloom;
+    this.smaaEffect = smaaEffect;
     this.vignetteEffect = vignette;
     this.toneMappingEffect = toneMapping;
     this.bloomPass = bloomPass;
+    this.smaaPass = smaaPass;
     this.vignettePass = vignettePass;
+    this.activeAaConfig = config;
+    this.pendingAaRebuild = false;
   }
 
   private bindContextEvents(): void {
@@ -441,16 +609,34 @@ export class EngineRenderer {
   }
 
   public registerSceneShadowsAndPrecompile(): void {
+    if (this.pendingAaRebuild && !this.isSoftwareGl) {
+      this.flushPendingAntiAliasingTransition();
+    }
     if (this.shadowCascades?.isCsmActive()) {
       this.shadowCascades.registerHierarchy(this.scene);
-      this.shadowCascades.update();
+      this.shadowCascades.forceUpdateAllCascades();
     }
     this.scene.updateMatrixWorld();
     this.viewModelScene.updateMatrixWorld();
+    if (this.isSoftwareGl) return;
     try {
       if (!this.renderer.getContext().isContextLost()) {
-        this.renderer.compile(this.scene, this.camera);
-        this.renderer.compile(this.viewModelScene, this.viewModelCamera);
+        const asyncCompiler = (
+          this.renderer as THREE.WebGLRenderer & {
+            compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera) => Promise<unknown>;
+          }
+        ).compileAsync;
+        if (typeof asyncCompiler === 'function') {
+          void Promise.all([
+            asyncCompiler.call(this.renderer, this.scene, this.camera),
+            asyncCompiler.call(this.renderer, this.viewModelScene, this.viewModelCamera),
+          ]).catch(() => {
+            // Fallback silently if context lost during async compile
+          });
+        } else {
+          this.renderer.compile(this.scene, this.camera);
+          this.renderer.compile(this.viewModelScene, this.viewModelCamera);
+        }
       }
     } catch {
       // Ignore precompile errors in mocked/headless test contexts
@@ -469,15 +655,17 @@ export class EngineRenderer {
       this.shadowCascades.update();
     }
     this.renderer.info.reset();
-    this.renderer.setRenderTarget(null);
-    this.renderer.clear();
     if (this.composer && this.vignettePass) {
+      // RenderPass inside EffectComposer clears its own offscreen buffer; skipping redundant screen clear avoids a wasted pass
       this.composer.render();
     } else {
+      this.renderer.setRenderTarget(null);
+      this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
     }
 
     if (renderViewModel) {
+      this.renderer.setRenderTarget(null);
       this.renderer.clearDepth();
       this.renderer.render(this.viewModelScene, this.viewModelCamera);
     }
@@ -510,6 +698,9 @@ export class EngineRenderer {
     bloomPassEnabled: boolean;
     vignetteEnabled: boolean;
     toneMappingEnabled: boolean;
+    smaaEnabled: boolean;
+    aaMode: string;
+    multisampling: number;
   } {
     return {
       composerActive: Boolean(this.composer && this.vignettePass),
@@ -517,6 +708,9 @@ export class EngineRenderer {
       bloomPassEnabled: Boolean(this.bloomPass?.enabled),
       vignetteEnabled: Boolean(this.vignettePass?.enabled && this.vignetteEffect),
       toneMappingEnabled: Boolean(this.vignettePass?.enabled && this.toneMappingEffect),
+      smaaEnabled: Boolean(this.smaaPass?.enabled && this.smaaEffect),
+      aaMode: this.activeAaConfig?.activeMode ?? 'off',
+      multisampling: this.activeAaConfig?.multisampling ?? 0,
     };
   }
 
@@ -525,19 +719,8 @@ export class EngineRenderer {
     this.lightBudgetManager?.dispose();
     this.scene.environment = null;
     this.viewModelScene.environment = null;
-    this.bloomPass?.dispose();
-    this.vignettePass?.dispose();
-    this.bloomEffect?.dispose();
-    this.vignetteEffect?.dispose();
-    this.toneMappingEffect?.dispose();
-    this.composer?.dispose();
+    this.disposePostProcessing();
     this.envRT?.dispose();
-    this.bloomPass = null;
-    this.vignettePass = null;
-    this.bloomEffect = null;
-    this.vignetteEffect = null;
-    this.toneMappingEffect = null;
-    this.composer = null;
     this.envRT = null;
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode === this.container) {

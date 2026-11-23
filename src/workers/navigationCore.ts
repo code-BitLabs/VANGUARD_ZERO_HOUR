@@ -267,6 +267,12 @@ export class NavigationSolver {
   private edgeBestCost = new Float32Array(0);
   private edgePrev = new Int32Array(0);
   private edgeClosed = new Uint8Array(0);
+  private edgeStartCandIdx = new Int32Array(0);
+  private edgeStartCandDistSq = new Float32Array(0);
+  private edgeGoalCandIdx = new Int32Array(0);
+  private edgeGoalCandDistSq = new Float32Array(0);
+  private edgeStartEvaluated = new Uint8Array(0);
+  private edgeGoalEvaluated = new Uint8Array(0);
   private readonly dirtySurfaces = new Set<number>();
 
   public readonly outWaypoint = new Float32Array(2);
@@ -280,6 +286,7 @@ export class NavigationSolver {
   public lastGoalReached = false;
   public lastChainLength = 0;
   public lastPathDistanceMeters = 0;
+  public lastPortalAStarCalls = 0;
 
   initGrid(
     width: number,
@@ -471,6 +478,12 @@ export class NavigationSolver {
     this.edgeBestCost = new Float32Array(E);
     this.edgePrev = new Int32Array(E);
     this.edgeClosed = new Uint8Array(E);
+    this.edgeStartCandIdx = new Int32Array(E);
+    this.edgeStartCandDistSq = new Float32Array(E);
+    this.edgeGoalCandIdx = new Int32Array(E);
+    this.edgeGoalCandDistSq = new Float32Array(E);
+    this.edgeStartEvaluated = new Uint8Array(E);
+    this.edgeGoalEvaluated = new Uint8Array(E);
 
     this.dirtySurfaces.clear();
     this.recomputeIntraSurfacePortalDistances(null);
@@ -887,125 +900,226 @@ export class NavigationSolver {
     }
 
     // 2. Hierarchical Portal Graph Search (handles cross-elevation AND disconnected same-surface detours)
+    this.lastPortalAStarCalls = 0;
     const E = this.directedEdges.length;
     if (E > 0) {
       this.flushDirtySurfaceDistances();
       const profile = getAgentProfileByCode(profileCode);
+      let startCandCount = 0;
+      let goalCandCount = 0;
       for (let i = 0; i < E; i++) {
         const edge = this.directedEdges[i];
-        this.edgeCompatible[i] = canAgentUsePortal(profile, edge) ? 1 : 0;
+        const compat = canAgentUsePortal(profile, edge) ? 1 : 0;
+        this.edgeCompatible[i] = compat;
         this.edgeStartDist[i] = Infinity;
         this.edgeGoalDist[i] = Infinity;
-        this.edgeBestCost[i] = Infinity;
-        this.edgePrev[i] = -1;
-        this.edgeClosed[i] = 0;
+        this.edgeStartEvaluated[i] = 0;
+        this.edgeGoalEvaluated[i] = 0;
+        if (compat === 0) continue;
+        if (edge.entrySurfaceId === startSurfId) {
+          const dxs = edge.entryX - sx;
+          const dzs = edge.entryZ - sz;
+          this.edgeStartCandIdx[startCandCount] = i;
+          this.edgeStartCandDistSq[startCandCount] = dxs * dxs + dzs * dzs;
+          startCandCount++;
+        }
+        if (edge.exitSurfaceId === goalSurfId) {
+          const dxg = edge.exitX - tx;
+          const dzg = edge.exitZ - tz;
+          this.edgeGoalCandIdx[goalCandCount] = i;
+          this.edgeGoalCandDistSq[goalCandCount] = dxg * dxg + dzg * dzg;
+          goalCandCount++;
+        }
       }
 
-      // Compute exact intra-surface start-to-portal and portal-to-goal distances
-      for (let i = 0; i < E; i++) {
-        if (this.edgeCompatible[i] === 0) continue;
-        const edge = this.directedEdges[i];
-        if (edge.entrySurfaceId === startSurfId) {
+      const K_NEAREST_PORTALS = 4;
+      const selectKNearest = (
+        indices: Int32Array,
+        distSq: Float32Array,
+        count: number,
+        k: number
+      ): number => {
+        const limit = Math.min(count, k);
+        for (let a = 0; a < limit; a++) {
+          let best = a;
+          let bestD = distSq[a];
+          for (let b = a + 1; b < count; b++) {
+            if (distSq[b] < bestD) {
+              bestD = distSq[b];
+              best = b;
+            }
+          }
+          if (best !== a) {
+            const tmpIdx = indices[a];
+            indices[a] = indices[best];
+            indices[best] = tmpIdx;
+            const tmpD = distSq[a];
+            distSq[a] = distSq[best];
+            distSq[best] = tmpD;
+          }
+        }
+        return limit;
+      };
+
+      const localBudget = Math.min(maxIter, 1600);
+      const evalStartRange = (fromIdx: number, toIdx: number): void => {
+        for (let c = fromIdx; c < toIdx; c++) {
+          const i = this.edgeStartCandIdx[c];
+          if (this.edgeStartEvaluated[i] === 1) continue;
+          this.edgeStartEvaluated[i] = 1;
+          const edge = this.directedEdges[i];
+          this.lastPortalAStarCalls++;
           const ok = this.runLocalAStar(
             startSurf,
             sx,
             sz,
             edge.entryX,
             edge.entryZ,
-            Math.min(maxIter, 1600),
+            localBudget,
             true
           );
           if (ok && this.lastGoalReached) {
             this.edgeStartDist[i] = this.lastPathDistanceMeters;
           }
         }
-        if (edge.exitSurfaceId === goalSurfId) {
+      };
+
+      const evalGoalRange = (fromIdx: number, toIdx: number): void => {
+        for (let c = fromIdx; c < toIdx; c++) {
+          const i = this.edgeGoalCandIdx[c];
+          if (this.edgeGoalEvaluated[i] === 1) continue;
+          this.edgeGoalEvaluated[i] = 1;
+          const edge = this.directedEdges[i];
+          this.lastPortalAStarCalls++;
           const ok = this.runLocalAStar(
             goalSurf,
             edge.exitX,
             edge.exitZ,
             tx,
             tz,
-            Math.min(maxIter, 1600),
+            localBudget,
             true
           );
           if (ok && this.lastGoalReached) {
             this.edgeGoalDist[i] = this.lastPathDistanceMeters;
           }
         }
-      }
+      };
 
-      // Seed edges reachable from start
-      for (let i = 0; i < E; i++) {
-        if (this.edgeCompatible[i] === 0 || this.edgeStartDist[i] === Infinity) continue;
-        const edge = this.directedEdges[i];
-        const occPenalty =
-          edge.maxConcurrentOccupants > 0 && edge.activeOccupants >= edge.maxConcurrentOccupants
-            ? 14
-            : 0;
-        this.edgeBestCost[i] =
-          this.edgeStartDist[i] + edge.baseCost + edge.dynamicWaitCost + occPenalty;
-      }
+      const startInitialK = selectKNearest(
+        this.edgeStartCandIdx,
+        this.edgeStartCandDistSq,
+        startCandCount,
+        K_NEAREST_PORTALS
+      );
+      const goalInitialK = selectKNearest(
+        this.edgeGoalCandIdx,
+        this.edgeGoalCandDistSq,
+        goalCandCount,
+        K_NEAREST_PORTALS
+      );
+
+      evalStartRange(0, startInitialK);
+      evalGoalRange(0, goalInitialK);
 
       let bestFinalCost = Infinity;
       let bestFinalEdge = -1;
       let bestClosestHeuristic = Infinity;
       let bestClosestEdge = -1;
 
-      // Exact A*/Dijkstra over E directed portal edges
-      for (let step = 0; step < E; step++) {
-        let pick = -1;
-        let pickF = Infinity;
+      const relaxPortalGraph = (): void => {
+        bestFinalCost = Infinity;
+        bestFinalEdge = -1;
+        bestClosestHeuristic = Infinity;
+        bestClosestEdge = -1;
+
         for (let i = 0; i < E; i++) {
-          if (this.edgeClosed[i] === 1 || this.edgeBestCost[i] === Infinity) continue;
+          this.edgeBestCost[i] = Infinity;
+          this.edgePrev[i] = -1;
+          this.edgeClosed[i] = 0;
+          if (this.edgeCompatible[i] === 0 || this.edgeStartDist[i] === Infinity) continue;
           const edge = this.directedEdges[i];
-          const h = Math.hypot(tx - edge.exitX, ty - edge.exitY, tz - edge.exitZ);
-          const f = this.edgeBestCost[i] + h;
-          if (f < pickF) {
-            pickF = f;
-            pick = i;
-          }
-        }
-        if (pick === -1) break;
-        if (pickF >= bestFinalCost) break;
-
-        this.edgeClosed[pick] = 1;
-        const pickedEdge = this.directedEdges[pick];
-        const exitH = Math.hypot(tx - pickedEdge.exitX, ty - pickedEdge.exitY, tz - pickedEdge.exitZ);
-        if (exitH < bestClosestHeuristic) {
-          bestClosestHeuristic = exitH;
-          bestClosestEdge = pick;
-        }
-
-        if (this.edgeGoalDist[pick] < Infinity) {
-          const candidateTotal = this.edgeBestCost[pick] + this.edgeGoalDist[pick];
-          if (candidateTotal < bestFinalCost) {
-            bestFinalCost = candidateTotal;
-            bestFinalEdge = pick;
-          }
-        }
-
-        for (let nxt = 0; nxt < E; nxt++) {
-          if (this.edgeCompatible[nxt] === 0 || this.edgeClosed[nxt] === 1) continue;
-          const pairDist = this.edgePairDist[pick * E + nxt];
-          if (!Number.isFinite(pairDist)) continue;
-          const nxtEdge = this.directedEdges[nxt];
           const occPenalty =
-            nxtEdge.maxConcurrentOccupants > 0 &&
-            nxtEdge.activeOccupants >= nxtEdge.maxConcurrentOccupants
+            edge.maxConcurrentOccupants > 0 && edge.activeOccupants >= edge.maxConcurrentOccupants
               ? 14
               : 0;
-          const cand =
-            this.edgeBestCost[pick] +
-            pairDist +
-            nxtEdge.baseCost +
-            nxtEdge.dynamicWaitCost +
-            occPenalty;
-          if (cand < this.edgeBestCost[nxt]) {
-            this.edgeBestCost[nxt] = cand;
-            this.edgePrev[nxt] = pick;
+          this.edgeBestCost[i] =
+            this.edgeStartDist[i] + edge.baseCost + edge.dynamicWaitCost + occPenalty;
+        }
+
+        // Exact A*/Dijkstra over E directed portal edges
+        for (let step = 0; step < E; step++) {
+          let pick = -1;
+          let pickF = Infinity;
+          for (let i = 0; i < E; i++) {
+            if (this.edgeClosed[i] === 1 || this.edgeBestCost[i] === Infinity) continue;
+            const edge = this.directedEdges[i];
+            const h = Math.hypot(tx - edge.exitX, ty - edge.exitY, tz - edge.exitZ);
+            const f = this.edgeBestCost[i] + h;
+            if (f < pickF) {
+              pickF = f;
+              pick = i;
+            }
+          }
+          if (pick === -1) break;
+          if (pickF >= bestFinalCost) break;
+
+          this.edgeClosed[pick] = 1;
+          const pickedEdge = this.directedEdges[pick];
+          const exitH = Math.hypot(
+            tx - pickedEdge.exitX,
+            ty - pickedEdge.exitY,
+            tz - pickedEdge.exitZ
+          );
+          if (exitH < bestClosestHeuristic) {
+            bestClosestHeuristic = exitH;
+            bestClosestEdge = pick;
+          }
+
+          if (this.edgeGoalDist[pick] < Infinity) {
+            const candidateTotal = this.edgeBestCost[pick] + this.edgeGoalDist[pick];
+            if (candidateTotal < bestFinalCost) {
+              bestFinalCost = candidateTotal;
+              bestFinalEdge = pick;
+            }
+          }
+
+          for (let nxt = 0; nxt < E; nxt++) {
+            if (this.edgeCompatible[nxt] === 0 || this.edgeClosed[nxt] === 1) continue;
+            const pairDist = this.edgePairDist[pick * E + nxt];
+            if (!Number.isFinite(pairDist)) continue;
+            const nxtEdge = this.directedEdges[nxt];
+            const occPenalty =
+              nxtEdge.maxConcurrentOccupants > 0 &&
+              nxtEdge.activeOccupants >= nxtEdge.maxConcurrentOccupants
+                ? 14
+                : 0;
+            const cand =
+              this.edgeBestCost[pick] +
+              pairDist +
+              nxtEdge.baseCost +
+              nxtEdge.dynamicWaitCost +
+              occPenalty;
+            if (cand < this.edgeBestCost[nxt]) {
+              this.edgeBestCost[nxt] = cand;
+              this.edgePrev[nxt] = pick;
+            }
           }
         }
+      };
+
+      relaxPortalGraph();
+
+      // Automatic fallback expansion when K-nearest portals are blocked or yield a severe detour (>2.5x direct 3D distance)
+      const direct3D = Math.hypot(tx - sx, ty - sy, tz - sz);
+      const hasRemainingPortals = startCandCount > startInitialK || goalCandCount > goalInitialK;
+      if (
+        hasRemainingPortals &&
+        (bestFinalEdge === -1 || bestFinalCost > Math.max(12, direct3D * 2.5))
+      ) {
+        evalStartRange(startInitialK, startCandCount);
+        evalGoalRange(goalInitialK, goalCandCount);
+        relaxPortalGraph();
       }
 
       const chosenTerminalEdge = bestFinalEdge !== -1 ? bestFinalEdge : bestClosestEdge;

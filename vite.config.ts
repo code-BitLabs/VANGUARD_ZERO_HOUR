@@ -36,7 +36,6 @@ export default defineConfig(() => {
             if (
               id.includes('node_modules/zustand') ||
               id.includes('node_modules/zod') ||
-              id.includes('node_modules/xstate') ||
               id.includes('node_modules/idb-keyval')
             ) {
               return 'vendor-state';

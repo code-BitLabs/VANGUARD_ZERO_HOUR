@@ -4,8 +4,8 @@ import {
   MUSIC_TRACK_CATALOG,
   MusicMood,
   MusicTrackMetadata,
-  synthesizeMusicTrackBuffer,
 } from './MusicCatalog';
+import { MusicSynthWorkerClient } from './MusicSynthWorkerClient';
 
 export type MusicRepeatMode = 'all' | 'one' | 'off';
 
@@ -88,6 +88,9 @@ export class MusicPlayerController {
   private currentTimeSec = 0;
   private activeBufferTrackId: string | null = null;
   private activeBuffer: AudioBuffer | null = null;
+  private readonly bufferLruCache = new Map<string, AudioBuffer>();
+  private readonly maxCachedTracks = 2;
+  private readonly synthWorker = new MusicSynthWorkerClient();
   private activePlayback: ActiveTrackPlayback | null = null;
   private playbackEpoch = 0;
 
@@ -269,8 +272,14 @@ export class MusicPlayerController {
 
   private async loadBufferForTrack(track: MusicTrackMetadata): Promise<AudioBuffer | null> {
     if (!this.ctx) return null;
-    if (this.activeBufferTrackId === track.id && this.activeBuffer) {
-      return this.activeBuffer;
+    const cached = this.bufferLruCache.get(track.id);
+    if (cached) {
+      // Refresh LRU recency so recon <-> combat mood switches are 0ms
+      this.bufferLruCache.delete(track.id);
+      this.bufferLruCache.set(track.id, cached);
+      this.activeBufferTrackId = track.id;
+      this.activeBuffer = cached;
+      return cached;
     }
 
     this.isLoading = true;
@@ -287,9 +296,19 @@ export class MusicPlayerController {
         const raw = await res.arrayBuffer();
         buf = await this.ctx.decodeAudioData(raw);
       } else {
-        buf = synthesizeMusicTrackBuffer(this.ctx, track);
+        buf = await this.synthWorker.synthesizeTrackBuffer(this.ctx, track);
       }
-      // Bounded memory: replace previous buffer reference so GC can reclaim old track PCM
+      // Bounded 2-track LRU memory (~5.6 MB max): keeps active + prior mood track warm for instant switches
+      this.bufferLruCache.delete(track.id);
+      this.bufferLruCache.set(track.id, buf);
+      while (this.bufferLruCache.size > this.maxCachedTracks) {
+        const oldestKey = this.bufferLruCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.bufferLruCache.delete(oldestKey);
+        } else {
+          break;
+        }
+      }
       this.activeBufferTrackId = track.id;
       this.activeBuffer = buf;
       return buf;
@@ -710,6 +729,7 @@ export class MusicPlayerController {
   dispose(): void {
     this.playbackEpoch++;
     this.teardownActiveSource();
+    this.synthWorker.dispose();
     try {
       this.duckGainNode?.disconnect();
     } catch {
@@ -720,6 +740,7 @@ export class MusicPlayerController {
     this.ctx = null;
     this.activeBuffer = null;
     this.activeBufferTrackId = null;
+    this.bufferLruCache.clear();
     this.listeners.clear();
   }
 }

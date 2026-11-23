@@ -11,6 +11,7 @@ import { ElevatedNavSurfaceDescriptor } from '@/src/workers/WorkerBridge';
 import { NavPortalInput } from '@/src/workers/navigationCore';
 import { createDestructibleCollider, DestructionSystem } from './DestructionSystem';
 import { globalStructureReconciliation } from './StructureReconciliationRegistry';
+import { mergeStaticChunkGeometry } from './StaticChunkGeometryMerger';
 import { VerticalWorldContext } from './VerticalStructuresBuilder';
 import { getMissionVisualProfile } from './VisualBible';
 import { WorldChunkManager } from './WorldChunkManager';
@@ -389,7 +390,6 @@ export function createWorldShell(
         if (!primaryBldgMesh && !(child instanceof THREE.InstancedMesh)) {
           primaryBldgMesh = child;
         }
-        collisionWorld.physicsWorld.registerBvhMesh(child);
       }
     });
     if (primaryBldgMesh) {
@@ -599,6 +599,7 @@ export function createWorldShell(
         : kind === 'vehicle_service_bay'
           ? buildVehicleServiceBay(assetManager, resourceManager, scope)
           : buildSupplyCrate(assetManager, resourceManager, scope);
+    mesh.userData.noMerge = true;
     mesh.position.set(kx, ky, kz);
     chunkManager.registerObject(mesh, kx, kz, scene);
     if (kind !== 'vehicle_service_bay') {
@@ -947,6 +948,9 @@ export function populateCommonWorldAndFinalize(shell: WorldShellState): BuiltWor
       if (extractionBeacon) scene.remove(extractionBeacon);
     });
   }
+
+  // Merge static non-destructible, non-animated geometry per chunk/material and register chunk-level BVHs
+  mergeStaticChunkGeometry(chunkManager, resourceManager, scope, collisionWorld, colliderMeshes);
 
   globalStructureReconciliation.verifyMissionReconciliation(
     missionId,

@@ -4,9 +4,9 @@ export interface GameLoopCallbacks {
   scheduleAI: (dt: number) => void;
   updateAnimationAndVfx: (dt: number, alpha: number) => void;
   updateAudio: (dt: number) => void;
-  render: (dt: number) => void;
+  render: (dt: number, alpha: number) => void;
   publishUiSnapshot: () => void;
-  onFrameMeasured: (frameMs: number) => void;
+  onFrameMeasured: (frameMs: number, rawDt: number) => void;
 }
 
 export class GameLoop {
@@ -19,6 +19,8 @@ export class GameLoop {
   private rafId = 0;
   private paceTimeoutId = 0;
   private softwareGlPacing = false;
+  private softwareGlCtx: WebGL2RenderingContext | null = null;
+  private pendingSync: WebGLSync | null = null;
   private lastTimeMs = 0;
   private lastRenderTickMs = 0;
   private fpsCap: 0 | 30 | 60 | 120 = 0;
@@ -34,6 +36,38 @@ export class GameLoop {
 
   setSoftwareGlPacing(enabled: boolean): void {
     this.softwareGlPacing = enabled;
+    if (!enabled) {
+      this.clearPendingSync();
+    }
+  }
+
+  /**
+   * Optional WebGL2 context hook for non-blocking fenceSync GPU-completion pacing on SwiftShader/llvmpipe.
+   */
+  setSoftwareGlSyncContext(gl: WebGLRenderingContext | WebGL2RenderingContext | null): void {
+    this.clearPendingSync();
+    if (
+      gl &&
+      'fenceSync' in gl &&
+      typeof gl.fenceSync === 'function' &&
+      'clientWaitSync' in gl &&
+      typeof gl.clientWaitSync === 'function'
+    ) {
+      this.softwareGlCtx = gl as WebGL2RenderingContext;
+    } else {
+      this.softwareGlCtx = null;
+    }
+  }
+
+  private clearPendingSync(): void {
+    if (this.pendingSync && this.softwareGlCtx) {
+      try {
+        this.softwareGlCtx.deleteSync(this.pendingSync);
+      } catch {
+        // ignore lost context
+      }
+    }
+    this.pendingSync = null;
   }
 
   start(): void {
@@ -47,6 +81,7 @@ export class GameLoop {
 
   stop(): void {
     this.running = false;
+    this.clearPendingSync();
     if (this.rafId) {
       cancelAnimationFrame(this.rafId);
       this.rafId = 0;
@@ -67,16 +102,92 @@ export class GameLoop {
 
   private scheduleNext(): void {
     if (!this.running) return;
-    if (this.softwareGlPacing) {
-      this.paceTimeoutId = window.setTimeout(() => {
-        this.paceTimeoutId = 0;
-        if (this.running) {
-          this.rafId = requestAnimationFrame(this.tick);
-        }
-      }, 28);
-    } else {
+    if (!this.softwareGlPacing) {
       this.rafId = requestAnimationFrame(this.tick);
+      return;
     }
+
+    const gl = this.softwareGlCtx;
+    if (gl && !gl.isContextLost()) {
+      this.clearPendingSync();
+      const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (sync) {
+        gl.flush();
+        this.pendingSync = sync;
+        const waitStart = performance.now();
+        const pollSync = (): void => {
+          if (!this.running || this.pendingSync !== sync) return;
+          const status = gl.clientWaitSync(sync, 0, 0);
+          const timedOut = performance.now() - waitStart >= 80;
+          if (
+            status === gl.ALREADY_SIGNALED ||
+            status === gl.CONDITION_SATISFIED ||
+            status === gl.WAIT_FAILED ||
+            timedOut
+          ) {
+            this.clearPendingSync();
+            this.rafId = requestAnimationFrame(this.tick);
+            return;
+          }
+          this.paceTimeoutId = window.setTimeout(() => {
+            this.paceTimeoutId = 0;
+            pollSync();
+          }, 8);
+        };
+        this.paceTimeoutId = window.setTimeout(() => {
+          this.paceTimeoutId = 0;
+          pollSync();
+        }, 8);
+        return;
+      }
+    }
+
+    this.paceTimeoutId = window.setTimeout(() => {
+      this.paceTimeoutId = 0;
+      if (this.running) {
+        this.rafId = requestAnimationFrame(this.tick);
+      }
+    }, 28);
+  }
+
+  /**
+   * Executes one deterministic frame tick. Exposed for automated 30/60/120/144Hz parity tests.
+   */
+  public stepFrameForTest(rawDtSec: number, simulatedWorkMs = 0): void {
+    const rawDt = Math.min(Math.max(rawDtSec, 0), this.maxRawDt);
+    let alpha = 1;
+    if (!this.paused) {
+      this.accumulator += rawDt;
+      let substeps = 0;
+      if (this.accumulator >= this.fixedDt) {
+        // Sample discrete edge-triggered actions ONLY on frames that consume them via fixedStep
+        // (prevents double-triggering on 120/144Hz substeps===0 frames and preserves presses until fixedStep).
+        this.callbacks.sampleInput();
+      }
+      while (this.accumulator >= this.fixedDt && substeps < this.maxSubsteps) {
+        this.callbacks.fixedStep(this.fixedDt);
+        this.accumulator -= this.fixedDt;
+        substeps++;
+      }
+      if (substeps === this.maxSubsteps) {
+        this.accumulator = 0;
+      }
+
+      this.callbacks.scheduleAI(rawDt);
+
+      alpha = this.accumulator / this.fixedDt;
+      this.callbacks.updateAnimationAndVfx(rawDt, alpha);
+      this.callbacks.updateAudio(rawDt);
+
+      this.uiAccumulator += rawDt;
+      if (this.uiAccumulator >= this.uiInterval) {
+        this.uiAccumulator = 0;
+        this.callbacks.publishUiSnapshot();
+      }
+    }
+
+    this.callbacks.render(rawDt, alpha);
+    this.callbacks.onFrameMeasured(simulatedWorkMs, rawDt);
   }
 
   private tick = (nowMs: number): void => {
@@ -99,11 +210,13 @@ export class GameLoop {
     this.lastTimeMs = nowMs;
 
     try {
+      let alpha = 1;
       if (!this.paused) {
-        this.callbacks.sampleInput();
-
         this.accumulator += rawDt;
         let substeps = 0;
+        if (this.accumulator >= this.fixedDt) {
+          this.callbacks.sampleInput();
+        }
         while (this.accumulator >= this.fixedDt && substeps < this.maxSubsteps) {
           this.callbacks.fixedStep(this.fixedDt);
           this.accumulator -= this.fixedDt;
@@ -115,7 +228,7 @@ export class GameLoop {
 
         this.callbacks.scheduleAI(rawDt);
 
-        const alpha = this.accumulator / this.fixedDt;
+        alpha = this.accumulator / this.fixedDt;
         this.callbacks.updateAnimationAndVfx(rawDt, alpha);
         this.callbacks.updateAudio(rawDt);
 
@@ -126,10 +239,10 @@ export class GameLoop {
         }
       }
 
-      this.callbacks.render(rawDt);
+      this.callbacks.render(rawDt, alpha);
 
       const elapsedMs = performance.now() - frameStart;
-      this.callbacks.onFrameMeasured(elapsedMs);
+      this.callbacks.onFrameMeasured(elapsedMs, rawDt);
     } finally {
       if (this.softwareGlPacing && this.running) {
         this.scheduleNext();

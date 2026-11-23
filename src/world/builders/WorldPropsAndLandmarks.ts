@@ -373,9 +373,14 @@ export function buildMissionEnvironmentalStorytelling(
     });
   }
 
-  void chunkManager;
-  scene.add(grp);
-  res.register('object3d', scope, () => scene.remove(grp));
+  // Route each static landmark mesh into WorldChunkManager so landmarks participate in
+  // frustum culling and static chunk geometry merging (expanding chunk bounds dynamically).
+  const children = grp.children.slice();
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    child.updateMatrix();
+    chunkManager.registerObject(child, child.position.x, child.position.z, scene);
+  }
 }
 
 export function buildEnterableBuildingMesh(
@@ -649,6 +654,8 @@ export function buildEnterableBuildingMesh(
 
 export function buildMovingGantry(assets: AssetManager, res: ResourceManager, scope: ResourceScope): THREE.Group {
   const g = new THREE.Group();
+  g.userData.noMerge = true;
+  g.userData.isAnimated = true;
   const yellow = assets.getSharedMaterial('gantry_amber', {
     color: 0xd97706,
     roughness: 0.42,
@@ -807,6 +814,8 @@ export function buildFuelTank(assets: AssetManager, res: ResourceManager, scope:
 
 export function buildRadarRelay(assets: AssetManager, res: ResourceManager, scope: ResourceScope): THREE.Group {
   const g = new THREE.Group();
+  g.userData.noMerge = true;
+  g.userData.isAnimated = true;
   const baseMat = assets.getSharedMaterial('radar_base', {
     pattern: 'metal_plate',
     color: 0x475569,
@@ -872,6 +881,8 @@ export function buildSearchlightTower(
   scope: ResourceScope
 ): THREE.Group {
   const g = new THREE.Group();
+  g.userData.noMerge = true;
+  g.userData.isAnimated = true;
   const steelMat = assets.getSharedMaterial('searchlight_steel', {
     pattern: 'metal_plate',
     color: 0x334155,

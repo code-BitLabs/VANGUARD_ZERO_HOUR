@@ -1,5 +1,3 @@
-import { assign, setup } from 'xstate';
-
 export type LifecyclePhase =
   | 'boot'
   | 'menu'
@@ -31,157 +29,196 @@ export type LifecycleEvent =
   | { type: 'UNLOADED' }
   | { type: 'RECOVER' };
 
-export const engineLifecycleMachine = setup({
-  types: {
-    context: {} as LifecycleContext,
-    events: {} as LifecycleEvent,
-  },
-}).createMachine({
-  id: 'vanguardLifecycle',
-  initial: 'boot',
+export interface LifecycleSnapshot {
+  readonly value: LifecyclePhase;
+  readonly context: Readonly<LifecycleContext>;
+}
+
+export interface LifecycleMachineDefinition {
+  readonly id: string;
+  readonly initial: LifecyclePhase;
+  readonly initialContext: Readonly<LifecycleContext>;
+  readonly transition: (
+    phase: LifecyclePhase,
+    context: Readonly<LifecycleContext>,
+    event: LifecycleEvent
+  ) => LifecycleSnapshot | null;
+}
+
+export interface LifecycleSubscription {
+  unsubscribe(): void;
+}
+
+export interface LifecycleActor {
+  start(): this;
+  stop(): this;
+  send(event: LifecycleEvent): void;
+  getSnapshot(): LifecycleSnapshot;
+  subscribe(listener: (snapshot: LifecycleSnapshot) => void): LifecycleSubscription;
+}
+
+type TransitionTable = {
+  readonly [P in LifecyclePhase]: {
+    readonly [E in LifecycleEvent['type']]?: (
+      ctx: Readonly<LifecycleContext>,
+      event: Extract<LifecycleEvent, { type: E }>
+    ) => LifecycleSnapshot;
+  };
+};
+
+const selectMission = (
+  _ctx: Readonly<LifecycleContext>,
+  event: Extract<LifecycleEvent, { type: 'SELECT_MISSION' }>
+): LifecycleSnapshot => ({
+  value: 'preloading',
   context: {
-    missionId: null,
+    missionId: event.missionId,
     errorMessage: null,
-  },
-  states: {
-    boot: {
-      on: {
-        READY: 'menu',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
-    menu: {
-      on: {
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-        UNLOAD: 'unloading',
-      },
-    },
-    preloading: {
-      on: {
-        ASSETS_LOADED: 'initializingWorld',
-        CANCEL_LOAD: 'unloading',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-        LOAD_FAILED: {
-          target: 'error',
-          actions: assign({
-            errorMessage: ({ event }) => event.message,
-          }),
-        },
-      },
-    },
-    initializingWorld: {
-      on: {
-        WORLD_READY: 'playing',
-        CANCEL_LOAD: 'unloading',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-        LOAD_FAILED: {
-          target: 'error',
-          actions: assign({
-            errorMessage: ({ event }) => event.message,
-          }),
-        },
-      },
-    },
-    playing: {
-      on: {
-        PAUSE: 'paused',
-        RESTART_MISSION: 'playing',
-        MISSION_ENDED: 'debrief',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
-    paused: {
-      on: {
-        RESUME: 'playing',
-        RESTART_MISSION: 'playing',
-        MISSION_ENDED: 'debrief',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
-    debrief: {
-      on: {
-        RESTART_MISSION: 'playing',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
-    unloading: {
-      on: {
-        UNLOADED: {
-          target: 'menu',
-          actions: assign({
-            missionId: null,
-            errorMessage: null,
-          }),
-        },
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
-    error: {
-      on: {
-        RECOVER: 'unloading',
-        UNLOAD: 'unloading',
-        SELECT_MISSION: {
-          target: 'preloading',
-          actions: assign({
-            missionId: ({ event }) => event.missionId,
-            errorMessage: null,
-          }),
-        },
-      },
-    },
   },
 });
 
+const loadFailed = (
+  ctx: Readonly<LifecycleContext>,
+  event: Extract<LifecycleEvent, { type: 'LOAD_FAILED' }>
+): LifecycleSnapshot => ({
+  value: 'error',
+  context: {
+    missionId: ctx.missionId,
+    errorMessage: event.message,
+  },
+});
+
+const keepContext =
+  (target: LifecyclePhase) =>
+  (ctx: Readonly<LifecycleContext>): LifecycleSnapshot => ({
+    value: target,
+    context: ctx,
+  });
+
+const TRANSITIONS: TransitionTable = {
+  boot: {
+    READY: keepContext('menu'),
+    SELECT_MISSION: selectMission,
+  },
+  menu: {
+    SELECT_MISSION: selectMission,
+    UNLOAD: keepContext('unloading'),
+  },
+  preloading: {
+    ASSETS_LOADED: keepContext('initializingWorld'),
+    CANCEL_LOAD: keepContext('unloading'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+    LOAD_FAILED: loadFailed,
+  },
+  initializingWorld: {
+    WORLD_READY: keepContext('playing'),
+    CANCEL_LOAD: keepContext('unloading'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+    LOAD_FAILED: loadFailed,
+  },
+  playing: {
+    PAUSE: keepContext('paused'),
+    RESTART_MISSION: keepContext('playing'),
+    MISSION_ENDED: keepContext('debrief'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+  },
+  paused: {
+    RESUME: keepContext('playing'),
+    RESTART_MISSION: keepContext('playing'),
+    MISSION_ENDED: keepContext('debrief'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+  },
+  debrief: {
+    RESTART_MISSION: keepContext('playing'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+  },
+  unloading: {
+    UNLOADED: () => ({
+      value: 'menu',
+      context: {
+        missionId: null,
+        errorMessage: null,
+      },
+    }),
+    SELECT_MISSION: selectMission,
+  },
+  error: {
+    RECOVER: keepContext('unloading'),
+    UNLOAD: keepContext('unloading'),
+    SELECT_MISSION: selectMission,
+  },
+};
+
+export const engineLifecycleMachine: LifecycleMachineDefinition = {
+  id: 'vanguardLifecycle',
+  initial: 'boot',
+  initialContext: {
+    missionId: null,
+    errorMessage: null,
+  },
+  transition(phase, context, event) {
+    const stateHandlers = TRANSITIONS[phase];
+    const handler = stateHandlers[event.type] as
+      | ((ctx: Readonly<LifecycleContext>, ev: LifecycleEvent) => LifecycleSnapshot)
+      | undefined;
+    if (!handler) return null;
+    return handler(context, event);
+  },
+};
+
+/**
+ * Lightweight zero-dependency finite-state actor replacing xstate v5 for EngineLifecycle.
+ */
+export function createLifecycleActor(
+  machine: LifecycleMachineDefinition = engineLifecycleMachine
+): LifecycleActor {
+  let started = false;
+  let stopped = false;
+  let snapshot: LifecycleSnapshot = {
+    value: machine.initial,
+    context: { ...machine.initialContext },
+  };
+  const listeners = new Set<(snap: LifecycleSnapshot) => void>();
+
+  const actor: LifecycleActor = {
+    start() {
+      started = true;
+      stopped = false;
+      return actor;
+    },
+    stop() {
+      stopped = true;
+      listeners.clear();
+      return actor;
+    },
+    send(event: LifecycleEvent) {
+      if (!started || stopped) return;
+      const next = machine.transition(snapshot.value, snapshot.context, event);
+      if (!next) return;
+      snapshot = next;
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    getSnapshot() {
+      return snapshot;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return {
+        unsubscribe() {
+          listeners.delete(listener);
+        },
+      };
+    },
+  };
+
+  return actor;
+}
+
+export const createActor = createLifecycleActor;

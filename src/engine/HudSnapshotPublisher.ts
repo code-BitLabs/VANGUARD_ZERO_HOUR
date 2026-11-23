@@ -96,6 +96,9 @@ function objectivesMatch(prev: readonly ObjectiveStatus[], next: readonly Object
  */
 export class HudSnapshotPublisher {
   private readonly _blipsScratch: MiniMapBlip[] = [];
+  private readonly _blipsPoolA: MiniMapBlip[] = [];
+  private readonly _blipsPoolB: MiniMapBlip[] = [];
+  private _usePoolA = true;
   private _cachedBlips: MiniMapBlip[] = [];
   private _cachedObjectives: ObjectiveStatus[] = [];
   private readonly _projScratch = new THREE.Vector3();
@@ -106,6 +109,9 @@ export class HudSnapshotPublisher {
 
   reset(): void {
     this._blipsScratch.length = 0;
+    this._blipsPoolA.length = 0;
+    this._blipsPoolB.length = 0;
+    this._usePoolA = true;
     this._cachedBlips = [];
     this._cachedObjectives = [];
     this.hudDecayAccum = 0;
@@ -214,8 +220,8 @@ export class HudSnapshotPublisher {
 
       const onScreen =
         inFront && nx >= 0.06 && nx <= 0.94 && ny >= 0.08 && ny <= 0.88;
-      o.screenX = Number(THREE.MathUtils.clamp(nx, 0.05, 0.95).toFixed(3));
-      o.screenY = Number(THREE.MathUtils.clamp(ny, 0.08, 0.88).toFixed(3));
+      o.screenX = Math.round(THREE.MathUtils.clamp(nx, 0.05, 0.95) * 1000) / 1000;
+      o.screenY = Math.round(THREE.MathUtils.clamp(ny, 0.08, 0.88) * 1000) / 1000;
       o.onScreen = onScreen;
     }
   }
@@ -291,7 +297,40 @@ export class HudSnapshotPublisher {
     ctx.vehicles.fillMiniMapBlips(this._blipsScratch);
     missionDirector.fillObjectiveBlips(this._blipsScratch);
     if (!blipsMatch(this._cachedBlips, this._blipsScratch)) {
-      this._cachedBlips = this._blipsScratch.map((b) => ({ ...b }));
+      const targetPool = this._usePoolA ? this._blipsPoolA : this._blipsPoolB;
+      this._usePoolA = !this._usePoolA;
+      const count = this._blipsScratch.length;
+      for (let i = 0; i < count; i++) {
+        const src = this._blipsScratch[i];
+        const dst = targetPool[i];
+        if (dst) {
+          dst.id = src.id;
+          dst.kind = src.kind;
+          dst.x = src.x;
+          dst.y = src.y;
+          dst.z = src.z;
+          dst.elevationDeltaM = src.elevationDeltaM;
+          dst.elevationCode = src.elevationCode;
+          dst.detectionSource = src.detectionSource;
+          dst.confidence = src.confidence;
+          dst.ageSec = src.ageSec;
+        } else {
+          targetPool[i] = {
+            id: src.id,
+            kind: src.kind,
+            x: src.x,
+            y: src.y,
+            z: src.z,
+            elevationDeltaM: src.elevationDeltaM,
+            elevationCode: src.elevationCode,
+            detectionSource: src.detectionSource,
+            confidence: src.confidence,
+            ageSec: src.ageSec,
+          };
+        }
+      }
+      targetPool.length = count;
+      this._cachedBlips = targetPool;
     }
     const blips = this._cachedBlips;
 
@@ -376,7 +415,7 @@ export class HudSnapshotPublisher {
       maxHealth: ctx.player.maxHealth,
       armor: Math.round(ctx.player.armor),
       maxArmor: ctx.player.maxArmor,
-      spawnProtectionSec: Number(ctx.player.getSpawnProtectionRemainingSec().toFixed(2)),
+      spawnProtectionSec: Math.round(ctx.player.getSpawnProtectionRemainingSec() * 100) / 100,
       isRegenerating: ctx.player.isRegenerating,
       incomingThreatWarning: incomingThreat,
       weaponId: wState.config.id,

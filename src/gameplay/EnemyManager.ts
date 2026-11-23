@@ -21,7 +21,8 @@ import {
   PortalKind,
 } from '@/src/navigation/AgentTraversalProfile';
 import { WorkerBridge } from '@/src/workers/WorkerBridge';
-import { buildSoldierRig } from '@/src/world/rigs/EnemyRigBuilder';
+import { buildSoldierRig, SoldierRigBuild } from '@/src/world/rigs/EnemyRigBuilder';
+import { EnemyRigPool } from '@/src/world/rigs/EnemyRigPool';
 import {
   stepEnemyDeathAnimation,
   stepEnemyLocomotionAnimation,
@@ -93,6 +94,10 @@ export interface EnemyUnit {
   grenadeCooldown: number;
   hitReactTimer: number;
   deathTimer: number;
+  deathFallSign: 1 | -1;
+  rigRef?: SoldierRigBuild;
+  rigAccentHex?: string;
+  rigRecycled?: boolean;
   walkPhase: number;
   aiAccum: number;
   isMoving: boolean;
@@ -181,6 +186,8 @@ export class EnemyManager {
   private readonly squadTactics = new SquadTacticsCoordinator();
   private difficulty: Difficulty = 'normal';
   private difficultyMult = 1.0;
+  private readonly rigPool = new EnemyRigPool();
+  private readonly activeCorpseQueue: EnemyUnit[] = [];
 
   private readonly _muzzlePos = new THREE.Vector3();
   private readonly _aimTarget = new THREE.Vector3();
@@ -513,11 +520,16 @@ export class EnemyManager {
         traversalProfile.maxSlopeDeg
       );
 
-      const rig = buildSoldierRig(cfg.accentColor, archetype, scope, this.resourceManager);
+      const pooled = this.rigPool.acquire(archetype, cfg.accentColor, scope, () =>
+        buildSoldierRig(cfg.accentColor, archetype, scope, this.resourceManager)
+      );
+      const rig = pooled.rig;
       rig.root.position.copy(spawnPos);
-      this.scene.add(rig.root);
-      this.onObjectAddedToScene?.(rig.root);
-      this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
+      if (!pooled.isRecycled) {
+        this.scene.add(rig.root);
+        this.onObjectAddedToScene?.(rig.root);
+        this.resourceManager.register('object3d', scope, () => this.scene.remove(rig.root));
+      }
 
       const hp = Math.round(cfg.maxHealth * (0.85 + 0.15 * this.difficultyMult));
       const armor = Math.round(cfg.maxArmor * this.difficultyMult);
@@ -581,6 +593,10 @@ export class EnemyManager {
         grenadeCooldown: 7 + (i % 4) * 2.5,
         hitReactTimer: 0,
         deathTimer: 0,
+        deathFallSign: this.seq % 2 === 0 ? 1 : -1,
+        rigRef: rig,
+        rigAccentHex: cfg.accentColor,
+        rigRecycled: false,
         walkPhase: (i * 0.8) % (Math.PI * 2),
         aiAccum: (i % 6) * 0.02,
         isMoving: false,
@@ -786,12 +802,24 @@ export class EnemyManager {
       unit.alive = false;
       unit.state = 'DEAD';
       unit.deathTimer = 0;
+      this.enqueueCorpseForRingBuffer(unit);
       this.cargoLiftManager?.cancelRequestsForEntity(unit.id);
       this.telemetry?.recordStateTransition(unit.id, unit.squadId, 'ground', prevBeforeDeath, 'DEAD');
       this.coordinator?.notifyUnitDisabled(unit.id, unit.squadId, 'ground', 'death');
       return true;
     }
     return false;
+  }
+
+  private enqueueCorpseForRingBuffer(unit: EnemyUnit): void {
+    this.activeCorpseQueue.push(unit);
+    while (this.activeCorpseQueue.length > EnemyRigPool.MAX_ACTIVE_CORPSES) {
+      const oldest = this.activeCorpseQueue.shift();
+      if (oldest && !oldest.rigRecycled && oldest.rigRef) {
+        oldest.rigRecycled = true;
+        this.rigPool.release(oldest.archetype, oldest.rigAccentHex ?? '', oldest.rigRef);
+      }
+    }
   }
 
   applyRadialExplosion(
@@ -945,6 +973,7 @@ export class EnemyManager {
     for (let i = 0; i < this.enemies.length; i++) {
       const u = this.enemies[i];
       if (!u.alive) {
+        if (u.rigRecycled) continue;
         u.deathTimer += dt;
         // Let airborne dying units finish settling cleanly onto ground/stairs instead of freezing mid-air
         if (!u.grounded && u.deathTimer < 1.2) {
@@ -962,9 +991,19 @@ export class EnemyManager {
             this.separationGrid
           );
         }
-        stepEnemyDeathAnimation(u);
+        // Skip per-frame bone writes once corpse collapse has settled on the ground
+        if (u.deathTimer <= 0.65 || !u.grounded) {
+          stepEnemyDeathAnimation(u);
+        }
         if (u.deathTimer > 6) {
-          u.meshRoot.visible = false;
+          u.rigRecycled = true;
+          const idx = this.activeCorpseQueue.indexOf(u);
+          if (idx !== -1) this.activeCorpseQueue.splice(idx, 1);
+          if (u.rigRef) {
+            this.rigPool.release(u.archetype, u.rigAccentHex ?? '', u.rigRef);
+          } else {
+            u.meshRoot.visible = false;
+          }
         }
         continue;
       }
@@ -2209,6 +2248,8 @@ export class EnemyManager {
     for (let i = 0; i < this.enemies.length; i++) {
       this.cargoLiftManager?.cancelRequestsForEntity(this.enemies[i].id);
     }
+    this.activeCorpseQueue.length = 0;
+    this.rigPool.clear(this.scene);
     this.enemies = [];
     this.enemyById.clear();
     this.livingSquadmatesBySquad.clear();

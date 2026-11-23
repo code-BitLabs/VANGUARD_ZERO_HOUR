@@ -11,12 +11,17 @@ import { isEnvDevModeAllowed } from '@/src/config/devMode';
 import { progressionStore, useProgressionStore } from '@/src/stores/progressionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
-import { MissionIntroOverlay } from '@/src/ui/components/MissionIntroOverlay';
 import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
-import { GameHUD } from '@/src/ui/hud/GameHUD';
 import { ErrorBoundary } from '@/src/ui/primitives/ErrorBoundary';
 import { ToastAndRecoveryLayer } from '@/src/ui/screens/ToastAndRecoveryLayer';
 import { TitleScreen } from '@/src/ui/screens/TitleScreen';
+
+const GameHUD = React.lazy(() =>
+  import('@/src/ui/hud/GameHUD').then((m) => ({ default: m.GameHUD }))
+);
+const MissionIntroOverlay = React.lazy(() =>
+  import('@/src/ui/components/MissionIntroOverlay').then((m) => ({ default: m.MissionIntroOverlay }))
+);
 
 const LoadingOverlay = React.lazy(() =>
   import('@/src/ui/screens/Overlays').then((m) => ({ default: m.LoadingOverlay }))
@@ -96,6 +101,7 @@ export default function App() {
   }, [viewport.shouldBlockPortrait, portraitGateDismissed]);
 
   const enginePromiseRef = useRef<Promise<GameEngine | null> | null>(null);
+  const ensureEngineRef = useRef<(() => Promise<GameEngine | null>) | null>(null);
 
   useEffect(() => {
     const container = canvasContainerRef.current;
@@ -103,6 +109,8 @@ export default function App() {
 
     let cancelled = false;
     let mountedEngine: GameEngine | null = null;
+    let idleTimerId: number | null = null;
+    let idleCallbackId: number | null = null;
     const onResize = () => {
       mountedEngine?.resize();
     };
@@ -118,34 +126,73 @@ export default function App() {
         );
     }
 
-    const loadEngine = async (): Promise<GameEngine | null> => {
-      try {
-        const { GameEngine: EngineCtor } = await import('@/src/engine/GameEngine');
-        if (cancelled || !canvasContainerRef.current) return null;
-        const engine = new EngineCtor(canvasContainerRef.current);
-        mountedEngine = engine;
-        engineRef.current = engine;
-        setInputManager(engine.getInputManager());
-        return engine;
-      } catch (err) {
-        if (!cancelled) {
-          setEngineError(err instanceof Error ? err.message : 'WebGL initialization failed.');
+    const ensureEngine = (): Promise<GameEngine | null> => {
+      if (engineRef.current) return Promise.resolve(engineRef.current);
+      if (enginePromiseRef.current) return enginePromiseRef.current;
+
+      const promise = (async (): Promise<GameEngine | null> => {
+        try {
+          const { GameEngine: EngineCtor } = await import('@/src/engine/GameEngine');
+          if (cancelled || !canvasContainerRef.current) return null;
+          const engine = new EngineCtor(canvasContainerRef.current);
+          mountedEngine = engine;
+          engineRef.current = engine;
+          setInputManager(engine.getInputManager());
+          return engine;
+        } catch (err) {
+          if (!cancelled) {
+            setEngineError(err instanceof Error ? err.message : 'WebGL initialization failed.');
+          }
+          return null;
         }
-        return null;
-      }
+      })();
+      enginePromiseRef.current = promise;
+      return promise;
     };
 
-    enginePromiseRef.current = loadEngine();
+    ensureEngineRef.current = ensureEngine;
+
+    // Defer heavy 3D engine initialization until after TitleScreen first paint
+    const winWithIdle = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof winWithIdle.requestIdleCallback === 'function') {
+      idleCallbackId = winWithIdle.requestIdleCallback(
+        () => {
+          if (!cancelled) void ensureEngine();
+        },
+        { timeout: 600 }
+      );
+    } else {
+      idleTimerId = window.setTimeout(() => {
+        if (!cancelled) void ensureEngine();
+      }, 150);
+    }
 
     return () => {
       cancelled = true;
+      if (idleCallbackId !== null && typeof winWithIdle.cancelIdleCallback === 'function') {
+        winWithIdle.cancelIdleCallback(idleCallbackId);
+      }
+      if (idleTimerId !== null) {
+        window.clearTimeout(idleTimerId);
+      }
       window.removeEventListener('resize', onResize);
       setInputManager(null);
       mountedEngine?.dispose();
       engineRef.current = null;
       enginePromiseRef.current = null;
+      ensureEngineRef.current = null;
     };
   }, []);
+
+  // Ensure engine is initialized immediately when navigating beyond TitleScreen (e.g. Campaign, Settings, Armory)
+  useEffect(() => {
+    if (screen !== 'title' && !engineRef.current && ensureEngineRef.current) {
+      void ensureEngineRef.current();
+    }
+  }, [screen]);
 
   useEffect(() => {
     if (devModeActive && diagnosticsOpen) {
@@ -183,10 +230,15 @@ export default function App() {
       setDeploymentKey((k) => k + 1);
       if (engineRef.current) {
         void engineRef.current.startMission(missionId, diff, weaponId, resolvedMode);
-      } else if (enginePromiseRef.current) {
-        void enginePromiseRef.current.then((eng) => {
-          if (eng) void eng.startMission(missionId, diff, weaponId, resolvedMode);
-        });
+      } else {
+        const loader = ensureEngineRef.current
+          ? ensureEngineRef.current()
+          : enginePromiseRef.current;
+        if (loader) {
+          void loader.then((eng) => {
+            if (eng) void eng.startMission(missionId, diff, weaponId, resolvedMode);
+          });
+        }
       }
     },
     []
@@ -327,7 +379,7 @@ export default function App() {
           </Suspense>
 
           {screen === 'playing' && (
-            <>
+            <Suspense fallback={null}>
               <GameHUD
                 onRequestPointerLock={handleRequestPointerLock}
                 onPause={handlePause}
@@ -348,7 +400,7 @@ export default function App() {
                 activeModifiers={activeModifiers}
                 deploymentKey={deploymentKey}
               />
-            </>
+            </Suspense>
           )}
 
           <Suspense fallback={null}>

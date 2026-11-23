@@ -40,6 +40,7 @@ export interface PlayerVisibilitySamplePoints {
 
 export class PlayerController {
   public readonly position = new THREE.Vector3(0, 0, 58);
+  public readonly prevPosition = new THREE.Vector3(0, 0, 58);
   public readonly velocity = new THREE.Vector3();
   public yaw = 0;
   public pitch = 0;
@@ -138,6 +139,7 @@ export class PlayerController {
   private readonly _fwd = new THREE.Vector3();
   private readonly _right = new THREE.Vector3();
   private readonly _wish = new THREE.Vector3();
+  private readonly _interpPos = new THREE.Vector3();
   private readonly _camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   private readonly _moveResultScratch: CharacterMoveResult = {
     grounded: false,
@@ -249,6 +251,7 @@ export class PlayerController {
         )
       : Math.max(0, rawFeetY);
     this.position.set(x, groundedY, z);
+    this.prevPosition.copy(this.position);
     this.velocity.set(0, 0, 0);
     this.yaw = yaw;
     this.pitch = 0;
@@ -595,9 +598,13 @@ export class PlayerController {
     };
   }
 
-  applyLookInput(input: InputManager, isAds: boolean): void {
+  snapInterpolation(): void {
+    this.prevPosition.copy(this.position);
+  }
+
+  applyLookInput(input: InputManager, isAds: boolean, dt = 1 / 60): void {
     if (!this.alive) return;
-    const { yawDelta, pitchDelta } = input.consumeLookDelta(isAds, this.touchAimFrictionScale);
+    const { yawDelta, pitchDelta } = input.consumeLookDelta(isAds, this.touchAimFrictionScale, dt);
     if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return;
     this.yaw -= yawDelta;
     this.pitch = Math.max(-1.42, Math.min(1.42, this.pitch - pitchDelta));
@@ -985,6 +992,7 @@ export class PlayerController {
     inVehicle: boolean
   ): void {
     if (!this.alive) return;
+    this.prevPosition.copy(this.position);
 
     this.timeSinceDamage += dt;
     this.spawnProtectionRemainingSec = Math.max(0, this.spawnProtectionRemainingSec - dt);
@@ -1006,7 +1014,7 @@ export class PlayerController {
     }
 
     // Look delta
-    this.applyLookInput(input, isAds);
+    this.applyLookInput(input, isAds, dt);
 
     // Smooth recoil recovery (crouching settles faster) & second-order landing spring
     const recoilRecoveryRate = this.isCrouching ? 11.2 : 9.0;
@@ -1311,7 +1319,16 @@ export class PlayerController {
     }
   }
 
-  syncCamera(camera: THREE.PerspectiveCamera, baseFov: number, adsFov: number, isAds: boolean, dt: number): void {
+  syncCamera(
+    camera: THREE.PerspectiveCamera,
+    baseFov: number,
+    adsFov: number,
+    isAds: boolean,
+    dt: number,
+    alpha = 1
+  ): void {
+    const safeDt = Math.max(0.001, Math.min(dt, 0.05));
+    const clampedAlpha = Math.max(0, Math.min(1, alpha));
     const targetEye = this.isSliding
       ? this.slideEyeHeight
       : THREE.MathUtils.lerp(this.standingEyeHeight, this.crouchEyeHeight, this.crouchBlend);
@@ -1328,15 +1345,23 @@ export class PlayerController {
       sx = 0;
     }
 
-    this.eyeStepOffset *= Math.exp(-18 * Math.max(0.001, Math.min(dt, 0.05)));
+    this.eyeStepOffset *= Math.exp(-18 * safeDt);
     if (Math.abs(this.eyeStepOffset) < 0.0008) {
       this.eyeStepOffset = 0;
     }
 
+    // Smoothly interpolate translation between fixed simulation ticks for butter-smooth 120/144Hz motion;
+    // snap automatically on teleports / vehicle dismounts (>3m delta).
+    if (clampedAlpha >= 0.999 || this.prevPosition.distanceToSquared(this.position) > 9.0) {
+      this._interpPos.copy(this.position);
+    } else {
+      this._interpPos.lerpVectors(this.prevPosition, this.position, clampedAlpha);
+    }
+
     camera.position.set(
-      this.position.x + sx,
-      this.position.y + targetEye + bobOffset + sy + this.landCompressionOffset + this.eyeStepOffset,
-      this.position.z
+      this._interpPos.x + sx,
+      this._interpPos.y + targetEye + bobOffset + sy + this.landCompressionOffset + this.eyeStepOffset,
+      this._interpPos.z
     );
 
     const rollOffset = (this.isSliding ? -0.05 : 0) + this.vaultRollOffset;
@@ -1355,7 +1380,8 @@ export class PlayerController {
         : this.isSprinting
           ? Math.min(106, baseFov + 5)
           : baseFov;
-    const nextFov = THREE.MathUtils.lerp(camera.fov, targetFov, Math.min(1, dt * 14));
+    const fovBlend = 1 - Math.exp(-14 * safeDt);
+    const nextFov = THREE.MathUtils.lerp(camera.fov, targetFov, fovBlend);
     if (Math.abs(nextFov - camera.fov) > 0.04) {
       camera.fov = nextFov;
       camera.updateProjectionMatrix();

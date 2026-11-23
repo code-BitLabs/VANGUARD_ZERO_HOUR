@@ -96,6 +96,7 @@ const MANUAL_GRAPHICS_OVERRIDE_KEYS: Array<keyof GraphicsSettings> = [
   'renderScale',
   'textureQuality',
   'antialiasing',
+  'antiAliasingMode',
   'effectsQuality',
   'drawDistance',
   'fpsCap',
@@ -125,6 +126,7 @@ export const QUALITY_PROFILE_PRESETS: Record<
     textureQuality: 'high',
     effectsQuality: 'high',
     antialiasing: true,
+    antiAliasingMode: 'auto',
     drawDistance: 'auto',
   },
   cinematic: {
@@ -147,6 +149,7 @@ export const QUALITY_PROFILE_PRESETS: Record<
     textureQuality: 'high',
     effectsQuality: 'high',
     antialiasing: true,
+    antiAliasingMode: 'msaa4',
     drawDistance: 'ultra',
   },
   balanced: {
@@ -169,6 +172,7 @@ export const QUALITY_PROFILE_PRESETS: Record<
     textureQuality: 'high',
     effectsQuality: 'medium',
     antialiasing: true,
+    antiAliasingMode: 'auto',
     drawDistance: 'long',
   },
   performance: {
@@ -190,7 +194,8 @@ export const QUALITY_PROFILE_PRESETS: Record<
     maxDpr: 1.0,
     textureQuality: 'low',
     effectsQuality: 'low',
-    antialiasing: false,
+    antialiasing: true,
+    antiAliasingMode: 'smaa',
     drawDistance: 'short',
   },
 };

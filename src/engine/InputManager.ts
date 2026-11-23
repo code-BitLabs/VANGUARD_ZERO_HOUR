@@ -481,8 +481,10 @@ export class InputManager {
 
   consumeLookDelta(
     isAds: boolean,
-    touchAimFrictionScale = 1.0
+    touchAimFrictionScale = 1.0,
+    dt = 1 / 60
   ): { yawDelta: number; pitchDelta: number } {
+    const safeDt = Number.isFinite(dt) ? Math.max(0.001, Math.min(0.05, dt)) : 1 / 60;
     const adsScale = isAds ? this.settings.adsSensitivity : 1.0;
     const baseSens = 0.0022 * this.settings.mouseSensitivity * adsScale;
     const friction = Number.isFinite(touchAimFrictionScale)
@@ -500,8 +502,10 @@ export class InputManager {
     let touchDx = rawTouchDx;
     let touchDy = rawTouchDy;
     if (smoothAlpha > 0.001) {
-      this.smoothedTouchLookX = rawTouchDx * (1 - smoothAlpha) + this.smoothedTouchLookX * smoothAlpha;
-      this.smoothedTouchLookY = rawTouchDy * (1 - smoothAlpha) + this.smoothedTouchLookY * smoothAlpha;
+      // Frame-rate-independent exponential smoothing anchored to 60Hz reference alpha
+      const frameAlpha = Math.pow(smoothAlpha, safeDt * 60);
+      this.smoothedTouchLookX = rawTouchDx * (1 - frameAlpha) + this.smoothedTouchLookX * frameAlpha;
+      this.smoothedTouchLookY = rawTouchDy * (1 - frameAlpha) + this.smoothedTouchLookY * frameAlpha;
       if (rawTouchDx === 0 && Math.abs(this.smoothedTouchLookX) < 1e-5) {
         this.smoothedTouchLookX = 0;
       }
@@ -525,8 +529,10 @@ export class InputManager {
       if (gp && gp.axes.length >= 4) {
         const rx = Math.abs(gp.axes[2]) > 0.14 ? gp.axes[2] : 0;
         const ry = Math.abs(gp.axes[3]) > 0.14 ? gp.axes[3] : 0;
-        dx += rx * 0.045 * this.settings.mouseSensitivity;
-        dy += ry * 0.045 * this.settings.mouseSensitivity;
+        // 2.7 rad/s at full deflection == 0.045 rad per 60Hz tick
+        const stickScale = 2.7 * safeDt * this.settings.mouseSensitivity * adsScale;
+        dx += rx * stickScale;
+        dy += ry * stickScale;
       }
     }
 

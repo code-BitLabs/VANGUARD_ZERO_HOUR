@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { createActor } from 'xstate';
 import { AudioManager } from '@/src/audio/AudioManager';
 import { isDeveloperModeActiveForSetting } from '@/src/config/devMode';
 import { AssetManager } from '@/src/core/AssetManager';
@@ -33,7 +32,6 @@ import {
   clampCheckpointVitals,
   MissionAttemptContext,
   MissionCheckpointSnapshot,
-  selectMissionCheckpointAnchor,
   validateSafeCheckpointSpawn,
 } from '@/src/gameplay/MissionCheckpoint';
 import { MissionDirector } from '@/src/gameplay/MissionDirector';
@@ -89,9 +87,10 @@ import { DestructionSystem } from '@/src/world/DestructionSystem';
 import type { SceneLights } from '@/src/world/LightingRig';
 import type { BuiltWorldData, MapPopulator } from '@/src/world/MapBuilderAsync';
 import { WorldChunkManager } from '@/src/world/WorldChunkManager';
+import { CheckpointCoordinator } from './CheckpointCoordinator';
 import { CombatDebugRenderer } from './CombatDebugRenderer';
 import { DebugTelemetryPublisher } from './DebugTelemetryPublisher';
-import { engineLifecycleMachine } from './EngineLifecycle';
+import { createLifecycleActor, engineLifecycleMachine } from './EngineLifecycle';
 import { GameLoop } from './GameLoop';
 import type { GpuCapabilityReport } from './GpuCapabilityDetector';
 import { GraphicsAdaptiveCoordinator } from './GraphicsAdaptiveCoordinator';
@@ -121,7 +120,7 @@ export class GameEngine {
   private readonly audio: AudioManager;
   private readonly input: InputManager;
   private readonly loop: GameLoop;
-  private readonly lifecycle = createActor(engineLifecycleMachine);
+  private readonly lifecycle = createLifecycleActor(engineLifecycleMachine);
 
   private readonly collisionWorld = new CollisionWorld();
   private readonly chunkManager = new WorldChunkManager();
@@ -268,6 +267,7 @@ export class GameEngine {
   private readonly graphicsCoordinator: GraphicsAdaptiveCoordinator;
   private readonly telemetryPublisher: DebugTelemetryPublisher;
   private readonly missionLoader: MissionLifecycleLoader;
+  private readonly checkpointCoordinator = new CheckpointCoordinator();
 
   private workerBridge: WorkerBridge | null = null;
   private lights: SceneLights | null = null;
@@ -275,6 +275,7 @@ export class GameEngine {
   private missionDirector: MissionDirector | null = null;
   private activeMission: MissionConfig | null = null;
   private activeScope: ResourceScope | null = null;
+  private activeEntityScope: ResourceScope | null = null;
   private activeAbortController: AbortController | null = null;
   private attemptContext: MissionAttemptContext | null = null;
   private activeCheckpointSnapshot: MissionCheckpointSnapshot | null = null;
@@ -310,10 +311,16 @@ export class GameEngine {
     });
 
     const initialGraphics = settingsStore.getState().graphics;
-    this.battlefieldVfx = new BattlefieldVfxSystem(this.renderer.scene, this.renderer.isSoftwareGl);
+    this.battlefieldVfx = new BattlefieldVfxSystem(
+      this.renderer.scene,
+      this.renderer.isSoftwareGl,
+      this.resourceManager
+    );
     this.surfaceDecals = new SurfaceDecalManager(
       this.renderer.scene,
-      initialGraphics.decalBudget
+      initialGraphics.decalBudget,
+      85,
+      this.resourceManager
     );
     this.spatialAcoustics.configure({
       spatialEnabled: audioSettings.spatialAudioEnabled,
@@ -487,7 +494,7 @@ export class GameEngine {
       monitor: this.monitor,
       telemetry: this.telemetry,
       getMissionDirector: () => this.missionDirector,
-      getActiveScope: () => this.activeScope,
+      getActiveScope: () => this.activeEntityScope ?? this.activeScope,
       getDifficulty: () => missionSelectionStore.getState().difficulty,
       onWeaponKill: (weaponId) => {
         this.weaponKillsMap[weaponId] = (this.weaponKillsMap[weaponId] ?? 0) + 1;
@@ -586,6 +593,9 @@ export class GameEngine {
     const resolvedSettings = settingsStore.getState();
     this.loop.setFpsCap(resolvedSettings.graphics.fpsCap);
     this.loop.setSoftwareGlPacing(this.renderer.isSoftwareGl);
+    if (this.renderer.isSoftwareGl) {
+      this.loop.setSoftwareGlSyncContext(this.renderer.renderer.getContext());
+    }
 
     this.telemetryPublisher = new DebugTelemetryPublisher({
       renderer: this.renderer,
@@ -823,7 +833,9 @@ export class GameEngine {
     gameSessionStore.getState().resetSession();
 
     const scope: ResourceScope = `mission:${mission.id}`;
+    const entityScope: ResourceScope = `mission:${mission.id}:entities`;
     this.activeScope = scope;
+    this.activeEntityScope = entityScope;
     this.activeMission = mission;
     this.activeAbortController = this.resourceManager.createAbortController(scope);
     const signal = this.activeAbortController.signal;
@@ -831,19 +843,22 @@ export class GameEngine {
     try {
       const totalStages = 4;
       this.missionLoader.reportLoadStage(1, totalStages, 'Streaming Terrain & Architecture');
-      const populator = await this.missionLoader.resolvePopulator(mission.mapId);
+      const [populator] = await Promise.all([
+        this.missionLoader.resolvePopulator(mission.mapId),
+        this.assetManager.prewarmPatternsOffThread(),
+      ]);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
       this.missionLoader.reportLoadStage(2, totalStages, 'Building Vertical Structures & Collision BVH');
-      this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
+      await this.populateWorldArchitectureStepAsync(mission, difficulty, scope, populator, signal);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
 
       this.missionLoader.reportLoadStage(3, totalStages, 'Deploying Squad, Vehicles & Navigation Grid');
-      this.populateEntitiesAndPlayerStep(mission, difficulty, scope, preferredWeapon);
+      this.populateEntitiesAndPlayerStep(mission, difficulty, entityScope, preferredWeapon);
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
       if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
@@ -885,39 +900,16 @@ export class GameEngine {
 
   private captureCheckpointSnapshot(): MissionCheckpointSnapshot | null {
     if (!this.activeMission || !this.missionDirector) return null;
-    if (this.activeModifierEffects.disableCheckpoints) {
-      this.activeCheckpointSnapshot = null;
-      return null;
-    }
-    const activeObjIdx = this.missionDirector.getActiveObjectiveIndex();
-    const completedIds = this.missionDirector.getCompletedObjectiveIds();
-    const bypassedIds = this.missionDirector.getBypassedObjectiveIds();
-    const destroyedTargetIds = this.missionDirector.getDestroyedTargetIds();
-    const ammoSnap = this.weapons.captureAmmoSnapshot();
-    const anchor = selectMissionCheckpointAnchor(this.activeMission, activeObjIdx);
-
-    const snapshot: MissionCheckpointSnapshot = {
-      missionId: this.activeMission.id,
+    const snapshot = this.checkpointCoordinator.captureSnapshot({
+      mission: this.activeMission,
       difficulty: missionSelectionStore.getState().difficulty,
-      checkpointSequence: this.missionDirector.getCheckpointSequence(),
-      activeObjectiveIndex: activeObjIdx,
-      activeStageIndex: this.missionDirector.getActiveStageIndex(),
-      completedObjectiveIds: completedIds,
-      bypassedObjectiveIds: bypassedIds,
-      destroyedTargetIds,
-      sustainmentSnapshot: this.sustainment.captureSnapshot(),
-      playerSpawn: anchor,
-      healthAtCheckpoint: this.player.health,
-      armorAtCheckpoint: this.player.armor,
-      grenadesAtCheckpoint: this.player.grenades,
-      c4AtCheckpoint: this.explosives.getC4Inventory(),
-      activeWeaponId: ammoSnap.activeWeaponId,
-      weaponAmmoState: ammoSnap.weaponAmmoState,
-      scoreAtCheckpoint: this.missionDirector.score,
-      killsAtCheckpoint: this.missionDirector.kills,
-      headshotsAtCheckpoint: this.missionDirector.headshots,
-      airKillsAtCheckpoint: this.missionDirector.airKills,
-    };
+      missionDirector: this.missionDirector,
+      player: this.player,
+      weapons: this.weapons,
+      explosives: this.explosives,
+      sustainment: this.sustainment,
+      disableCheckpoints: this.activeModifierEffects.disableCheckpoints,
+    });
     this.activeCheckpointSnapshot = snapshot;
     return snapshot;
   }
@@ -929,12 +921,14 @@ export class GameEngine {
     preferredWeapon?: WeaponId,
     restoredCheckpoint?: MissionCheckpointSnapshot
   ): void {
+    const entityScope: ResourceScope = `mission:${mission.id}:entities`;
+    this.activeEntityScope = entityScope;
     const populator = this.missionLoader.getCachedPopulator(mission.mapId);
     this.populateWorldArchitectureStep(mission, difficulty, scope, populator);
     this.populateEntitiesAndPlayerStep(
       mission,
       difficulty,
-      scope,
+      entityScope,
       preferredWeapon,
       restoredCheckpoint
     );
@@ -958,6 +952,35 @@ export class GameEngine {
 
     this.missionEnhancement?.dispose();
     const res = this.missionLoader.populateWorldArchitecture(mission, difficulty, scope, populator);
+    this.lights = res.lights;
+    this.worldData = res.worldData;
+    this.missionEnhancement = res.missionEnhancement;
+  }
+
+  private async populateWorldArchitectureStepAsync(
+    mission: MissionConfig,
+    difficulty: Difficulty,
+    scope: ResourceScope,
+    populator: MapPopulator,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (!this.attemptContext || this.attemptContext.missionId !== mission.id) {
+      this.attemptContext = {
+        missionId: mission.id,
+        difficulty,
+        cumulativeElapsedSec: 0,
+        checkpointDeathsCount: 0,
+      };
+    }
+
+    this.missionEnhancement?.dispose();
+    const res = await this.missionLoader.populateWorldArchitectureAsync(
+      mission,
+      difficulty,
+      scope,
+      populator,
+      signal
+    );
     this.lights = res.lights;
     this.worldData = res.worldData;
     this.missionEnhancement = res.missionEnhancement;
@@ -990,13 +1013,19 @@ export class GameEngine {
       this.cargoLiftManager.registerLift(liftDef);
     }
 
-    this.workerBridge = new WorkerBridge(this.resourceManager, scope);
-    this.workerBridge.uploadNavigationSurfaces(
-      this.collisionWorld.spatialHash,
-      this.worldData.elevatedSurfaces,
-      this.worldData.navPortals,
-      this.collisionWorld.getGroundHeightAt
-    );
+    const worldScope = this.activeScope ?? scope;
+    if (!this.workerBridge || !this.workerBridge.isHealthy()) {
+      this.workerBridge?.dispose();
+      this.workerBridge = new WorkerBridge(this.resourceManager, worldScope);
+      this.workerBridge.uploadNavigationSurfaces(
+        this.collisionWorld.spatialHash,
+        this.worldData.elevatedSurfaces,
+        this.worldData.navPortals,
+        this.collisionWorld.getGroundHeightAt
+      );
+    } else {
+      this.workerBridge.flushCollisionRegionUpdates(this.collisionWorld.spatialHash);
+    }
     if (restoredCheckpoint) {
       this.cargoLiftManager.normalizeForCheckpoint();
     }
@@ -1271,9 +1300,11 @@ export class GameEngine {
   private finalizeMissionLoadStep(
     mission: MissionConfig,
     difficulty: Difficulty,
-    restoredCheckpoint?: MissionCheckpointSnapshot
+    restoredCheckpoint?: MissionCheckpointSnapshot,
+    skipShaderPrewarm = false
   ): void {
     const gSettings = settingsStore.getState().graphics;
+    this.player.snapInterpolation();
     // Immediately align camera with spawned player eye position before Frame 0 render/projection
     this.player.syncCamera(
       this.renderer.camera,
@@ -1301,7 +1332,9 @@ export class GameEngine {
     this.reinforcementTimer = 28;
 
     // PERF-01 & AUD-02: Prewarm decal/destruction/vehicle/projectile shaders and register CSM during load
-    this.missionLoader.prewarmCombatShaders();
+    if (!skipShaderPrewarm) {
+      this.missionLoader.prewarmCombatShaders();
+    }
   }
 
   getLifecycleState(): string {
@@ -1347,6 +1380,7 @@ export class GameEngine {
     const difficulty = missionSelectionStore.getState().difficulty;
     const currentWeaponId = this.weapons.getActiveState().config.id;
     const scope: ResourceScope = `mission:${mission.id}`;
+    const entityScope: ResourceScope = `mission:${mission.id}:entities`;
 
     // Player chose checkpoint recovery rather than abandoning a failed attempt
     this.pendingDefeatPayload = null;
@@ -1362,25 +1396,88 @@ export class GameEngine {
     this.audio.unlock();
     this.audio.stopMissionLoops();
     this.input.clearAllInputs();
-    this.workerBridge?.dispose();
-    this.workerBridge = null;
-    this.clearWorldState();
     this.telemetry.recordMissionRestart();
     this.playtestTracker.recordCheckpointRestart();
 
-    this.attemptContext = preservedAttempt;
-    this.activeCheckpointSnapshot = snapshotToRestore;
-    this.activeScope = scope;
-    this.activeMission = mission;
-    gameSessionStore.getState().resetSession();
-
-    this.populateMissionWorld(
-      mission,
-      difficulty,
-      scope,
-      currentWeaponId,
-      snapshotToRestore ?? undefined
+    const canInPlace = this.checkpointCoordinator.canResetInPlace(
+      this.activeMission,
+      this.worldData,
+      this.activeScope,
+      this.activeEntityScope
     );
+
+    if (canInPlace && this.activeEntityScope) {
+      // Fast (<8ms) in-place reset: keeps static chunks, BVHs, lighting, CSM & nav grid resident
+      this.checkpointCoordinator.resetDynamicStateInPlace({
+        scene: this.renderer.scene,
+        resourceManager: this.resourceManager,
+        entityScope: this.activeEntityScope,
+        vfx: this.vfx,
+        battlefieldVfx: this.battlefieldVfx,
+        surfaceDecals: this.surfaceDecals,
+        projectiles: this.projectiles,
+        explosives: this.explosives,
+        enemies: this.enemies,
+        vehicles: this.vehicles,
+        airCombat: this.airCombat,
+        healthPickups: this.healthPickups,
+        sustainment: this.sustainment,
+        friendlySquad: this.friendlySquad,
+        destruction: this.destruction,
+        cargoLiftManager: this.cargoLiftManager,
+        player: this.player,
+        collisionWorld: this.collisionWorld,
+        coordinator: this.coordinator,
+        telemetry: this.telemetry,
+        rulesEngine: this.rulesEngine,
+        hudPublisher: this.hudPublisher,
+        telemetryPublisher: this.telemetryPublisher,
+      });
+
+      this.attemptContext = preservedAttempt;
+      this.activeCheckpointSnapshot = snapshotToRestore;
+      this.activeScope = scope;
+      this.activeEntityScope = entityScope;
+      this.activeMission = mission;
+      this.latestSquadHudSummary = undefined;
+      this.downedActive = false;
+      this.downedTimerSec = 0;
+      gameSessionStore.getState().resetSession();
+
+      this.populateEntitiesAndPlayerStep(
+        mission,
+        difficulty,
+        entityScope,
+        currentWeaponId,
+        snapshotToRestore ?? undefined
+      );
+      this.finalizeMissionLoadStep(
+        mission,
+        difficulty,
+        snapshotToRestore ?? undefined,
+        true
+      );
+    } else {
+      // Fallback full rebuild when static world is not resident
+      this.workerBridge?.dispose();
+      this.workerBridge = null;
+      this.clearWorldState();
+
+      this.attemptContext = preservedAttempt;
+      this.activeCheckpointSnapshot = snapshotToRestore;
+      this.activeScope = scope;
+      this.activeEntityScope = entityScope;
+      this.activeMission = mission;
+      gameSessionStore.getState().resetSession();
+
+      this.populateMissionWorld(
+        mission,
+        difficulty,
+        scope,
+        currentWeaponId,
+        snapshotToRestore ?? undefined
+      );
+    }
 
     this.lifecycle.send({ type: 'RESTART_MISSION' });
     this.audio.startMissionAmbienceAndMusic();
@@ -1499,6 +1596,10 @@ export class GameEngine {
     this.resourceManager.unloadScope('mission:0');
     this.resourceManager.unloadScope('mission:diorama');
     this.resourceManager.unloadScope('mission:world');
+    if (this.activeEntityScope) {
+      this.resourceManager.unloadScope(this.activeEntityScope);
+      this.activeEntityScope = null;
+    }
     if (this.activeScope) {
       this.resourceManager.unloadScope(this.activeScope);
       this.activeScope = null;
@@ -1538,6 +1639,7 @@ export class GameEngine {
     // [C] Hold to aim/prime C4 wireframe, release (or touch tap) to place/detonate; [Shift+C] / Touch Detonate detonates immediately
     const c4Held = !inVehicle && this.input.isActionHeld('c4');
     const shiftHeldForC4 = this.input.isKeyHeld('ShiftLeft') || this.input.isKeyHeld('ShiftRight');
+    const entityScope = this.activeEntityScope ?? this.activeScope;
     if (!inVehicle && this.input.wasActionPressed('c4Detonate')) {
       this.c4KeyPriming = false;
       this.explosives.setC4Priming(false);
@@ -1545,7 +1647,7 @@ export class GameEngine {
         this.renderer.camera,
         this.collisionWorld,
         this.vehicles,
-        this.activeScope,
+        entityScope,
         true,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
@@ -1556,7 +1658,7 @@ export class GameEngine {
         this.renderer.camera,
         this.collisionWorld,
         this.vehicles,
-        this.activeScope,
+        entityScope,
         true,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
@@ -1571,7 +1673,7 @@ export class GameEngine {
           this.renderer.camera,
           this.collisionWorld,
           this.vehicles,
-          this.activeScope,
+          entityScope,
           false,
           (msg, dur) => this.missionDirector?.showAlert(msg, dur)
         );
@@ -1582,7 +1684,7 @@ export class GameEngine {
         this.renderer.camera,
         this.collisionWorld,
         this.vehicles,
-        this.activeScope,
+        entityScope,
         false,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
@@ -1611,7 +1713,7 @@ export class GameEngine {
           this.collisionWorld,
           (cost) => progressionStore.getState().spendRequisition(cost),
           sandboxAuthorized,
-          this.activeScope,
+          entityScope,
           (msg, dur) => this.missionDirector?.showAlert(msg, dur)
         );
       }
@@ -1631,7 +1733,7 @@ export class GameEngine {
       this.explosives.confirmStrategicNuke(
         (cost) => progressionStore.getState().spendRequisition(cost),
         sandboxAuthorized,
-        this.activeScope,
+        entityScope,
         (msg, dur) => this.missionDirector?.showAlert(msg, dur)
       );
     }
@@ -2227,7 +2329,8 @@ export class GameEngine {
       }
     }
 
-    if (this.activeScope && this.player.alive) {
+    const runtimeEntityScope = this.activeEntityScope ?? this.activeScope;
+    if (runtimeEntityScope && this.player.alive) {
       const objStatuses = this.missionDirector.getObjectiveStatuses();
       const requiresHeavyOrdnance = objStatuses.some(
         (o) =>
@@ -2247,7 +2350,7 @@ export class GameEngine {
           this.player.position.x + 2.4,
           this.player.position.z + 2.4
         );
-        const podMesh = buildSupplyCrate(this.assetManager, this.resourceManager, this.activeScope);
+        const podMesh = buildSupplyCrate(this.assetManager, this.resourceManager, runtimeEntityScope);
         const pod = this.sustainment.tryDeployEmergencyOrdnancePod({
           requiresHeavyOrdnance: true,
           weapons: this.weapons,
@@ -2260,7 +2363,7 @@ export class GameEngine {
           podMesh.position.copy(pod.position);
           this.renderer.scene.add(podMesh);
           this.renderer.registerObjectForShadows(podMesh);
-          this.resourceManager.register('object3d', this.activeScope, () => {
+          this.resourceManager.register('object3d', runtimeEntityScope, () => {
             this.renderer.scene.remove(podMesh);
           });
           this.missionDirector.showSubtitle(
@@ -2379,7 +2482,7 @@ export class GameEngine {
         this.missionDirector.showAlert(encounterOut.environmentalHazardLabel, 1.8);
       }
     }
-    if (encounterOut.reinforcementSpec && this.activeScope) {
+    if (encounterOut.reinforcementSpec && runtimeEntityScope) {
       const sp = encounterOut.reinforcementSpec;
       this.enemies.spawnWave(
         sp.archetype,
@@ -2387,7 +2490,7 @@ export class GameEngine {
         sp.spawnPos,
         sp.radius,
         this.collisionWorld,
-        this.activeScope
+        runtimeEntityScope
       );
     }
     this.audio.applyAdaptiveMusicMood(encounterOut.recommendedMood);
@@ -2418,7 +2521,7 @@ export class GameEngine {
     const waveProg = this.missionDirector.evaluateWaveProgression(aliveEnemies);
 
     if (
-      this.activeScope &&
+      runtimeEntityScope &&
       (waveProg.shouldSpawnReinforcements ||
         (this.reinforcementTimer <= 0 && aliveEnemies < 4))
     ) {
@@ -2438,7 +2541,7 @@ export class GameEngine {
         waveSpec.spawnPos,
         waveSpec.radius,
         this.collisionWorld,
-        this.activeScope
+        runtimeEntityScope
       );
       this.missionDirector.showSubtitle(
         waveProg.shouldSpawnReinforcements
@@ -2556,8 +2659,9 @@ export class GameEngine {
   };
 
   private onSpawnDynamicDrone = (x: number, y: number, z: number): void => {
-    if (this.activeScope) {
-      this.airCombat.spawnDynamicDrone(x, y, z, this.activeScope);
+    const droneScope = this.activeEntityScope ?? this.activeScope;
+    if (droneScope) {
+      this.airCombat.spawnDynamicDrone(x, y, z, droneScope);
     }
   };
 
@@ -2792,23 +2896,26 @@ export class GameEngine {
     );
   };
 
-  private onRender = (dt = 1 / 60): void => {
+  private onRender = (dt = 1 / 60, alpha = 1): void => {
     const screen = uiStore.getState().screen;
     // Never waste GPU/CPU cycles rendering an invisible 3D scene behind opaque menu overlays or frozen pause screen
     if (screen !== 'playing') return;
     const t0 = performance.now();
     const inVehicle = this.vehicles.getPlayerVehicle() !== null;
-    if (!inVehicle && this.activeMission && this.player.alive && this.input.hasPendingLookDelta()) {
+    if (!inVehicle && this.activeMission && this.player.alive) {
       const settings = settingsStore.getState();
       const weaponCfg = this.weapons.getActiveState().config;
-      this.player.touchAimFrictionScale = this.computeTouchAimFrictionScale();
-      this.player.applyLookInput(this.input, this.weapons.isAds);
+      if (this.input.hasPendingLookDelta()) {
+        this.player.touchAimFrictionScale = this.computeTouchAimFrictionScale();
+        this.player.applyLookInput(this.input, this.weapons.isAds, dt);
+      }
       this.player.syncCamera(
         this.renderer.camera,
         settings.graphics.fov,
         weaponCfg.adsFov,
         this.weapons.isAds,
-        dt
+        dt,
+        alpha
       );
     }
     if (this.activeMission && this.lights) {
@@ -2825,9 +2932,9 @@ export class GameEngine {
     this.monitor.recordPhase('render', performance.now() - t0);
   };
 
-  private onFrameMeasured = (frameMs: number): void => {
+  private onFrameMeasured = (frameMs: number, rawDt = 1 / 60): void => {
     if (uiStore.getState().screen !== 'playing') return;
-    const dt = 1 / 60;
+    const dt = Number.isFinite(rawDt) ? Math.max(0.001, Math.min(0.05, rawDt)) : 1 / 60;
     this.graphicsCoordinator.recordFrameAndAdapt(frameMs, this.monitor, dt);
 
     this.monitor.tick(

@@ -65,6 +65,11 @@ export class GraphicsAdaptiveCoordinator {
       settings.graphics.bloomEnabled,
       this.deps.getLights()
     );
+    renderer.applyAntiAliasingPreference(
+      settings.graphics.antiAliasingMode ?? 'auto',
+      settings.graphics.antialiasing,
+      settings.graphics.quality
+    );
     return report;
   }
 
@@ -101,6 +106,12 @@ export class GraphicsAdaptiveCoordinator {
       allowCsmRebuild,
       deferResize: isPlaying,
     });
+    renderer.applyAntiAliasingPreference(
+      graphics.antiAliasingMode ?? 'auto',
+      graphics.antialiasing,
+      graphics.quality,
+      { lockSurfaceAndShadows: isPlaying }
+    );
 
     const activeDims = renderer.qualityDirector.getActiveDimensions();
     battlefieldVfx.setDensityScales(
@@ -150,11 +161,15 @@ export class GraphicsAdaptiveCoordinator {
     });
     if (directorChanged) {
       const dims = renderer.qualityDirector.getActiveDimensions();
+      const telemetry = renderer.qualityDirector.getTelemetry();
       renderer.applyDirectorDimensions(dims.maxDpr, lights, graphicsSettings.shadowsEnabled, {
         allowCsmRebuild: false,
         deferResize: true,
         lockSurfaceAndShadows: true,
       });
+      if (telemetry.degradationStep >= 2) {
+        renderer.flagAdaptiveAaDowngrade(telemetry.degradationStep);
+      }
       battlefieldVfx.setDensityScales(dims.particleDensityScale, dims.rainDensityScale);
       surfaceDecals.setBudget(dims.decalBudget);
     }
