@@ -14,7 +14,7 @@ import {
 } from '@/src/schemas/combat.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { EnemyArchetype, SquadRole } from '@/src/schemas/enemy.schema';
-import { IncomingThreatWarning, MiniMapBlip } from '@/src/schemas/events.schema';
+import { HitKind, IncomingThreatWarning, MiniMapBlip } from '@/src/schemas/events.schema';
 import {
   AgentProfileId,
   getAgentTraversalProfile,
@@ -95,6 +95,9 @@ export interface EnemyUnit {
   hitReactTimer: number;
   deathTimer: number;
   deathFallSign: 1 | -1;
+  deathImpulseStrength?: number;
+  lastHitKind?: HitKind;
+  lastArmorBroken?: boolean;
   rigRef?: SoldierRigBuild;
   rigAccentHex?: string;
   rigRecycled?: boolean;
@@ -402,7 +405,59 @@ export class EnemyManager {
     return alerted;
   }
 
+  private lastTacticalBarkMs = -4000;
+
+  /**
+   * Alerts nearby unaware/suspicious enemies to investigate a distinct bullet-impact surface sound
+   * without leaking the player's position (keeps gunshot, mechanical, and impact acoustics separate).
+   */
+  notifyBulletImpactSound(impactPoint: THREE.Vector3, radiusMeters: number): number {
+    if (radiusMeters <= 0) return 0;
+    const nowSec = this.telemetry?.getElapsedSec() ?? 0;
+    let alerted = 0;
+    const rSq = radiusMeters * radiusMeters;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const u = this.enemies[i];
+      if (!u.alive) continue;
+      if (u.state !== 'UNAWARE' && u.state !== 'SUSPICIOUS') continue;
+      const dx = u.position.x - impactPoint.x;
+      const dy = u.position.y - impactPoint.y;
+      const dz = u.position.z - impactPoint.z;
+      if (dx * dx + dy * dy + dz * dz > rSq) continue;
+      const prev = u.state;
+      u.state = 'INVESTIGATING';
+      u.stateTimerSec = AUTHORITATIVE_COMBAT_CONFIG.investigateDurationSec;
+      if (!u.lastKnownPosition) u.lastKnownPosition = new THREE.Vector3();
+      u.lastKnownPosition.copy(impactPoint);
+      u.lkpTimestampSec = nowSec;
+      this.telemetry?.recordStateTransition(u.id, u.squadId, 'ground', prev, 'INVESTIGATING');
+      alerted++;
+    }
+    return alerted;
+  }
+
+  private tryPlayTacticalBark(
+    kind: 'enemy_bark_flank' | 'enemy_bark_frag',
+    pos: THREE.Vector3
+  ): void {
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (nowMs - this.lastTacticalBarkMs < 2400) return;
+    this.lastTacticalBarkMs = nowMs;
+    this.audio.playSpatial(kind, pos.x, pos.y + 1.55, pos.z, 6, 0.62);
+  }
+
   getActiveThreatWarning(player: PlayerController): IncomingThreatWarning | null {
+    // Hostile live grenade near the player takes top urgency so the player can displace from cover
+    const liveGrenade = this.projectiles.getNearestHostileGrenade(player.position, 11.5);
+    if (liveGrenade) {
+      return {
+        kind: 'grenade',
+        label: `INCOMING FRAG GRENADE (${Math.max(1, Math.round(liveGrenade.distanceM))}m) — MOVE`,
+        progress: Number(liveGrenade.progress.toFixed(2)),
+        angleRad: player.computeRelativeThreatAngle(liveGrenade.x, liveGrenade.z),
+      };
+    }
+
     let bestUnit: EnemyUnit | null = null;
     let bestProgress = -1;
 
@@ -715,10 +770,17 @@ export class EnemyManager {
             torsoBoxMax: u.torsoBoxMax,
             lowerBodyBoxMin: u.lowerBodyBoxMin,
             lowerBodyBoxMax: u.lowerBodyBoxMax,
-            onHit: (damage, isHeadshot, hitPoint) => {
+            onHit: (damage, isHeadshot, hitPoint, _hitZone, armorPenetration, _hitDir, impulseWeight) => {
               const cur = newSlot.unit;
               if (!cur) return;
-              const killed = this.damageUnit(cur, damage, isHeadshot, hitPoint);
+              const killed = this.damageUnit(
+                cur,
+                damage,
+                isHeadshot,
+                hitPoint,
+                armorPenetration,
+                impulseWeight
+              );
               newSlot.cb?.(cur, damage, isHeadshot, killed);
             },
           },
@@ -752,25 +814,50 @@ export class EnemyManager {
     unit: EnemyUnit,
     damage: number,
     isHeadshot: boolean,
-    stimulusOrigin?: THREE.Vector3
+    stimulusOrigin?: THREE.Vector3,
+    armorPenetration = 0.45,
+    impulseWeight = 1.0
   ): boolean {
     if (!unit.alive) return false;
     unit.initialGraceTimerSec = 0;
+    const hadArmor = unit.armor > 0;
     let remaining = damage;
-    if (unit.armor > 0 && !isHeadshot) {
-      const absorb = Math.min(unit.armor, damage * 0.45);
-      unit.armor -= absorb;
-      remaining -= absorb;
+    let armorAbsorbed = 0;
+    if (hadArmor && !isHeadshot) {
+      // Weapon armor penetration controls real plate mitigation:
+      // Low-AP weapons (Shotgun 0.22, SMG 0.25) lose ~55% to heavy plates; High-AP (Sniper 0.92, LMG 0.65) punch through.
+      const clampedAp = Math.max(0.05, Math.min(1.0, armorPenetration));
+      const plateMitigation = Math.max(0.06, 0.74 * (1 - clampedAp));
+      armorAbsorbed = Math.min(unit.armor, damage * plateMitigation);
+      unit.armor = Math.max(0, unit.armor - armorAbsorbed);
+      remaining = Math.max(1, damage - armorAbsorbed);
     }
+    const armorBroken = hadArmor && unit.armor <= 0 && !isHeadshot;
+    unit.lastArmorBroken = armorBroken;
     unit.health -= remaining;
 
     unit.hitReactTimer = 0.22;
     unit.animHitHeadshot = isHeadshot;
+    unit.deathImpulseStrength = Math.max(0.7, Math.min(2.4, impulseWeight));
     if (stimulusOrigin) {
       const hitWorldYaw = Math.atan2(stimulusOrigin.x - unit.position.x, stimulusOrigin.z - unit.position.z);
       unit.animHitDirYaw = this.normalizeAngle(hitWorldYaw - unit.yaw);
+      // Knock backward on frontal hits (cos >= 0), pitch forward on rear hits (cos < 0)
+      unit.deathFallSign = Math.cos(unit.animHitDirYaw) >= 0 ? -1 : 1;
     } else {
       unit.animHitDirYaw = 0;
+    }
+
+    if (unit.health <= 0) {
+      unit.lastHitKind = isHeadshot ? 'headshot' : armorBroken ? 'armor_break' : 'kill';
+    } else if (isHeadshot) {
+      unit.lastHitKind = 'headshot';
+    } else if (armorBroken) {
+      unit.lastHitKind = 'armor_break';
+    } else if (hadArmor && armorAbsorbed > 0) {
+      unit.lastHitKind = 'armor_deflect';
+    } else {
+      unit.lastHitKind = 'flesh';
     }
 
     // Release active shooting token while staggered by incoming hit
@@ -1519,7 +1606,13 @@ export class EnemyManager {
           'ground',
           `${u.id} suppressing LKP`
         );
-      } else if (u.state === 'REPOSITIONING' && u.role === 'flanker') {
+      } else if (
+        u.state === 'REPOSITIONING' &&
+        (u.role === 'flanker' ||
+          u.squadOrder?.order === 'FLANK_LEFT' ||
+          u.squadOrder?.order === 'FLANK_RIGHT')
+      ) {
+        this.tryPlayTacticalBark('enemy_bark_flank', u.position);
         this.telemetry?.recordEvent(
           'FLANK_START',
           u.id,
@@ -1739,6 +1832,51 @@ export class EnemyManager {
       !u.isReloading &&
       u.hitReactTimer <= 0 &&
       activeLease?.kind === 'SUPPRESS';
+
+    // Cover-flushing tactical frag grenade when the player stays dug in behind cover
+    if (
+      (u.state === 'SUPPRESSING' || u.state === 'REPOSITIONING') &&
+      !rawLos &&
+      u.lastKnownPosition !== null &&
+      lkpAgeSec <= 4.5 &&
+      dist >= 9 &&
+      dist <= 26 &&
+      u.grenadeCooldown <= 0 &&
+      player.alive &&
+      !u.isReloading &&
+      u.hitReactTimer <= 0 &&
+      u.archetype !== 'sniper' &&
+      u.archetype !== 'rocket_trooper'
+    ) {
+      u.grenadeCooldown = 14.5;
+      u.fireTimer = Math.max(u.fireTimer, 1.0);
+      this._muzzlePos.set(u.position.x, u.position.y + 1.55, u.position.z);
+      this._rocketDir.subVectors(u.lastKnownPosition, this._muzzlePos);
+      const horizD = Math.max(1, Math.hypot(this._rocketDir.x, this._rocketDir.z));
+      this._rocketDir.y += horizD * 0.34;
+      this._rocketDir.normalize();
+      this.projectiles.spawn({
+        kind: 'enemy_grenade',
+        fromPlayer: false,
+        origin: this._muzzlePos,
+        direction: this._rocketDir,
+        speed: Math.min(20, Math.max(11, horizD * 0.78)),
+        damage: 95 * diffProfile.damageMultiplier,
+        blastRadius: 6.2,
+        sourceUnitId: u.id,
+        sourceSquadId: u.squadId,
+        sourceDomain: 'ground',
+      });
+      this.tryPlayTacticalBark('enemy_bark_frag', u.position);
+      this.telemetry?.recordEvent(
+        'SHOT_FIRED',
+        u.id,
+        u.squadId,
+        'ground',
+        `${u.id} threw cover-flushing frag grenade`
+      );
+      return;
+    }
 
     if (
       u.state === 'ENGAGING' &&

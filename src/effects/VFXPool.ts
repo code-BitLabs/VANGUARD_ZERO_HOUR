@@ -13,6 +13,10 @@ interface ParticleState {
   gravity: number;
   scaleStart: number;
   scaleEnd: number;
+  rotX: number;
+  rotY: number;
+  spinX: number;
+  spinY: number;
 }
 
 interface TracerState {
@@ -49,6 +53,8 @@ interface PooledNukeSequence {
 const _vfxPos = new THREE.Vector3();
 const _vfxScale = new THREE.Vector3();
 const _vfxQuatIdentity = new THREE.Quaternion();
+const _vfxQuatSpin = new THREE.Quaternion();
+const _vfxEulerSpin = new THREE.Euler();
 const _vfxMat4 = new THREE.Matrix4();
 const _vfxLookHelper = new THREE.Object3D();
 
@@ -83,6 +89,10 @@ function createParticleBatch(
       gravity: 9.8,
       scaleStart: 0.15,
       scaleEnd: 0.02,
+      rotX: 0,
+      rotY: 0,
+      spinX: 0,
+      spinY: 0,
     };
   }
   return {
@@ -130,6 +140,11 @@ export class VFXPool {
 
     const sphereGeo = new THREE.IcosahedronGeometry(0.28, 1);
     resourceManager.registerGeometry(sphereGeo, 'shared', 'vfx_particle_geo');
+
+    // Realistic brass cartridge cylinder (replaces spherical brass orbs)
+    const brassGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.92, 6);
+    brassGeo.rotateZ(Math.PI * 0.5);
+    resourceManager.registerGeometry(brassGeo, 'shared', 'vfx_brass_geo');
 
     // Slim 1.8cm ballistic tracer bolt scaled per-shot to 1.2m-4.2m streak length (never viewport-spanning)
     const tracerGeo = new THREE.BoxGeometry(0.018, 0.018, 1.0);
@@ -185,7 +200,7 @@ export class VFXPool {
     this.sparkBatch = createParticleBatch('vfx_spark_instanced', 30, sphereGeo, sparkMat, this.rootGroup, resourceManager);
     this.smokeBatch = createParticleBatch('vfx_smoke_instanced', 60, sphereGeo, smokeMat, this.rootGroup, resourceManager);
     this.exhaustBatch = createParticleBatch('vfx_exhaust_instanced', 20, sphereGeo, exhaustMat, this.rootGroup, resourceManager);
-    this.brassBatch = createParticleBatch('vfx_brass_instanced', 20, sphereGeo, brassMat, this.rootGroup, resourceManager);
+    this.brassBatch = createParticleBatch('vfx_brass_instanced', 20, brassGeo, brassMat, this.rootGroup, resourceManager);
     this.bloodBatch = createParticleBatch('vfx_blood_instanced', 20, sphereGeo, bloodMat, this.rootGroup, resourceManager);
     this.particleBatches = [
       this.fireBatch,
@@ -286,7 +301,9 @@ export class VFXPool {
     gravity: number,
     maxLife: number,
     scaleStart: number,
-    scaleEnd: number
+    scaleEnd: number,
+    spinX = 0,
+    spinY = 0
   ): void {
     const slotIdx = allocSlot(batch);
     const p = batch.items[slotIdx];
@@ -301,6 +318,10 @@ export class VFXPool {
     p.gravity = gravity;
     p.scaleStart = scaleStart;
     p.scaleEnd = scaleEnd;
+    p.rotX = 0;
+    p.rotY = 0;
+    p.spinX = spinX;
+    p.spinY = spinY;
 
     _vfxPos.set(x, y, z);
     _vfxScale.set(scaleStart, scaleStart, scaleStart);
@@ -418,9 +439,11 @@ export class VFXPool {
       2.0 + Math.random() * 0.8,
       rz * (2.6 + Math.random() * 0.9),
       16,
-      0.45,
-      0.032,
-      0.022
+      0.48,
+      0.036,
+      0.034,
+      14 + Math.random() * 10,
+      9 + Math.random() * 8
     );
   }
 
@@ -527,6 +550,10 @@ export class VFXPool {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
+        if (p.spinX !== 0 || p.spinY !== 0) {
+          p.rotX += p.spinX * dt;
+          p.rotY += p.spinY * dt;
+        }
       }
 
       if (batch.activeCount === 0) {
@@ -541,7 +568,13 @@ export class VFXPool {
         const s = p.scaleStart + (p.scaleEnd - p.scaleStart) * t;
         _vfxPos.set(p.x, p.y, p.z);
         _vfxScale.set(s, s, s);
-        _vfxMat4.compose(_vfxPos, _vfxQuatIdentity, _vfxScale);
+        if (p.spinX !== 0 || p.spinY !== 0) {
+          _vfxEulerSpin.set(p.rotX, p.rotY, 0);
+          _vfxQuatSpin.setFromEuler(_vfxEulerSpin);
+          _vfxMat4.compose(_vfxPos, _vfxQuatSpin, _vfxScale);
+        } else {
+          _vfxMat4.compose(_vfxPos, _vfxQuatIdentity, _vfxScale);
+        }
         batch.mesh.setMatrixAt(i, _vfxMat4);
       }
       batch.mesh.count = batch.activeCount;

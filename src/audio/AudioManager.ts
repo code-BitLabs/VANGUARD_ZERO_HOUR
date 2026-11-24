@@ -69,8 +69,15 @@ const CORE_PREWARM_SOUND_IDS: readonly SoundId[] = [
   'shot_grenade_launcher',
   'shot_rocket',
   'shot_missile',
+  'shot_suppressed',
   'hit_marker',
   'headshot',
+  'armor_hit',
+  'armor_break',
+  'kill_confirm',
+  'bullet_crack',
+  'enemy_bark_flank',
+  'enemy_bark_frag',
   'empty_click',
   'mag_out',
   'mag_in',
@@ -135,6 +142,12 @@ export class AudioManager {
   private radioVoiceCueCount = 0;
   private prewarmQueue: SoundId[] = [];
   private prewarmTimerId: number | null = null;
+  private spatialOcclusionProbe:
+    | ((lx: number, ly: number, lz: number, sx: number, sy: number, sz: number) => boolean)
+    | null = null;
+  private occlusionBudgetWindowStartMs = 0;
+  private occlusionChecksInWindow = 0;
+  private lastOccludedSpatialCount = 0;
 
   constructor(
     private readonly resourceManager: ResourceManager,
@@ -288,6 +301,18 @@ export class AudioManager {
 
   public getRadioVoiceCueCount(): number {
     return this.radioVoiceCueCount;
+  }
+
+  public setSpatialOcclusionProbe(
+    probe:
+      | ((lx: number, ly: number, lz: number, sx: number, sy: number, sz: number) => boolean)
+      | null
+  ): void {
+    this.spatialOcclusionProbe = probe;
+  }
+
+  public getOccludedSpatialCount(): number {
+    return this.lastOccludedSpatialCount;
   }
 
   /**
@@ -710,12 +735,51 @@ export class AudioManager {
     panner.positionY.value = y;
     panner.positionZ.value = z;
 
+    // Budgeted wall-occlusion low-pass muffling (max 4 occlusion probes per 50ms window so large waves never spike CPU)
+    let isOccluded = false;
+    if (
+      this.spatialOcclusionProbe &&
+      dist > 3.5 &&
+      (WEAPON_SHOT_SOUNDS.has(id) || ORDNANCE_SOUNDS.has(id) || id === 'enemy_callout' || id === 'enemy_bark_flank' || id === 'enemy_bark_frag')
+    ) {
+      const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (nowMs - this.occlusionBudgetWindowStartMs >= 50) {
+        this.occlusionBudgetWindowStartMs = nowMs;
+        this.occlusionChecksInWindow = 0;
+      }
+      if (this.occlusionChecksInWindow < 4) {
+        this.occlusionChecksInWindow++;
+        isOccluded = this.spatialOcclusionProbe(
+          this.listenerPos.x,
+          this.listenerPos.y,
+          this.listenerPos.z,
+          x,
+          y,
+          z
+        );
+        if (isOccluded) {
+          this.lastOccludedSpatialCount++;
+        }
+      }
+    }
+
     // Distance-attenuated gain scaling so distant fire retains presence without overpowering player cues
     const distAtten = 1 / (1 + Math.max(0, dist - 5) * 0.035);
+    const occlusionGainMul = isOccluded ? 0.62 : 1.0;
     const gain = this.ctx.createGain();
-    gain.gain.value = volume * Math.max(0.12, Math.min(1, distAtten));
+    gain.gain.value = volume * Math.max(0.12, Math.min(1, distAtten)) * occlusionGainMul;
 
-    src.connect(panner);
+    let occlusionFilter: BiquadFilterNode | null = null;
+    if (isOccluded && typeof this.ctx.createBiquadFilter === 'function') {
+      occlusionFilter = this.ctx.createBiquadFilter();
+      occlusionFilter.type = 'lowpass';
+      occlusionFilter.frequency.value = ORDNANCE_SOUNDS.has(id) ? 620 : 950;
+      occlusionFilter.Q.value = 0.7;
+      src.connect(occlusionFilter);
+      occlusionFilter.connect(panner);
+    } else {
+      src.connect(panner);
+    }
     panner.connect(gain);
     gain.connect(this.sfxGain);
 
@@ -725,7 +789,8 @@ export class AudioManager {
       reverbSendGain = this.ctx.createGain();
       // Slightly higher wet/dry reflection ratio at medium-to-long distance
       const distWetBoost = Math.min(1.6, 1 + dist / 65);
-      reverbSendGain.gain.value = volume * sendAmt * distWetBoost * Math.max(0.2, distAtten);
+      reverbSendGain.gain.value =
+        volume * sendAmt * distWetBoost * Math.max(0.2, distAtten) * occlusionGainMul;
       panner.connect(reverbSendGain);
       reverbSendGain.connect(this.reverbNode);
     }
@@ -738,6 +803,13 @@ export class AudioManager {
         src.disconnect();
       } catch {
         // already disconnected
+      }
+      if (occlusionFilter) {
+        try {
+          occlusionFilter.disconnect();
+        } catch {
+          // already disconnected
+        }
       }
       try {
         panner.disconnect();
@@ -784,7 +856,11 @@ export class AudioManager {
     src.start(0);
   }
 
-  public playWeaponSound(weaponId: WeaponId, spatialPos?: { x: number; y: number; z: number }): void {
+  public playWeaponSound(
+    weaponId: WeaponId,
+    spatialPos?: { x: number; y: number; z: number },
+    suppressed = false
+  ): void {
     const map: Record<WeaponId, SoundId> = {
       pistol: 'shot_pistol',
       smg: 'shot_smg',
@@ -796,11 +872,13 @@ export class AudioManager {
       rocket_launcher: 'shot_rocket',
       guided_missile: 'shot_missile',
     };
-    const sid = map[weaponId];
+    const sid: SoundId = suppressed && weaponId !== 'rocket_launcher' && weaponId !== 'guided_missile' && weaponId !== 'grenade_launcher'
+      ? 'shot_suppressed'
+      : map[weaponId];
     if (spatialPos) {
-      this.playSpatial(sid, spatialPos.x, spatialPos.y, spatialPos.z, 6, 0.75);
+      this.playSpatial(sid, spatialPos.x, spatialPos.y, spatialPos.z, 6, suppressed ? 0.45 : 0.75);
     } else {
-      this.play2D(sid, 9, 0.82);
+      this.play2D(sid, 9, suppressed ? 0.68 : 0.82);
     }
   }
 

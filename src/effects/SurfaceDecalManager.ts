@@ -38,6 +38,7 @@ interface DecalSlotRecord {
   createdAtSec: number;
   lifetimeSec: number;
   culled: boolean;
+  destructibleId: string | null;
 }
 
 interface DecalKindPool {
@@ -278,10 +279,17 @@ export class SurfaceDecalManager {
     surface?: ImpactSurfaceMaterial;
     isExplosion?: boolean;
     radiusScale?: number;
+    destructibleId?: string | null;
   }): boolean {
     if (this.maxBudget <= 0) return false;
     const { targetMesh, point, normal, isExplosion = false, radiusScale = 1.0 } = params;
     if (!targetMesh.geometry || !targetMesh.geometry.attributes.position) return false;
+
+    const resolvedDestructibleId =
+      params.destructibleId ??
+      (typeof targetMesh.userData?.destructibleId === 'string'
+        ? targetMesh.userData.destructibleId
+        : null);
 
     const surface = params.surface ?? classifyImpactMaterialFromObject(targetMesh);
     const kind = decalKindForSurface(surface, isExplosion);
@@ -327,6 +335,7 @@ export class SurfaceDecalManager {
         createdAtSec: this.elapsedSec,
         lifetimeSec: DEFAULT_LIFETIME_BY_KIND[kind],
         culled: false,
+        destructibleId: resolvedDestructibleId,
       };
     } else {
       rec.globalSlot = slotIdx;
@@ -338,6 +347,7 @@ export class SurfaceDecalManager {
       rec.createdAtSec = this.elapsedSec;
       rec.lifetimeSec = DEFAULT_LIFETIME_BY_KIND[kind];
       rec.culled = false;
+      rec.destructibleId = resolvedDestructibleId;
     }
     rec.matrixElements.set(this.tmpMatrix.elements);
 
@@ -418,6 +428,25 @@ export class SurfaceDecalManager {
       materialCount: this.materials.size,
       activeDrawCalls,
     };
+  }
+
+  public clearDecalsForDestructible(destructibleId: string): number {
+    if (!destructibleId) return 0;
+    let removed = 0;
+    let idx = this.headSlot;
+    while (idx !== -1) {
+      const next = this.nextSlot[idx];
+      const rec = this.slots[idx];
+      if (rec && rec.destructibleId === destructibleId) {
+        this.removeSlot(idx);
+        removed++;
+      }
+      idx = next;
+    }
+    if (removed > 0) {
+      this.flushDirtyPools();
+    }
+    return removed;
   }
 
   public clearMissionDecals(): void {

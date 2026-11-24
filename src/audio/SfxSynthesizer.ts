@@ -14,6 +14,7 @@ export type SoundId =
   | 'shot_grenade_launcher'
   | 'shot_rocket'
   | 'shot_missile'
+  | 'shot_suppressed'
   | 'explosion'
   | 'explosion_heavy'
   | 'explosion_nuke'
@@ -26,8 +27,14 @@ export type SoundId =
   | 'nuke_alarm'
   | 'nuke_siren'
   | 'enemy_callout'
+  | 'enemy_bark_flank'
+  | 'enemy_bark_frag'
   | 'hit_marker'
   | 'headshot'
+  | 'armor_hit'
+  | 'armor_break'
+  | 'kill_confirm'
+  | 'bullet_crack'
   | 'reload'
   | 'mag_out'
   | 'mag_in'
@@ -68,6 +75,7 @@ export const WEAPON_SHOT_SOUNDS: ReadonlySet<SoundId> = new Set<SoundId>([
   'shot_grenade_launcher',
   'shot_rocket',
   'shot_missile',
+  'shot_suppressed',
 ]);
 
 export const ORDNANCE_SOUNDS: ReadonlySet<SoundId> = new Set<SoundId>([
@@ -94,6 +102,7 @@ const SOUND_DURATIONS: Record<SoundId, number> = {
   shot_grenade_launcher: 0.48,
   shot_rocket: 0.68,
   shot_missile: 0.72,
+  shot_suppressed: 0.19,
   explosion: 1.25,
   explosion_heavy: 2.1,
   explosion_nuke: 4.0,
@@ -106,8 +115,14 @@ const SOUND_DURATIONS: Record<SoundId, number> = {
   nuke_alarm: 0.9,
   nuke_siren: 0.9,
   enemy_callout: 0.24,
+  enemy_bark_flank: 0.32,
+  enemy_bark_frag: 0.36,
   hit_marker: 0.08,
   headshot: 0.14,
+  armor_hit: 0.12,
+  armor_break: 0.26,
+  kill_confirm: 0.16,
+  bullet_crack: 0.15,
   reload: 0.45,
   mag_out: 0.22,
   mag_in: 0.26,
@@ -181,7 +196,18 @@ export function synthesizeLayeredSound(ctx: AudioContext, id: SoundId): AudioBuf
     let sampleL = 0;
     let sampleR = 0;
 
-    if (WEAPON_SHOT_SOUNDS.has(id)) {
+    if (id === 'shot_suppressed') {
+      // Distinct baffled suppressor signature: tight pressurized gas puff + crisp mechanical bolt cycle
+      const mechClick =
+        (Math.sin(2 * Math.PI * 2950 * t) * 0.52 + nMono * 0.48) * Math.exp(-t * 115) * 0.48;
+      const baffleThump =
+        (Math.sin(2 * Math.PI * 195 * Math.exp(-t * 16) * t) * 0.62 + nMono * 0.38) *
+        Math.exp(-t * 44) *
+        0.52;
+      const gasHiss = (nL * 0.5 + nR * 0.5) * Math.exp(-t * 28) * 0.22;
+      sampleL = Math.tanh((mechClick + baffleThump + gasHiss * (0.9 + 0.1 * nL)) * 1.25);
+      sampleR = Math.tanh((mechClick + baffleThump + gasHiss * (0.9 + 0.1 * nR)) * 1.25);
+    } else if (WEAPON_SHOT_SOUNDS.has(id)) {
       // 4-Layer Weapon Synthesis:
       // Layer 1: Mechanical action transient (bolt/sear click & high-frequency metallic ring)
       const mechEnv =
@@ -359,16 +385,77 @@ export function synthesizeLayeredSound(ctx: AudioContext, id: SoundId): AudioBuf
       const f = t < 0.11 ? 310 : 255;
       sampleL = sampleR =
         (Math.sin(2 * Math.PI * f * t) * 0.55 + nMono * 0.35) * Math.exp(-t * 11) * 0.55;
+    } else if (id === 'enemy_bark_flank') {
+      // Two-syllable urgent radio-clipped flanking vocal cadence
+      const syll = t < 0.12 ? 1 : t > 0.15 && t < 0.29 ? 1 : 0;
+      const f0 = t < 0.14 ? 225 : 275;
+      const formant = Math.sin(2 * Math.PI * (f0 * 3.1) * t) * 0.35;
+      sampleL = sampleR =
+        (Math.sin(2 * Math.PI * f0 * t) * 0.5 + formant + nMono * 0.22) *
+        syll *
+        Math.exp(-t * 5.2) *
+        0.58;
+    } else if (id === 'enemy_bark_frag') {
+      // Sharp urgent 2-burst grenade flush warning cadence ("Frag out!")
+      const burst = t < 0.11 ? 1 : t > 0.14 && t < 0.33 ? 1 : 0;
+      const f0 = t < 0.12 ? 340 : 290;
+      const formant = Math.sin(2 * Math.PI * (f0 * 2.8) * t) * 0.42;
+      sampleL = sampleR =
+        Math.tanh((Math.sin(2 * Math.PI * f0 * t) * 0.55 + formant + nMono * 0.25) * 1.4) *
+        burst *
+        Math.exp(-t * 4.2) *
+        0.66;
     } else if (id === 'hit_marker') {
-      const env = Math.exp(-t * 45);
-      sampleL = sampleR = Math.sin(2 * Math.PI * 1850 * t) * env * 0.7;
+      // Crisp grounded flesh impact thud + subtle confirmation tick
+      const tick = Math.sin(2 * Math.PI * 1650 * t) * Math.exp(-t * 52) * 0.52;
+      const thud = Math.sin(2 * Math.PI * 175 * Math.exp(-t * 22) * t) * Math.exp(-t * 42) * 0.38;
+      sampleL = sampleR = tick + thud;
+    } else if (id === 'armor_hit') {
+      // Metallic steel/ceramic plate deflection ping
+      const env = Math.exp(-t * 34);
+      const clang =
+        Math.sin(2 * Math.PI * 1420 * t) * 0.48 +
+        Math.sin(2 * Math.PI * 3180 * t) * 0.36 +
+        nMono * Math.exp(-t * 95) * 0.32;
+      sampleL = sampleR = Math.tanh(clang * env * 1.35) * 0.72;
+    } else if (id === 'armor_break') {
+      // Ceramic/plate shatter + descending metallic clatter
+      const crack = nMono * Math.exp(-t * 26) * 0.58;
+      const ring1 = Math.sin(2 * Math.PI * (2650 - t * 3200) * t) * Math.exp(-t * 18) * 0.45;
+      const clatter =
+        t > 0.06
+          ? Math.sin(2 * Math.PI * 1120 * (t - 0.06)) * Math.exp(-(t - 0.06) * 24) * 0.42
+          : 0;
+      sampleL = Math.tanh((crack + ring1 + clatter + nL * 0.15 * Math.exp(-t * 16)) * 1.35) * 0.78;
+      sampleR = Math.tanh((crack + ring1 + clatter + nR * 0.15 * Math.exp(-t * 16)) * 1.35) * 0.78;
+    } else if (id === 'kill_confirm') {
+      // Grounded tight sub-bass thump + crisp tactical confirmation transient
+      const sub = Math.sin(2 * Math.PI * 118 * Math.exp(-t * 14) * t) * Math.exp(-t * 22) * 0.68;
+      const snap = Math.sin(2 * Math.PI * 2150 * t) * Math.exp(-t * 64) * 0.42;
+      sampleL = sampleR = Math.tanh((sub + snap) * 1.3) * 0.76;
+    } else if (id === 'bullet_crack') {
+      // Supersonic ballistic whip-crack (0-18ms) followed by brief Doppler air whiz
+      const whip =
+        t < 0.022
+          ? (nMono * 0.72 + Math.sin(2 * Math.PI * 4200 * Math.exp(-t * 60) * t) * 0.48) *
+            Math.exp(-t * 115) *
+            0.95
+          : 0;
+      const whizFreq = 1900 * Math.exp(-t * 14) + 320;
+      const whizEnv = Math.sin(Math.min(1, t / 0.15) * Math.PI) * Math.exp(-t * 16);
+      const whiz = (Math.sin(2 * Math.PI * whizFreq * t) * 0.35 + nMono * 0.45) * whizEnv * 0.52;
+      sampleL = Math.tanh((whip + whiz * (1 + 0.18 * nL)) * 1.35);
+      sampleR = Math.tanh((whip + whiz * (1 + 0.18 * nR)) * 1.35);
     } else if (id === 'headshot') {
+      // Crisp ballistic helmet ping + decisive upper harmonic
       const env = Math.exp(-t * 28);
       sampleL =
         sampleR =
-          (Math.sin(2 * Math.PI * 2400 * t) + 0.5 * Math.sin(2 * Math.PI * 3600 * t)) *
+          (Math.sin(2 * Math.PI * 2450 * t) * 0.65 +
+            Math.sin(2 * Math.PI * 3720 * t) * 0.45 +
+            Math.sin(2 * Math.PI * 155 * t) * Math.exp(-t * 36) * 0.4) *
           env *
-          0.75;
+          0.78;
     } else if (id === 'reload') {
       const c1 = t < 0.12 ? Math.sin(2 * Math.PI * 620 * t) * Math.exp(-t * 25) : 0;
       const c2 =

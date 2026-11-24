@@ -1458,6 +1458,20 @@ export class FriendlySquadManager {
     return this.activeFormation;
   }
 
+  getActiveOrderPingTarget(): { x: number; y: number; z: number; label: string } | null {
+    const intent = this.intentRouter.getSquadWideIntent();
+    if (!intent || !intent.hasWorldAnchor) return null;
+    if (intent.order === 'FOLLOW' || intent.order === 'REGROUP' || intent.order === 'EXIT_VEHICLE') {
+      return null;
+    }
+    return {
+      x: intent.anchorX,
+      y: intent.anchorY,
+      z: intent.anchorZ,
+      label: intent.label,
+    };
+  }
+
   buildMissionReports(): SquadOperatorMissionReport[] {
     return this.operators.map((op) => ({
       operatorId: op.id,

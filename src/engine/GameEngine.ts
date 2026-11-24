@@ -12,10 +12,11 @@ import {
 import { WEAPON_BY_ID } from '@/src/data/weapons';
 import { VFXPool } from '@/src/effects/VFXPool';
 import { AirCombatManager } from '@/src/gameplay/AirCombatManager';
-import { BallisticSolver } from '@/src/gameplay/BallisticSolver';
+import { BallisticSolver, SOLID_OBSTRUCTION_MASK } from '@/src/gameplay/BallisticSolver';
 import { CargoLiftManager, CargoLiftOccupantProxy } from '@/src/gameplay/CargoLiftManager';
 import { CombatDamageResolver } from '@/src/gameplay/CombatDamageResolver';
 import { CombatEngagementCoordinator } from '@/src/gameplay/CombatEngagementCoordinator';
+import { CombatFeedbackDirector } from '@/src/gameplay/CombatFeedbackDirector';
 import { CombatTelemetryRecorder } from '@/src/gameplay/CombatTelemetryRecorder';
 import { DiagnosticRulesEngine } from '@/src/gameplay/diagnostics/DiagnosticRulesEngine';
 import {
@@ -240,7 +241,21 @@ export class GameEngine {
   private _sustainmentCtxScratch: SustainmentContext | null = null;
   private readonly playtestTracker = new PlaytestExperienceTracker();
   private readonly hudPublisher = new HudSnapshotPublisher();
+  private readonly combatFeedback: CombatFeedbackDirector;
   private readonly combatDamage: CombatDamageResolver;
+  private missionLoadGeneration = 0;
+  private readonly _audioOcclusionRayHit: RayHit = {
+    hit: false,
+    distance: 0,
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    collider: null,
+  };
+  private readonly _perfProbeFramesMs: number[] = [];
   private readonly cargoLiftManager = new CargoLiftManager(this.collisionWorld);
   private readonly _liftOccupantScratch: CargoLiftOccupantProxy[] = [];
   private lastDuckedSubtitle: string | null = null;
@@ -438,8 +453,11 @@ export class GameEngine {
             point,
             normal,
             surface,
+            destructibleId: colliderId ?? null,
           });
         }
+        // Distinct bullet-impact acoustic alert at strike point (separate from weapon gunshot radius)
+        this.enemies.notifyBulletImpactSound(point, surface === 'metal' ? 14 : 9);
       },
     });
     this.enemies = new EnemyManager(
@@ -478,6 +496,34 @@ export class GameEngine {
       this.vfx,
       this.audio
     );
+    this.combatFeedback = new CombatFeedbackDirector(this.audio);
+    this.ballistics.onPlayerNearMiss = (passPoint, intensity) => {
+      this.combatFeedback.notifyNearMissPass(passPoint, intensity);
+    };
+    this.destruction.setOnEntityStateChanged((id) => {
+      this.surfaceDecals.clearDecalsForDestructible(id);
+    });
+    this.audio.setSpatialOcclusionProbe((lx, ly, lz, sx, sy, sz) => {
+      const dx = sx - lx;
+      const dy = sy - ly;
+      const dz = sz - lz;
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist < 2.2) return false;
+      const inv = 1 / dist;
+      return this.collisionWorld.sweptSegmentTest(
+        lx,
+        ly,
+        lz,
+        dx * inv,
+        dy * inv,
+        dz * inv,
+        Math.max(0.5, dist - 0.65),
+        SOLID_OBSTRUCTION_MASK,
+        this._audioOcclusionRayHit
+      );
+    });
+    this.registerOptInPerfProbe();
+
     this.combatDamage = new CombatDamageResolver({
       audio: this.audio,
       vfx: this.vfx,
@@ -493,6 +539,15 @@ export class GameEngine {
       sustainment: this.sustainment,
       monitor: this.monitor,
       telemetry: this.telemetry,
+      feedbackDirector: this.combatFeedback,
+      onEnemyImpactVfx: (point, hitKind) => {
+        if (hitKind === 'armor_deflect' || hitKind === 'armor_break') {
+          this.vfx.spawnImpact(point.x, point.y, point.z, 'metal');
+          this.battlefieldVfx.emitSurfaceImpact('metal', point, this.tmpUpVec);
+        } else {
+          this.vfx.spawnImpact(point.x, point.y, point.z, 'blood');
+        }
+      },
       getMissionDirector: () => this.missionDirector,
       getActiveScope: () => this.activeEntityScope ?? this.activeScope,
       getDifficulty: () => missionSelectionStore.getState().difficulty,
@@ -805,6 +860,9 @@ export class GameEngine {
     preferredWeapon?: WeaponId,
     deploymentMode?: DeploymentMode
   ): Promise<void> {
+    const myGen = ++this.missionLoadGeneration;
+    // Abort any prior in-flight load immediately before touching world state
+    this.activeAbortController?.abort();
     this.audio.unlock();
     this.input.clearAllInputs();
     this.flushPendingDefeatProgression();
@@ -839,6 +897,7 @@ export class GameEngine {
     this.activeMission = mission;
     this.activeAbortController = this.resourceManager.createAbortController(scope);
     const signal = this.activeAbortController.signal;
+    const isStale = () => signal.aborted || myGen !== this.missionLoadGeneration;
 
     try {
       const totalStages = 4;
@@ -847,25 +906,27 @@ export class GameEngine {
         this.missionLoader.resolvePopulator(mission.mapId),
         this.assetManager.prewarmPatternsOffThread(),
       ]);
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
 
       this.missionLoader.reportLoadStage(2, totalStages, 'Building Vertical Structures & Collision BVH');
       await this.populateWorldArchitectureStepAsync(mission, difficulty, scope, populator, signal);
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
 
       this.missionLoader.reportLoadStage(3, totalStages, 'Deploying Squad, Vehicles & Navigation Grid');
       this.populateEntitiesAndPlayerStep(mission, difficulty, entityScope, preferredWeapon);
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
       await this.missionLoader.yieldToFrame();
-      if (signal.aborted) throw new DOMException('Load cancelled', 'AbortError');
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
 
       this.missionLoader.reportLoadStage(4, totalStages, 'Compiling Shaders & Spatial Acoustics');
       this.lifecycle.send({ type: 'ASSETS_LOADED' });
-      this.finalizeMissionLoadStep(mission, difficulty);
+      this.finalizeMissionLoadStep(mission, difficulty, undefined, true);
+      await this.missionLoader.prewarmCombatShadersAsync(signal);
+      if (isStale()) throw new DOMException('Load cancelled', 'AbortError');
 
       this.lifecycle.send({ type: 'WORLD_READY' });
       this.audio.startMissionAmbienceAndMusic();
@@ -879,6 +940,10 @@ export class GameEngine {
       }
       this.publishHudSnapshot();
     } catch (err) {
+      // Never clobber a newer startMission() call if this load was superseded by a newer generation!
+      if (myGen !== this.missionLoadGeneration) {
+        return;
+      }
       if (err instanceof DOMException && err.name === 'AbortError') {
         this.unloadToMenu();
         return;
@@ -1342,6 +1407,7 @@ export class GameEngine {
   }
 
   cancelLoad(): void {
+    this.missionLoadGeneration++;
     this.activeAbortController?.abort();
     this.lifecycle.send({ type: 'CANCEL_LOAD' });
     this.unloadToMenu();
@@ -1568,7 +1634,7 @@ export class GameEngine {
     this.surfaceDecals.clearMissionDecals();
     this.missionEnhancement?.dispose();
     this.missionEnhancement = null;
-    this.pbrLibrary.dispose();
+    this.pbrLibrary.clearMissionMaterials();
     this.projectiles.resetAll();
     this.explosives.reset();
     this.enemies.clear();
@@ -1586,6 +1652,8 @@ export class GameEngine {
     this.collisionWorld.clear();
     this.chunkManager.clear(this.renderer.scene);
     this.coordinator.reset();
+    this.combatFeedback.reset();
+    this.renderer.setSuppressionVignette(0);
     this.telemetry.reset();
     this.rulesEngine.reset();
     this.hudPublisher.reset();
@@ -2287,6 +2355,7 @@ export class GameEngine {
       settings.graphics.fov,
       hadManualLookInput
     );
+    this.combatFeedback.flushFrameFeedback();
 
     // Dynamically lock convoy_intercept objective marker onto the nearest surviving convoy vehicle
     const nearestConvoyPos = this.vehicles.getNearestConvoyTargetPosition(
@@ -2927,6 +2996,7 @@ export class GameEngine {
       );
     }
     this.chunkManager.updateVisibility(this.renderer.camera, this.governor.getProfile().drawDistance);
+    this.renderer.setSuppressionVignette(this.player.suppressionLevel);
     const showVm = !inVehicle;
     this.renderer.renderFrame(showVm);
     this.monitor.recordPhase('render', performance.now() - t0);
@@ -2934,6 +3004,12 @@ export class GameEngine {
 
   private onFrameMeasured = (frameMs: number, rawDt = 1 / 60): void => {
     if (uiStore.getState().screen !== 'playing') return;
+    if (this._perfProbeFramesMs.length < 360) {
+      this._perfProbeFramesMs.push(frameMs);
+    } else {
+      this._perfProbeFramesMs.shift();
+      this._perfProbeFramesMs.push(frameMs);
+    }
     const dt = Number.isFinite(rawDt) ? Math.max(0.001, Math.min(0.05, rawDt)) : 1 / 60;
     this.graphicsCoordinator.recordFrameAndAdapt(frameMs, this.monitor, dt);
 
@@ -2948,6 +3024,49 @@ export class GameEngine {
       this.enemies.getActiveCount()
     );
   };
+
+  private registerOptInPerfProbe(): void {
+    if (typeof window === 'undefined' || !window.location?.search?.includes('perfProbe=1')) {
+      return;
+    }
+    const win = window as unknown as Record<string, unknown>;
+    win.__VANGUARD_PERF_PROBE__ = {
+      getSnapshot: () => {
+        const sorted = [...this._perfProbeFramesMs].sort((a, b) => a - b);
+        const pct = (p: number) =>
+          sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+        return {
+          screen: uiStore.getState().screen,
+          missionId: this.activeMission?.id ?? null,
+          sampleCount: sorted.length,
+          frameMsP50: Number(pct(0.5).toFixed(2)),
+          frameMsP95: Number(pct(0.95).toFixed(2)),
+          frameMsP99: Number(pct(0.99).toFixed(2)),
+          gpuFrameMs: this.renderer.getGpuFrameMs(),
+          drawInfo: this.renderer.getDrawInfo(),
+          postProcess: this.renderer.getPostProcessState(),
+          occludedSpatialAudioCount: this.audio.getOccludedSpatialCount(),
+          resourceCounts: (() => {
+            const snap = this.resourceManager.getSnapshot();
+            return {
+              shared: snap.sharedCount,
+              mission: snap.missionCount,
+              pooled: snap.pooledCount,
+              total: snap.sharedCount + snap.missionCount + snap.pooledCount,
+            };
+          })(),
+        };
+      },
+      resetSamples: () => {
+        this._perfProbeFramesMs.length = 0;
+      },
+      restartCheckpoint: () => {
+        this.restartCheckpoint();
+      },
+      startMission: (missionId: number, difficulty: Difficulty = 'normal') =>
+        this.startMission(missionId, difficulty),
+    };
+  }
 
   private computeTouchAimFrictionScale(): number {
     const inputSettings = settingsStore.getState().input;
@@ -3025,6 +3144,10 @@ export class GameEngine {
             priority: activeRadio.priority,
           }
         : null,
+      squadOrderTarget:
+        this.activeDeploymentMode === 'solo'
+          ? null
+          : this.friendlySquad.getActiveOrderPingTarget(),
     });
   };
 

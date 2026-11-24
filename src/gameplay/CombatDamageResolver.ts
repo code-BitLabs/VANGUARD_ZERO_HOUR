@@ -16,7 +16,9 @@ import { ExplosiveCallbacks, ExplosiveManager } from './ExplosiveManager';
 import { HealthPickupManager } from './HealthPickupManager';
 import { MissionDirector } from './MissionDirector';
 import { Difficulty } from '@/src/schemas/common.schema';
+import { HitKind } from '@/src/schemas/events.schema';
 import { WeaponId } from '@/src/schemas/weapon.schema';
+import { CombatFeedbackDirector } from './CombatFeedbackDirector';
 import { PlayerController } from './PlayerController';
 import { ExplosionEvent } from './ProjectileManager';
 import { SustainmentEconomyManager } from './SustainmentEconomyManager';
@@ -45,6 +47,8 @@ export interface CombatDamageDependencies {
   readonly onNonObjectiveDestructibleDestroyed?: (id: string, kind: string) => void;
   readonly onHostileVehicleDestroyed?: (veh: VehicleEntity) => void;
   readonly onExplosionVfx?: (x: number, y: number, z: number, radius: number) => void;
+  readonly feedbackDirector?: CombatFeedbackDirector;
+  readonly onEnemyImpactVfx?: (point: THREE.Vector3, hitKind: HitKind) => void;
 }
 
 /**
@@ -81,7 +85,17 @@ export class CombatDamageResolver {
   constructor(private readonly deps: CombatDamageDependencies) {
     this.cachedExplosiveCallbacks = {
       onEnemyKilled: (unit, weaponLabel) => {
-        gameSessionStore.getState().triggerHit(false, true, 120);
+        if (this.deps.feedbackDirector) {
+          this.deps.feedbackDirector.queueImpactFeedback({
+            hitKind: 'kill',
+            isHeadshot: false,
+            isKill: true,
+            armorBroken: false,
+            damage: 120,
+          });
+        } else {
+          gameSessionStore.getState().triggerHit(false, true, 120, 'kill');
+        }
         this.deps.telemetry?.recordPlayerKill(weaponLabel);
         this.deps.getMissionDirector()?.onEnemyKilled(false, 120);
         const scope = this.deps.getActiveScope();
@@ -105,7 +119,17 @@ export class CombatDamageResolver {
         });
       },
       onAirKilled: (unit, weaponLabel) => {
-        gameSessionStore.getState().triggerHit(false, true, 180);
+        if (this.deps.feedbackDirector) {
+          this.deps.feedbackDirector.queueImpactFeedback({
+            hitKind: 'kill',
+            isHeadshot: false,
+            isKill: true,
+            armorBroken: false,
+            damage: 180,
+          });
+        } else {
+          gameSessionStore.getState().triggerHit(false, true, 180, 'kill');
+        }
         this.deps.telemetry?.recordPlayerKill(weaponLabel);
         this.deps.getMissionDirector()?.onAirUnitKilled(350, unit.type);
         gameSessionStore.getState().pushKillFeed({
@@ -255,8 +279,31 @@ export class CombatDamageResolver {
     isHead: boolean,
     killed: boolean
   ): void => {
-    gameSessionStore.getState().triggerHit(isHead, killed, dmg);
-    this.deps.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
+    const hitKind: HitKind =
+      unit.lastHitKind ?? (killed ? 'kill' : isHead ? 'headshot' : 'flesh');
+    const armorBroken = Boolean(unit.lastArmorBroken);
+    const impactPos = isHead ? unit.headPosition : unit.bodyCenter;
+
+    if (this.deps.onEnemyImpactVfx) {
+      this.deps.onEnemyImpactVfx(impactPos, hitKind);
+    } else {
+      const vfxKind =
+        hitKind === 'armor_deflect' || hitKind === 'armor_break' ? 'metal' : 'blood';
+      this.deps.vfx.spawnImpact(impactPos.x, impactPos.y, impactPos.z, vfxKind);
+    }
+
+    if (this.deps.feedbackDirector) {
+      this.deps.feedbackDirector.queueImpactFeedback({
+        hitKind: killed && !isHead && !armorBroken ? 'kill' : hitKind,
+        isHeadshot: isHead,
+        isKill: killed,
+        armorBroken,
+        damage: dmg,
+      });
+    } else {
+      gameSessionStore.getState().triggerHit(isHead, killed, dmg, hitKind);
+      this.deps.audio.play2D(isHead ? 'headshot' : 'hit_marker', 8, 0.55);
+    }
     if (killed) {
       const activeWep = this.deps.weapons.getActiveState().config;
       const wepLabel = activeWep.shortName;
@@ -286,8 +333,18 @@ export class CombatDamageResolver {
   };
 
   readonly onAirHitscanHit = (unit: AirUnit, killed: boolean): void => {
-    gameSessionStore.getState().triggerHit(false, killed, 25);
-    this.deps.audio.play2D('hit_marker', 8, 0.5);
+    if (this.deps.feedbackDirector) {
+      this.deps.feedbackDirector.queueImpactFeedback({
+        hitKind: killed ? 'kill' : 'armor_deflect',
+        isHeadshot: false,
+        isKill: killed,
+        armorBroken: false,
+        damage: 25,
+      });
+    } else {
+      gameSessionStore.getState().triggerHit(false, killed, 25, killed ? 'kill' : 'armor_deflect');
+      this.deps.audio.play2D('hit_marker', 8, 0.5);
+    }
     if (killed) {
       const activeWep = this.deps.weapons.getActiveState().config;
       const wepLabel = activeWep.shortName;
@@ -306,8 +363,18 @@ export class CombatDamageResolver {
   };
 
   readonly onVehicleHitscanHit = (veh: VehicleEntity, killed: boolean): void => {
-    gameSessionStore.getState().triggerHit(false, killed, 20);
-    this.deps.audio.play2D('hit_marker', 7, 0.45);
+    if (this.deps.feedbackDirector) {
+      this.deps.feedbackDirector.queueImpactFeedback({
+        hitKind: killed ? 'kill' : 'armor_deflect',
+        isHeadshot: false,
+        isKill: killed,
+        armorBroken: false,
+        damage: 20,
+      });
+    } else {
+      gameSessionStore.getState().triggerHit(false, killed, 20, killed ? 'kill' : 'armor_deflect');
+      this.deps.audio.play2D('hit_marker', 7, 0.45);
+    }
     if (killed) {
       const activeWep = this.deps.weapons.getActiveState().config;
       const wepLabel = activeWep.shortName;

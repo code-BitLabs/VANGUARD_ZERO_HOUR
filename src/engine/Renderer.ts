@@ -41,6 +41,8 @@ export class EngineRenderer {
   public readonly isSoftwareGl: boolean;
 
   private composer: EffectComposer | null = null;
+  private worldRenderPass: RenderPass | null = null;
+  private viewModelRenderPass: RenderPass | null = null;
   private bloomEffect: BloomEffect | null = null;
   private smaaEffect: SMAAEffect | null = null;
   private vignetteEffect: VignetteEffect | null = null;
@@ -49,9 +51,13 @@ export class EngineRenderer {
   private smaaPass: EffectPass | null = null;
   private vignettePass: EffectPass | null = null;
   private envRT: THREE.WebGLRenderTarget | null = null;
+  private softwareEnvTex: THREE.DataTexture | null = null;
   private renderScale = 1.0;
   private maxDprCap = 2.0;
   private bloomEnabled = true;
+  private baseVignetteDarkness = 0.42;
+  private baseVignetteOffset = 0.35;
+  private suppressionVignetteLevel = 0;
   private width = 1280;
   private height = 720;
   private appliedWidth = 0;
@@ -60,6 +66,10 @@ export class EngineRenderer {
   private pendingResize = false;
   private lastDrawCalls = 0;
   private lastTriangles = 0;
+  private gpuTimerExt: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null = null;
+  private pendingGpuQueries: WebGLQuery[] = [];
+  private lastGpuFrameMs: number | null = null;
+  private precompileGeneration = 0;
   private backendPreference: RendererBackendOption = 'auto';
   private verticalSliceReport: RenderingVerticalSliceReport;
   private readonly maxMsaaSamples: number;
@@ -101,6 +111,15 @@ export class EngineRenderer {
         : String(gl.getParameter(gl.RENDERER) ?? '');
       if (this.renderer.capabilities.isWebGL2 && 'MAX_SAMPLES' in gl) {
         maxSamples = Number(gl.getParameter((gl as WebGL2RenderingContext).MAX_SAMPLES) ?? 0) || 0;
+      }
+      if (this.renderer.capabilities.isWebGL2) {
+        const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') as {
+          TIME_ELAPSED_EXT: number;
+          GPU_DISJOINT_EXT: number;
+        } | null;
+        if (timerExt && typeof timerExt.TIME_ELAPSED_EXT === 'number') {
+          this.gpuTimerExt = timerExt;
+        }
       }
     } catch {
       rendererString = '';
@@ -166,8 +185,9 @@ export class EngineRenderer {
     this.viewModelScene.add(vmRim);
 
     if (this.isSoftwareGl) {
-      // Compensate for skipped PMREM environment IBL on CPU software rasterizers
-      this.scene.add(new THREE.AmbientLight(0xdfe8f5, 0.56));
+      // Lightweight procedural studio equirectangular IBL + soft fill for metallic specular parity on software-GL
+      this.buildSoftwareStudioEnvironment();
+      this.scene.add(new THREE.AmbientLight(0xdfe8f5, 0.42));
     } else {
       this.buildEnvironment();
       this.buildPostProcessing();
@@ -175,9 +195,55 @@ export class EngineRenderer {
     this.bindContextEvents();
   }
 
+  private buildSoftwareStudioEnvironment(): void {
+    const w = 64;
+    const h = 32;
+    const data = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      const v = y / (h - 1); // 0 = bottom, 1 = top in Three.js DataTexture
+      for (let x = 0; x < w; x++) {
+        const u = x / (w - 1);
+        let r: number;
+        let g: number;
+        let b: number;
+        if (v > 0.52) {
+          // Cool tactical sky dome + subtle studio key lobe
+          const skyT = Math.min(1, (v - 0.52) / 0.48);
+          const keyLobe = Math.exp(-((u - 0.35) * (u - 0.35) * 18 + (v - 0.78) * (v - 0.78) * 18));
+          r = 148 + skyT * 52 + keyLobe * 55;
+          g = 166 + skyT * 48 + keyLobe * 48;
+          b = 192 + skyT * 42 + keyLobe * 32;
+        } else {
+          // Warm ground bounce for metallic underside readability
+          const gT = Math.min(1, v / 0.52);
+          r = 56 + gT * 62;
+          g = 60 + gT * 64;
+          b = 68 + gT * 66;
+        }
+        const idx = (y * w + x) * 4;
+        data[idx] = Math.min(255, Math.max(0, Math.round(r)));
+        data[idx + 1] = Math.min(255, Math.max(0, Math.round(g)));
+        data[idx + 2] = Math.min(255, Math.max(0, Math.round(b)));
+        data[idx + 3] = 255;
+      }
+    }
+    this.softwareEnvTex?.dispose();
+    const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    this.softwareEnvTex = tex;
+    this.scene.environment = tex;
+    this.viewModelScene.environment = tex;
+  }
 
   private buildEnvironment(): void {
-    if (this.isSoftwareGl) return;
+    if (this.isSoftwareGl) {
+      this.buildSoftwareStudioEnvironment();
+      return;
+    }
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const roomEnv = new RoomEnvironment();
     this.envRT?.dispose();
@@ -274,6 +340,8 @@ export class EngineRenderer {
   }
 
   private disposePostProcessing(): void {
+    this.worldRenderPass?.dispose();
+    this.viewModelRenderPass?.dispose();
     this.bloomPass?.dispose();
     this.smaaPass?.dispose();
     this.vignettePass?.dispose();
@@ -282,6 +350,8 @@ export class EngineRenderer {
     this.vignetteEffect?.dispose();
     this.toneMappingEffect?.dispose();
     this.composer?.dispose();
+    this.worldRenderPass = null;
+    this.viewModelRenderPass = null;
     this.bloomPass = null;
     this.smaaPass = null;
     this.vignettePass = null;
@@ -290,6 +360,8 @@ export class EngineRenderer {
     this.vignetteEffect = null;
     this.toneMappingEffect = null;
     this.composer = null;
+    // Direct fallback rendering owns ACESFilmicToneMapping when EffectComposer is not active
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
   }
 
   private buildPostProcessing(explicitConfig?: ResolvedAntiAliasingConfig): void {
@@ -316,6 +388,7 @@ export class EngineRenderer {
       });
     }
 
+    // World pass renders linear HDR scene into multisampled offscreen inputBuffer (no renderer tone mapping).
     const renderPass = new RenderPass(this.scene, this.camera);
     const bloom = new BloomEffect({
       intensity: 0.36,
@@ -325,8 +398,8 @@ export class EngineRenderer {
     });
     const vignette = new VignetteEffect({
       eskil: false,
-      offset: 0.35,
-      darkness: 0.42,
+      offset: this.baseVignetteOffset,
+      darkness: this.baseVignetteDarkness,
     });
     const toneMapping = new ToneMappingEffect({
       mode: ToneMappingMode.ACES_FILMIC,
@@ -334,11 +407,24 @@ export class EngineRenderer {
 
     const bloomPass = new EffectPass(this.camera, bloom);
     bloomPass.enabled = this.bloomEnabled;
+
+    // ViewModel pass runs AFTER world Bloom (so optics/rails never bloom-wash) and BEFORE ToneMapping/SMAA.
+    // Clears depth ONLY inside the composer's multisampled inputBuffer so the weapon inherits full MSAA/SMAA,
+    // never clips into world walls, and receives single-pass ACES Filmic tone mapping alongside the world.
+    const viewModelPass = new RenderPass(this.viewModelScene, this.viewModelCamera);
+    viewModelPass.clearPass.setClearFlags(false, true, false);
+    viewModelPass.clearPass.enabled = true;
+    viewModelPass.ignoreBackground = true;
+    viewModelPass.skipShadowMapUpdate = true;
+    viewModelPass.needsSwap = false;
+    viewModelPass.enabled = true;
+
     const vignettePass = new EffectPass(this.camera, vignette, toneMapping);
     vignettePass.enabled = true;
 
     composer.addPass(renderPass);
     composer.addPass(bloomPass);
+    composer.addPass(viewModelPass);
     composer.addPass(vignettePass);
 
     let smaaEffect: SMAAEffect | null = null;
@@ -356,7 +442,11 @@ export class EngineRenderer {
     }
 
     composer.setSize(this.width, this.height);
+    // ToneMappingEffect applies ACES_FILMIC once in vignettePass; Three.js still uploads toneMappingExposure.
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.composer = composer;
+    this.worldRenderPass = renderPass;
+    this.viewModelRenderPass = viewModelPass;
     this.bloomEffect = bloom;
     this.smaaEffect = smaaEffect;
     this.vignetteEffect = vignette;
@@ -366,6 +456,21 @@ export class EngineRenderer {
     this.vignettePass = vignettePass;
     this.activeAaConfig = config;
     this.pendingAaRebuild = false;
+    this.applySuppressionVignetteUniforms();
+  }
+
+  public setSuppressionVignette(level: number): void {
+    const clamped = Math.max(0, Math.min(1, Number.isFinite(level) ? level : 0));
+    if (Math.abs(clamped - this.suppressionVignetteLevel) < 0.005) return;
+    this.suppressionVignetteLevel = clamped;
+    this.applySuppressionVignetteUniforms();
+  }
+
+  private applySuppressionVignetteUniforms(): void {
+    if (!this.vignetteEffect) return;
+    // Restrained peripheral tension only: center reticle stays completely clear
+    this.vignetteEffect.darkness = this.baseVignetteDarkness + this.suppressionVignetteLevel * 0.24;
+    this.vignetteEffect.offset = Math.max(0.24, this.baseVignetteOffset - this.suppressionVignetteLevel * 0.09);
   }
 
   private bindContextEvents(): void {
@@ -609,6 +714,15 @@ export class EngineRenderer {
   }
 
   public registerSceneShadowsAndPrecompile(): void {
+    void this.registerSceneShadowsAndPrecompileAsync();
+  }
+
+  public async registerSceneShadowsAndPrecompileAsync(
+    signal?: AbortSignal,
+    timeoutMs = 1500
+  ): Promise<void> {
+    if (signal?.aborted) return;
+    const gen = ++this.precompileGeneration;
     if (this.pendingAaRebuild && !this.isSoftwareGl) {
       this.flushPendingAntiAliasingTransition();
     }
@@ -620,27 +734,65 @@ export class EngineRenderer {
     this.viewModelScene.updateMatrixWorld();
     if (this.isSoftwareGl) return;
     try {
-      if (!this.renderer.getContext().isContextLost()) {
-        const asyncCompiler = (
-          this.renderer as THREE.WebGLRenderer & {
-            compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera) => Promise<unknown>;
-          }
-        ).compileAsync;
-        if (typeof asyncCompiler === 'function') {
-          void Promise.all([
-            asyncCompiler.call(this.renderer, this.scene, this.camera),
-            asyncCompiler.call(this.renderer, this.viewModelScene, this.viewModelCamera),
-          ]).catch(() => {
-            // Fallback silently if context lost during async compile
-          });
-        } else {
-          this.renderer.compile(this.scene, this.camera);
-          this.renderer.compile(this.viewModelScene, this.viewModelCamera);
+      if (this.renderer.getContext().isContextLost() || signal?.aborted || gen !== this.precompileGeneration) {
+        return;
+      }
+      const asyncCompiler = (
+        this.renderer as THREE.WebGLRenderer & {
+          compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera) => Promise<unknown>;
         }
+      ).compileAsync;
+      if (typeof asyncCompiler === 'function') {
+        const compilePromise = Promise.all([
+          asyncCompiler.call(this.renderer, this.scene, this.camera),
+          asyncCompiler.call(this.renderer, this.viewModelScene, this.viewModelCamera),
+        ]).then(() => undefined);
+        const timeoutPromise = new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, timeoutMs);
+          if (signal) {
+            const onAbort = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+          }
+        });
+        await Promise.race([compilePromise, timeoutPromise]);
+      } else {
+        this.renderer.compile(this.scene, this.camera);
+        this.renderer.compile(this.viewModelScene, this.viewModelCamera);
       }
     } catch {
-      // Ignore precompile errors in mocked/headless test contexts
+      // Ignore precompile errors in mocked/headless or context-lost situations
     }
+  }
+
+  private pollPendingGpuTimers(): void {
+    if (!this.gpuTimerExt || this.pendingGpuQueries.length === 0) return;
+    const gl = this.renderer.getContext() as WebGL2RenderingContext;
+    if (!gl || gl.isContextLost()) return;
+    try {
+      const disjoint = Boolean(gl.getParameter(this.gpuTimerExt.GPU_DISJOINT_EXT));
+      while (this.pendingGpuQueries.length > 0) {
+        const q = this.pendingGpuQueries[0];
+        const available = Boolean(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE));
+        if (!available) break;
+        this.pendingGpuQueries.shift();
+        if (!disjoint) {
+          const ns = Number(gl.getQueryParameter(q, gl.QUERY_RESULT));
+          if (Number.isFinite(ns) && ns > 0) {
+            this.lastGpuFrameMs = Number((ns / 1_000_000).toFixed(3));
+          }
+        }
+        gl.deleteQuery(q);
+      }
+    } catch {
+      this.pendingGpuQueries.length = 0;
+    }
+  }
+
+  public getGpuFrameMs(): number | null {
+    return this.lastGpuFrameMs;
   }
 
   renderFrame(renderViewModel: boolean): void {
@@ -651,23 +803,49 @@ export class EngineRenderer {
       this.resize();
     }
 
+    this.pollPendingGpuTimers();
+
     if (this.shadowCascades?.isCsmActive()) {
       this.shadowCascades.update();
     }
+
+    let activeQuery: WebGLQuery | null = null;
+    const gl = this.gpuTimerExt ? (this.renderer.getContext() as WebGL2RenderingContext) : null;
+    if (this.gpuTimerExt && gl && this.pendingGpuQueries.length < 4) {
+      try {
+        activeQuery = gl.createQuery();
+        if (activeQuery) {
+          gl.beginQuery(this.gpuTimerExt.TIME_ELAPSED_EXT, activeQuery);
+        }
+      } catch {
+        activeQuery = null;
+      }
+    }
+
     this.renderer.info.reset();
     if (this.composer && this.vignettePass) {
-      // RenderPass inside EffectComposer clears its own offscreen buffer; skipping redundant screen clear avoids a wasted pass
+      // ViewModel renders inside EffectComposer (after Bloom, before ToneMapping/SMAA) so it inherits full AA and single-pass ACES tone mapping.
+      if (this.viewModelRenderPass) {
+        this.viewModelRenderPass.enabled = renderViewModel;
+      }
       this.composer.render();
     } else {
       this.renderer.setRenderTarget(null);
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
+      if (renderViewModel) {
+        this.renderer.clearDepth();
+        this.renderer.render(this.viewModelScene, this.viewModelCamera);
+      }
     }
 
-    if (renderViewModel) {
-      this.renderer.setRenderTarget(null);
-      this.renderer.clearDepth();
-      this.renderer.render(this.viewModelScene, this.viewModelCamera);
+    if (activeQuery && this.gpuTimerExt && gl) {
+      try {
+        gl.endQuery(this.gpuTimerExt.TIME_ELAPSED_EXT);
+        this.pendingGpuQueries.push(activeQuery);
+      } catch {
+        // Ignore query errors on driver quirks
+      }
     }
 
     this.lastDrawCalls = this.renderer.info.render.calls;
@@ -701,9 +879,13 @@ export class EngineRenderer {
     smaaEnabled: boolean;
     aaMode: string;
     multisampling: number;
+    viewModelInComposer: boolean;
+    singlePassToneMapping: boolean;
+    gpuFrameMs: number | null;
   } {
+    const composerActive = Boolean(this.composer && this.vignettePass);
     return {
-      composerActive: Boolean(this.composer && this.vignettePass),
+      composerActive,
       bloomEnabled: this.bloomEnabled,
       bloomPassEnabled: Boolean(this.bloomPass?.enabled),
       vignetteEnabled: Boolean(this.vignettePass?.enabled && this.vignetteEffect),
@@ -711,10 +893,25 @@ export class EngineRenderer {
       smaaEnabled: Boolean(this.smaaPass?.enabled && this.smaaEffect),
       aaMode: this.activeAaConfig?.activeMode ?? 'off',
       multisampling: this.activeAaConfig?.multisampling ?? 0,
+      viewModelInComposer: composerActive && Boolean(this.viewModelRenderPass),
+      singlePassToneMapping: composerActive
+        ? this.renderer.toneMapping === THREE.NoToneMapping && Boolean(this.toneMappingEffect)
+        : this.renderer.toneMapping === THREE.ACESFilmicToneMapping,
+      gpuFrameMs: this.lastGpuFrameMs,
     };
   }
 
   dispose(): void {
+    this.precompileGeneration++;
+    if (this.pendingGpuQueries.length > 0) {
+      try {
+        const gl = this.renderer.getContext() as WebGL2RenderingContext;
+        for (const q of this.pendingGpuQueries) gl.deleteQuery(q);
+      } catch {
+        // Ignore on already-lost context
+      }
+      this.pendingGpuQueries.length = 0;
+    }
     this.shadowCascades?.dispose();
     this.lightBudgetManager?.dispose();
     this.scene.environment = null;
@@ -722,6 +919,8 @@ export class EngineRenderer {
     this.disposePostProcessing();
     this.envRT?.dispose();
     this.envRT = null;
+    this.softwareEnvTex?.dispose();
+    this.softwareEnvTex = null;
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode === this.container) {
       this.container.removeChild(this.renderer.domElement);

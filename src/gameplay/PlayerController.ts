@@ -17,6 +17,7 @@ import {
   PlayerHitZone,
 } from '@/src/schemas/combat.schema';
 import { gameSessionStore } from '@/src/stores/gameSessionStore';
+import type { WeaponRecoilSignature } from './CombatFeedbackDirector';
 import type { PlayerMovementTelemetry } from './CombatTelemetryRecorder';
 
 export interface PlayerHitboxVolumes {
@@ -82,6 +83,15 @@ export class PlayerController {
   private damageFlash = 0;
   private recoilPitchOffset = 0;
   private recoilYawOffset = 0;
+  private recoilPitchVel = 0;
+  private recoilYawVel = 0;
+  private recoilStiffness = 175;
+  private recoilDamping = 22;
+  private cameraRollKick = 0;
+  private cameraFovKick = 0;
+  private recoilRollSign = 1;
+  private burstShotIndex = 0;
+  private timeSinceLastShot = 10;
   private crouchBlend = 0;
   private lastShotIdApplied = -1;
   private appliedExplosionIds = new Set<number>();
@@ -281,6 +291,14 @@ export class PlayerController {
     this.trauma = 0;
     this.recoilPitchOffset = 0;
     this.recoilYawOffset = 0;
+    this.recoilPitchVel = 0;
+    this.recoilYawVel = 0;
+    this.recoilStiffness = 175;
+    this.recoilDamping = 22;
+    this.cameraRollKick = 0;
+    this.cameraFovKick = 0;
+    this.burstShotIndex = 0;
+    this.timeSinceLastShot = 10;
     this.lastShotIdApplied = -1;
     this.appliedExplosionIds.clear();
     this.airTimeSec = 0;
@@ -346,11 +364,77 @@ export class PlayerController {
     return Math.max(0, this.grenades - before);
   }
 
-  addRecoilKick(pitchKick: number, yawKick: number): void {
+  addRecoilKick(
+    pitchKick: number,
+    yawKick: number,
+    signature?: WeaponRecoilSignature,
+    isAds = false,
+    motionScale = 1.0
+  ): void {
     const stanceScale = this.isCrouching ? 0.78 : 1.0;
-    this.recoilPitchOffset = Math.min(0.28, this.recoilPitchOffset + pitchKick * stanceScale);
-    this.recoilYawOffset += yawKick * stanceScale;
-    this.trauma = Math.min(1, this.trauma + pitchKick * stanceScale * 3.5);
+    const clampedMotion = Math.max(0, Math.min(1.2, motionScale));
+    this.burstShotIndex = this.timeSinceLastShot < 0.34 ? this.burstShotIndex + 1 : 0;
+    this.timeSinceLastShot = 0;
+
+    const firstShotMult =
+      this.burstShotIndex === 0 && signature ? signature.firstShotMultiplier : 1.0;
+    const verticalBias = signature ? signature.verticalClimbBias : 1.0;
+
+    const pitchImpulse = pitchKick * stanceScale * firstShotMult * verticalBias;
+    const yawImpulse = yawKick * stanceScale;
+
+    this.recoilStiffness =
+      (signature ? signature.springStiffness : 175) +
+      (isAds ? (signature ? signature.adsStiffnessBonus : 40) : 0);
+    this.recoilDamping =
+      (signature ? signature.springDamping : 22) * (this.isCrouching ? 1.15 : 1.0);
+
+    // Immediate mechanical kick + upward velocity impulse solved analytically for 60Hz/144Hz parity
+    this.recoilPitchOffset = Math.min(0.32, this.recoilPitchOffset + pitchImpulse * 0.52);
+    this.recoilPitchVel = Math.min(3.8, this.recoilPitchVel + pitchImpulse * 8.2);
+    this.recoilYawOffset = THREE.MathUtils.clamp(
+      this.recoilYawOffset + yawImpulse * 0.55,
+      -0.22,
+      0.22
+    );
+    this.recoilYawVel = THREE.MathUtils.clamp(
+      this.recoilYawVel + yawImpulse * 7.2,
+      -3.0,
+      3.0
+    );
+
+    if (clampedMotion > 0) {
+      this.recoilRollSign = -this.recoilRollSign;
+      const rollMag = (signature ? signature.rollKickRad : 0.008) * (isAds ? 0.55 : 1.0);
+      this.cameraRollKick = THREE.MathUtils.clamp(
+        this.cameraRollKick + rollMag * this.recoilRollSign * clampedMotion,
+        -0.06,
+        0.06
+      );
+      const fovMag = (signature ? signature.fovPunchDeg : 0.5) * (isAds ? 0.45 : 1.0);
+      this.cameraFovKick = Math.min(3.2, this.cameraFovKick + fovMag * clampedMotion);
+      this.trauma = Math.min(1, this.trauma + pitchImpulse * 2.8 * clampedMotion);
+    }
+  }
+
+  getRecoilState(): {
+    pitchOffset: number;
+    yawOffset: number;
+    pitchVel: number;
+    yawVel: number;
+    rollKick: number;
+    fovKick: number;
+    burstShotIndex: number;
+  } {
+    return {
+      pitchOffset: this.recoilPitchOffset,
+      yawOffset: this.recoilYawOffset,
+      pitchVel: this.recoilPitchVel,
+      yawVel: this.recoilYawVel,
+      rollKick: this.cameraRollKick,
+      fovKick: this.cameraFovKick,
+      burstShotIndex: this.burstShotIndex,
+    };
   }
 
   addCameraShake(amount: number): void {
@@ -607,7 +691,65 @@ export class PlayerController {
     const { yawDelta, pitchDelta } = input.consumeLookDelta(isAds, this.touchAimFrictionScale, dt);
     if (!Number.isFinite(yawDelta) || !Number.isFinite(pitchDelta)) return;
     this.yaw -= yawDelta;
-    this.pitch = Math.max(-1.42, Math.min(1.42, this.pitch - pitchDelta));
+
+    // Tactical recoil pull-down compensation: pulling downward while muzzle has climbed
+    // absorbs positive recoilPitchOffset first instead of over-pulling camera pitch into the floor.
+    let remainingPitchDelta = pitchDelta;
+    if (remainingPitchDelta > 0 && this.recoilPitchOffset > 0) {
+      const absorbed = Math.min(this.recoilPitchOffset, remainingPitchDelta);
+      this.recoilPitchOffset -= absorbed;
+      if (this.recoilPitchVel > 0) {
+        this.recoilPitchVel = Math.max(0, this.recoilPitchVel - absorbed * 18);
+      }
+      remainingPitchDelta -= absorbed;
+    }
+    this.pitch = Math.max(-1.42, Math.min(1.42, this.pitch - remainingPitchDelta));
+  }
+
+  /**
+   * Exact analytical solution for a damped harmonic oscillator (x'' + c*x' + k*x = 0).
+   * Guarantees frame-rate-invariant recoil recovery across 60Hz, 120Hz, and 144Hz monitors.
+   */
+  private stepAnalyticalSpring(
+    x: number,
+    v: number,
+    stiffness: number,
+    damping: number,
+    dt: number
+  ): [number, number] {
+    if (Math.abs(x) < 1e-5 && Math.abs(v) < 1e-5) {
+      return [0, 0];
+    }
+    const gamma = damping * 0.5;
+    const disc = gamma * gamma - stiffness;
+    let nx: number;
+    let nv: number;
+    if (disc < -1e-6) {
+      const wd = Math.sqrt(-disc);
+      const decay = Math.exp(-gamma * dt);
+      const cos = Math.cos(wd * dt);
+      const sin = Math.sin(wd * dt);
+      nx = decay * (x * cos + ((v + gamma * x) / wd) * sin);
+      nv = decay * (v * cos - ((gamma * v + stiffness * x) / wd) * sin);
+    } else if (Math.abs(disc) <= 1e-6) {
+      const decay = Math.exp(-gamma * dt);
+      nx = decay * (x + (v + gamma * x) * dt);
+      nv = decay * (v - (gamma * v + stiffness * x) * dt);
+    } else {
+      const s = Math.sqrt(disc);
+      const r1 = -gamma + s;
+      const r2 = -gamma - s;
+      const c1 = (v - r2 * x) / (r1 - r2);
+      const c2 = x - c1;
+      const e1 = Math.exp(r1 * dt);
+      const e2 = Math.exp(r2 * dt);
+      nx = c1 * e1 + c2 * e2;
+      nv = c1 * r1 * e1 + c2 * r2 * e2;
+    }
+    if (Math.abs(nx) < 1e-5 && Math.abs(nv) < 1e-5) {
+      return [0, 0];
+    }
+    return [nx, nv];
   }
 
   getLandingSpringOffset(): number {
@@ -1016,18 +1158,34 @@ export class PlayerController {
     // Look delta
     this.applyLookInput(input, isAds, dt);
 
-    // Smooth recoil recovery (crouching settles faster) & second-order landing spring
-    const recoilRecoveryRate = this.isCrouching ? 11.2 : 9.0;
-    this.recoilPitchOffset = THREE.MathUtils.lerp(
+    // Exact analytical damped recoil spring (frame-rate invariant across 60Hz/120Hz/144Hz)
+    this.timeSinceLastShot = Math.min(10, this.timeSinceLastShot + dt);
+    const [nextPitch, nextPitchVel] = this.stepAnalyticalSpring(
       this.recoilPitchOffset,
-      0,
-      Math.min(1, dt * recoilRecoveryRate)
+      this.recoilPitchVel,
+      this.recoilStiffness,
+      this.recoilDamping,
+      dt
     );
-    this.recoilYawOffset = THREE.MathUtils.lerp(
+    this.recoilPitchOffset = THREE.MathUtils.clamp(nextPitch, -0.06, 0.34);
+    this.recoilPitchVel = nextPitchVel;
+
+    const [nextYaw, nextYawVel] = this.stepAnalyticalSpring(
       this.recoilYawOffset,
-      0,
-      Math.min(1, dt * recoilRecoveryRate)
+      this.recoilYawVel,
+      this.recoilStiffness * 1.12,
+      this.recoilDamping * 1.15,
+      dt
     );
+    this.recoilYawOffset = THREE.MathUtils.clamp(nextYaw, -0.24, 0.24);
+    this.recoilYawVel = nextYawVel;
+
+    const kickDecay = Math.exp(-16 * dt);
+    this.cameraRollKick *= kickDecay;
+    if (Math.abs(this.cameraRollKick) < 1e-4) this.cameraRollKick = 0;
+    this.cameraFovKick *= Math.exp(-18 * dt);
+    if (Math.abs(this.cameraFovKick) < 1e-3) this.cameraFovKick = 0;
+
     this.tickLandingSpring(dt);
 
     if (!this.isVaulting) {
@@ -1364,7 +1522,7 @@ export class PlayerController {
       this._interpPos.z
     );
 
-    const rollOffset = (this.isSliding ? -0.05 : 0) + this.vaultRollOffset;
+    const rollOffset = (this.isSliding ? -0.05 : 0) + this.vaultRollOffset + this.cameraRollKick;
     this._camEuler.set(
       Math.max(-1.45, Math.min(1.45, this.pitch + this.recoilPitchOffset + this.vaultPitchOffset)),
       this.yaw + this.recoilYawOffset,
@@ -1373,13 +1531,14 @@ export class PlayerController {
     );
     camera.quaternion.setFromEuler(this._camEuler);
 
-    const targetFov = isAds
+    const baseTargetFov = isAds
       ? adsFov
       : this.isVaulting
         ? Math.min(106, baseFov + 3)
         : this.isSprinting
           ? Math.min(106, baseFov + 5)
           : baseFov;
+    const targetFov = Math.min(108, baseTargetFov + this.cameraFovKick);
     const fovBlend = 1 - Math.exp(-14 * safeDt);
     const nextFov = THREE.MathUtils.lerp(camera.fov, targetFov, fovBlend);
     if (Math.abs(nextFov - camera.fov) > 0.04) {

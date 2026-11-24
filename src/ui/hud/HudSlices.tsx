@@ -56,21 +56,36 @@ function calcObjectiveDistance(o: ObjectiveItem, playerX: number, playerZ: numbe
 }
 
 export const HudLowHealthVignette = React.memo(function HudLowHealthVignette() {
-  const { health, maxHealth } = useGameSessionStore(
+  const { health, maxHealth, suppressionLevel } = useGameSessionStore(
     useShallow((s) => ({
       health: s.hud.health,
       maxHealth: s.hud.maxHealth,
+      suppressionLevel: s.hud.suppressionLevel ?? 0,
     }))
   );
   const criticalHp = health > 0 && health / Math.max(1, maxHealth) < 0.35;
-  if (!criticalHp) return null;
+  const suppressed = suppressionLevel > 0.08;
+  if (!criticalHp && !suppressed) return null;
   return (
-    <div
-      className="absolute inset-0 transition-opacity duration-200"
-      style={{
-        boxShadow: `inset 0 0 120px rgba(220, 38, 38, ${Math.min(0.65, 0.62 - (health / Math.max(1, maxHealth)) * 0.9)})`,
-      }}
-    />
+    <>
+      {suppressed && (
+        <div
+          data-testid="hud-suppression-vignette"
+          className="absolute inset-0 pointer-events-none transition-opacity duration-150"
+          style={{
+            boxShadow: `inset 0 0 ${Math.round(90 + suppressionLevel * 75)}px rgba(6, 10, 16, ${Math.min(0.42, suppressionLevel * 0.36).toFixed(2)})`,
+          }}
+        />
+      )}
+      {criticalHp && (
+        <div
+          className="absolute inset-0 pointer-events-none transition-opacity duration-200"
+          style={{
+            boxShadow: `inset 0 0 120px rgba(220, 38, 38, ${Math.min(0.65, 0.62 - (health / Math.max(1, maxHealth)) * 0.9)})`,
+          }}
+        />
+      )}
+    </>
   );
 });
 
@@ -79,56 +94,85 @@ export const HudWorldObjectiveMarker = React.memo(function HudWorldObjectiveMark
 }: {
   downedActive: boolean;
 }) {
-  const { playerX, playerZ, objectives } = useGameSessionStore(
+  const { playerX, playerZ, objectives, squadOrderPing } = useGameSessionStore(
     useShallow((s) => ({
       playerX: Math.round(s.hud.playerX * 2) * 0.5,
       playerZ: Math.round(s.hud.playerZ * 2) * 0.5,
       objectives: s.hud.objectives,
+      squadOrderPing: s.hud.squadOrderPing ?? null,
     }))
   );
 
   if (downedActive) return null;
   const activeObjective = pickActiveObjective(objectives);
-  if (
-    !activeObjective ||
-    activeObjective.completed ||
-    !activeObjective.markerPos ||
-    activeObjective.screenX === undefined ||
-    activeObjective.screenY === undefined
-  ) {
+  const showObj =
+    Boolean(activeObjective) &&
+    !activeObjective!.completed &&
+    Boolean(activeObjective!.markerPos) &&
+    activeObjective!.screenX !== undefined &&
+    activeObjective!.screenY !== undefined;
+
+  if (!showObj && !squadOrderPing) {
     return null;
   }
 
   return (
-    <div
-      data-testid="hud-world-objective-marker"
-      className="absolute inset-0 z-15 pointer-events-none transition-transform duration-75 will-change-transform"
-      style={{
-        transform: `translate3d(${Math.round(activeObjective.screenX * 1000) / 10}%, ${Math.round(activeObjective.screenY * 1000) / 10}%, 0)`,
-      }}
-    >
-      <div className="inline-flex flex-col items-center -translate-x-1/2 -translate-y-1/2">
+    <>
+      {showObj && activeObjective && (
         <div
-          className={`w-3.5 h-3.5 rotate-45 border-2 flex items-center justify-center shadow-[0_0_8px_rgba(0,0,0,0.9)] ${
-            activeObjective.onScreen
-              ? 'bg-amber-400/90 border-zinc-950'
-              : 'bg-amber-500/50 border-amber-300'
-          }`}
+          data-testid="hud-world-objective-marker"
+          className="absolute inset-0 z-15 pointer-events-none transition-transform duration-75 will-change-transform"
+          style={{
+            transform: `translate3d(${Math.round(activeObjective.screenX! * 1000) / 10}%, ${Math.round(activeObjective.screenY! * 1000) / 10}%, 0)`,
+          }}
         >
-          <div className="w-1 h-1 bg-zinc-950 rounded-full" />
+          <div className="inline-flex flex-col items-center -translate-x-1/2 -translate-y-1/2">
+            <div
+              className={`w-3.5 h-3.5 rotate-45 border-2 flex items-center justify-center shadow-[0_0_8px_rgba(0,0,0,0.9)] ${
+                activeObjective.onScreen
+                  ? 'bg-amber-400/90 border-zinc-950'
+                  : 'bg-amber-500/50 border-amber-300'
+              }`}
+            >
+              <div className="w-1 h-1 bg-zinc-950 rounded-full" />
+            </div>
+            <div className="mt-1 px-1.5 py-0.5 bg-[#0B0E11]/88 border border-amber-400/70 rounded-xs font-mono text-[9px] text-amber-300 whitespace-nowrap shadow-md">
+              OBJ · {calcObjectiveDistance(activeObjective, playerX, playerZ) ?? 0}M
+              {Math.abs(activeObjective.elevationDeltaM ?? 0) >= 2 && (
+                <span className="ml-1 text-cyan-300 font-bold">
+                  {(activeObjective.elevationDeltaM ?? 0) > 0
+                    ? `▲+${activeObjective.elevationDeltaM}M`
+                    : `▼${activeObjective.elevationDeltaM}M`}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-        <div className="mt-1 px-1.5 py-0.5 bg-[#0B0E11]/88 border border-amber-400/70 rounded-xs font-mono text-[9px] text-amber-300 whitespace-nowrap shadow-md">
-          OBJ · {calcObjectiveDistance(activeObjective, playerX, playerZ) ?? 0}M
-          {Math.abs(activeObjective.elevationDeltaM ?? 0) >= 2 && (
-            <span className="ml-1 text-cyan-300 font-bold">
-              {(activeObjective.elevationDeltaM ?? 0) > 0
-                ? `▲+${activeObjective.elevationDeltaM}M`
-                : `▼${activeObjective.elevationDeltaM}M`}
-            </span>
-          )}
+      )}
+
+      {squadOrderPing && (
+        <div
+          data-testid="hud-world-squad-ping"
+          className="absolute inset-0 z-15 pointer-events-none transition-transform duration-75 will-change-transform"
+          style={{
+            transform: `translate3d(${Math.round(squadOrderPing.screenX * 1000) / 10}%, ${Math.round(squadOrderPing.screenY * 1000) / 10}%, 0)`,
+          }}
+        >
+          <div className="inline-flex flex-col items-center -translate-x-1/2 -translate-y-1/2">
+            <div
+              className={`w-3 h-3 rounded-full border-2 shadow-[0_0_8px_rgba(0,0,0,0.9)] ${
+                squadOrderPing.onScreen
+                  ? 'bg-cyan-400/90 border-zinc-950'
+                  : 'bg-cyan-500/45 border-cyan-300'
+              }`}
+            />
+            <div className="mt-1 px-1.5 py-0.5 bg-[#0B0E11]/88 border border-cyan-400/70 rounded-xs font-mono text-[8.5px] text-cyan-300 uppercase whitespace-nowrap shadow-md">
+              SQUAD · {squadOrderPing.label} · {squadOrderPing.distanceM}M
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 });
 
@@ -263,29 +307,46 @@ export const HudReticleAndCombatOverlays = React.memo(function HudReticleAndComb
             )}
 
             {showHitmarkers && hitFeedback && showHit && (
-              <div className="absolute flex flex-col items-center">
+              <div className="absolute flex flex-col items-center" data-testid="hud-hitmarker">
                 <Crosshair
                   key={hitFeedback.id}
                   className="w-7 h-7 rotate-45 drop-shadow-[0_0_4px_rgba(0,0,0,0.95)]"
                   style={{
                     color: hitFeedback.isHeadshot
                       ? '#f59e0b'
-                      : hitFeedback.isKill
-                        ? threatColor
-                        : '#ffffff',
+                      : hitFeedback.hitKind === 'armor_break'
+                        ? '#22d3ee'
+                        : hitFeedback.hitKind === 'armor_deflect'
+                          ? '#93c5fd'
+                          : hitFeedback.isKill
+                            ? threatColor
+                            : '#ffffff',
                   }}
                 />
-                {(hitFeedback.isKill || hitFeedback.isHeadshot) && (
+                {(hitFeedback.isKill ||
+                  hitFeedback.isHeadshot ||
+                  hitFeedback.hitKind === 'armor_break' ||
+                  hitFeedback.hitKind === 'armor_deflect') && (
                   <span
                     className={`mt-5 px-1.5 py-0.5 bg-black/80 rounded-xs font-mono text-[9px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                      hitFeedback.isHeadshot ? 'text-amber-400' : 'text-red-400'
+                      hitFeedback.isHeadshot
+                        ? 'text-amber-400'
+                        : hitFeedback.hitKind === 'armor_break'
+                          ? 'text-cyan-300'
+                          : hitFeedback.hitKind === 'armor_deflect'
+                            ? 'text-sky-300'
+                            : 'text-red-400'
                     }`}
                   >
                     {hitFeedback.isKill && hitFeedback.isHeadshot
                       ? 'HEADSHOT ELIMINATION'
                       : hitFeedback.isKill
                         ? 'ELIMINATED'
-                        : 'HEADSHOT'}
+                        : hitFeedback.isHeadshot
+                          ? 'HEADSHOT'
+                          : hitFeedback.hitKind === 'armor_break'
+                            ? 'ARMOR BROKEN'
+                            : 'ARMOR'}
                   </span>
                 )}
               </div>
@@ -464,15 +525,29 @@ const HudCenterAlertsStack = React.memo(function HudCenterAlertsStack({
       {incomingThreatWarning && !downedActive && (
         <div
           data-testid="hud-incoming-threat-warning"
-          className="bg-red-950/92 border-2 border-red-500 px-3 py-1 rounded-sm shadow-xl flex flex-col items-center min-w-[200px]"
+          className={`border-2 px-3 py-1 rounded-sm shadow-xl flex flex-col items-center min-w-[200px] ${
+            incomingThreatWarning.kind === 'grenade'
+              ? 'bg-amber-950/94 border-amber-400'
+              : 'bg-red-950/92 border-red-500'
+          }`}
         >
-          <div className="font-display text-[11px] sm:text-xs font-bold uppercase tracking-widest text-red-300 flex items-center gap-1.5">
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-            <span>{incomingThreatWarning.label} — TAKE COVER</span>
+          <div
+            className={`font-display text-[11px] sm:text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 ${
+              incomingThreatWarning.kind === 'grenade' ? 'text-amber-200' : 'text-red-300'
+            }`}
+          >
+            {incomingThreatWarning.kind === 'grenade' ? (
+              <Bomb className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            )}
+            <span>{incomingThreatWarning.label}</span>
           </div>
           <div className="w-full h-1 bg-zinc-900 mt-1 overflow-hidden">
             <div
-              className="h-full bg-red-500 transition-all duration-75"
+              className={`h-full transition-all duration-75 ${
+                incomingThreatWarning.kind === 'grenade' ? 'bg-amber-400' : 'bg-red-500'
+              }`}
               style={{ width: `${Math.round(incomingThreatWarning.progress * 100)}%` }}
             />
           </div>

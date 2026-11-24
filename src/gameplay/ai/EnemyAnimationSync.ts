@@ -18,6 +18,7 @@ export interface EnemyAnimTarget {
   hitReactTimer: number;
   deathTimer: number;
   deathFallSign?: 1 | -1;
+  deathImpulseStrength?: number;
   walkPhase: number;
   actualHorizSpeed?: number;
   actualVertSpeed?: number;
@@ -88,10 +89,17 @@ export function stepEnemyDeathAnimation(u: EnemyAnimTarget): void {
   const rawT = Math.min(1, u.deathTimer / 0.52);
   const t = rawT * rawT * (3 - 2 * rawT);
   const fallForwardSign = u.deathFallSign ?? ((u.id.charCodeAt(u.id.length - 1) & 1) === 0 ? 1 : -1);
+  const impulse = Math.max(0.7, Math.min(2.2, u.deathImpulseStrength ?? 1.0));
+  const hitSpin = Math.sin(u.animHitDirYaw) * 0.28 * impulse;
+  const kickBack = (u.animHitHeadshot ? 0.22 : 0.14) * impulse * t;
 
   const hipY = THREE.MathUtils.lerp(u.hipRestY, 0.16, t);
-  u.meshRoot.position.copy(u.position);
-  u.meshRoot.rotation.set(0, u.yaw, 0);
+  u.meshRoot.position.set(
+    u.position.x + Math.sin(u.yaw) * (fallForwardSign * kickBack),
+    u.position.y,
+    u.position.z + Math.cos(u.yaw) * (fallForwardSign * kickBack)
+  );
+  u.meshRoot.rotation.set(0, u.yaw + hitSpin * t, 0);
 
   u.pelvisGroup.position.y = hipY;
   u.torsoGroup.position.y = hipY;
@@ -103,8 +111,16 @@ export function stepEnemyDeathAnimation(u: EnemyAnimTarget): void {
   u.leftKnee.rotation.x = 1.48 * t;
   u.rightKnee.rotation.x = 1.12 * t;
 
-  u.torsoGroup.rotation.set(fallForwardSign * 1.32 * t, 0, 0.24 * fallForwardSign * t);
-  u.headMesh.rotation.set(0.38 * fallForwardSign * t, 0.18 * t, 0);
+  u.torsoGroup.rotation.set(
+    fallForwardSign * Math.min(1.52, 1.32 * (0.92 + impulse * 0.08)) * t,
+    hitSpin * 0.45 * t,
+    (0.24 * fallForwardSign + hitSpin * 0.35) * t
+  );
+  u.headMesh.rotation.set(
+    (u.animHitHeadshot ? 0.55 : 0.38) * fallForwardSign * t,
+    (0.18 + hitSpin * 0.5) * t,
+    0
+  );
   u.weaponArm.rotation.set(0.45 * t, -0.2 * t, 0.42 * t);
   u.rightForearm.rotation.set(0.25 * t, 0, 0);
   u.leftArm.rotation.set(0.38 * t, 0.2 * t, -0.35 * t);

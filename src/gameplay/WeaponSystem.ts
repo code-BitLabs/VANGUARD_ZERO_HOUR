@@ -11,6 +11,8 @@ import { FireMode, WeaponConfig, WeaponId } from '@/src/schemas/weapon.schema';
 
 const ALL_WEAPON_SLOTS: readonly WeaponId[] = WEAPON_CATALOG.map((w) => w.id);
 import { progressionStore } from '@/src/stores/progressionStore';
+import { settingsStore } from '@/src/stores/settingsStore';
+import { WEAPON_RECOIL_SIGNATURES } from './CombatFeedbackDirector';
 import {
   isWeaponRelevantForCheckpointAmmoFloor,
   MissionCheckpointSnapshot,
@@ -60,7 +62,10 @@ export interface HitscanTarget {
     damage: number,
     isHeadshot: boolean,
     hitPoint: THREE.Vector3,
-    hitZone?: EnemyHitboxZone
+    hitZone?: EnemyHitboxZone,
+    armorPenetration?: number,
+    hitDir?: THREE.Vector3,
+    impulseWeight?: number
   ) => void;
 }
 
@@ -729,9 +734,11 @@ export class WeaponSystem {
       if (this.activeWeaponId === 'sniper_rifle' && this.shotAnimAge >= 0.14) {
         this.postShotCycleSoundPlayed = true;
         this.audio.play2D('bolt_cycle', 6, 0.54);
+        player.emitAcousticEvent(5.5, performance.now() * 0.001);
       } else if (this.activeWeaponId === 'shotgun' && this.shotAnimAge >= 0.08) {
         this.postShotCycleSoundPlayed = true;
         this.audio.play2D('pump_cycle', 6, 0.54);
+        player.emitAcousticEvent(5.5, performance.now() * 0.001);
       }
     }
 
@@ -750,6 +757,8 @@ export class WeaponSystem {
       this.burstRemaining = 0;
       this.lastReloadStage = 'MAG_OUT';
       this.audio.playReloadStageFoley(cfg.id, 'MAG_OUT');
+      // Distinct close-quarters mechanical sound event (separate from gunshot & bullet impact)
+      player.emitAcousticEvent(5.5, performance.now() * 0.001);
     }
 
     if (this.isReloading) {
@@ -893,16 +902,21 @@ export class WeaponSystem {
     const effectiveDamage = cfg.damage * (1 + dmgLv * 0.09);
     const recoilScale = Math.max(0.55, 1 - recoilLv * 0.08) * (this.isAds ? 0.65 : 1.0);
 
-    player.addRecoilKick(
-      cfg.recoilPitch * recoilScale,
-      (Math.random() - 0.5) * 2 * cfg.recoilYaw * recoilScale
-    );
-    player.emitAcousticEvent(
-      cfg.category === 'sniper' || cfg.category === 'launcher' ? 75 : 58,
-      performance.now() * 0.001
-    );
+    const sig = WEAPON_RECOIL_SIGNATURES[cfg.id];
+    const st = settingsStore.getState();
+    const motionScale =
+      st.gameplay.cameraShakeIntensity *
+      (st.accessibility.reducedMotion ? 0.35 : 1.0) *
+      (st.accessibility.screenShakeReduction ? 0.5 : 1.0);
+    const yawKick =
+      (sig.horizontalDriftBias + (Math.random() - 0.5) * 1.65) * cfg.recoilYaw * recoilScale;
 
-    this.audio.playWeaponSound(cfg.id);
+    player.addRecoilKick(cfg.recoilPitch * recoilScale, yawKick, sig, this.isAds, motionScale);
+
+    // Single source of truth for weapon gunshot acoustics (respects suppressors & attachments)
+    player.emitAcousticEvent(cfg.soundRadiusMeters, performance.now() * 0.001);
+
+    this.audio.playWeaponSound(cfg.id, undefined, cfg.isSuppressed);
 
     camera.getWorldDirection(this._rayDir);
     this._right.set(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -1055,14 +1069,26 @@ export class WeaponSystem {
           ? cfg.headshotMultiplier * this.headshotDamageScale
           : (hitZone === 'lower_body' ? 0.85 : 1.0) * this.bodyDamageScale;
         const finalDmg = effectiveDamage * zoneMult;
-        hitTarget.onHit(finalDmg, hitHead, endPoint, hitZone);
-        this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, hitTarget.kind === 'enemy' ? 'blood' : 'metal');
+        hitTarget.onHit(
+          finalDmg,
+          hitHead,
+          endPoint,
+          hitZone,
+          cfg.armorPenetration,
+          dir,
+          sig.hitImpulseWeight
+        );
+        if (hitTarget.kind !== 'enemy') {
+          this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, 'metal');
+        }
       } else if (worldHit) {
         if (this._worldHit.collider && (this._worldHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) !== 0) {
           this.shotsHit++;
           onDestructibleHit(this._worldHit.collider.id, effectiveDamage);
         }
-        this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, 'concrete');
+        if (!this.combatVfxHooks?.onWorldImpact) {
+          this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, 'concrete');
+        }
         if (p === 0 || p % 3 === 0) {
           this._impactNormal.set(
             this._worldHit.normalX,

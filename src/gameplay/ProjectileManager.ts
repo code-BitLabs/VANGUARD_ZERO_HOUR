@@ -779,6 +779,29 @@ export class ProjectileManager {
     this.pool.releaseAll();
   }
 
+  getNearestHostileGrenade(
+    playerPos: THREE.Vector3,
+    maxDistanceM = 12
+  ): { x: number; y: number; z: number; distanceM: number; progress: number } | null {
+    let best: { x: number; y: number; z: number; distanceM: number; progress: number } | null = null;
+    const maxDistSq = maxDistanceM * maxDistanceM;
+    this.pool.forEachActive((p) => {
+      if (p.fromPlayer || p.kind !== 'enemy_grenade') return;
+      const dx = p.pos.x - playerPos.x;
+      const dy = p.pos.y - playerPos.y;
+      const dz = p.pos.z - playerPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > maxDistSq) return;
+      const dist = Math.sqrt(distSq);
+      const fuseTotal = Math.max(0.1, p.fuseSec > 0 ? p.fuseSec : p.maxLife);
+      const progress = Math.min(1, Math.max(0, p.life / fuseTotal));
+      if (!best || dist < best.distanceM) {
+        best = { x: p.pos.x, y: p.pos.y, z: p.pos.z, distanceM: dist, progress };
+      }
+    });
+    return best;
+  }
+
   getActiveCount(): number {
     return this.pool.getActiveCount();
   }

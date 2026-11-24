@@ -44,6 +44,7 @@ export interface HudPublishContext {
   readonly deploymentMode?: 'solo' | 'fireteam';
   readonly soloTraumaKit?: HudSnapshot['soloTraumaKit'];
   readonly activeRadioSubtitle?: HudSnapshot['activeRadioSubtitle'];
+  readonly squadOrderTarget?: { x: number; y: number; z: number; label: string } | null;
 }
 
 function blipsMatch(prev: readonly MiniMapBlip[], next: readonly MiniMapBlip[]): boolean {
@@ -224,6 +225,37 @@ export class HudSnapshotPublisher {
       o.screenY = Math.round(THREE.MathUtils.clamp(ny, 0.08, 0.88) * 1000) / 1000;
       o.onScreen = onScreen;
     }
+  }
+
+  private projectSquadOrderPing(
+    target: { x: number; y: number; z: number; label: string } | null | undefined,
+    playerPos: THREE.Vector3,
+    camera?: THREE.PerspectiveCamera
+  ): HudSnapshot['squadOrderPing'] {
+    if (!target || !camera) return null;
+    camera.getWorldDirection(this._camFwdScratch);
+    this._projScratch.set(target.x, target.y + 1.1, target.z);
+    this._toMarkerScratch.subVectors(this._projScratch, camera.position);
+    const inFront = this._toMarkerScratch.dot(this._camFwdScratch) > 0.05;
+    this._projScratch.project(camera);
+    let nx = (this._projScratch.x + 1) * 0.5;
+    let ny = (1 - this._projScratch.y) * 0.5;
+    if (!inFront) {
+      nx = 1 - nx;
+      ny = 1 - ny;
+    }
+    const onScreen = inFront && nx >= 0.06 && nx <= 0.94 && ny >= 0.08 && ny <= 0.88;
+    const distanceM = Math.round(Math.hypot(target.x - playerPos.x, target.z - playerPos.z));
+    return {
+      x: target.x,
+      y: target.y,
+      z: target.z,
+      screenX: Math.round(THREE.MathUtils.clamp(nx, 0.05, 0.95) * 1000) / 1000,
+      screenY: Math.round(THREE.MathUtils.clamp(ny, 0.08, 0.88) * 1000) / 1000,
+      onScreen,
+      label: target.label,
+      distanceM,
+    };
   }
 
   buildSnapshot(ctx: HudPublishContext): HudSnapshot | null {
@@ -492,6 +524,11 @@ export class HudSnapshotPublisher {
       activeRadioSubtitle: settings.accessibility.subtitles
         ? (ctx.activeRadioSubtitle ?? null)
         : null,
+      suppressionLevel: Number(Math.max(0, Math.min(1, ctx.player.suppressionLevel)).toFixed(2)),
+      squadOrderPing:
+        ctx.deploymentMode === 'solo'
+          ? null
+          : this.projectSquadOrderPing(ctx.squadOrderTarget, ctx.player.position, ctx.camera),
     };
   }
 

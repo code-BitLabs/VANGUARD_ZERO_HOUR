@@ -322,4 +322,12 @@ export class MissionLifecycleLoader {
     this.deps.vehicles.prewarm();
     this.deps.renderer.registerSceneShadowsAndPrecompile();
   }
+
+  async prewarmCombatShadersAsync(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return;
+    this.deps.surfaceDecals.prewarm();
+    this.deps.destruction.prewarm(this.deps.renderer.scene);
+    this.deps.vehicles.prewarm();
+    await this.deps.renderer.registerSceneShadowsAndPrecompileAsync(signal);
+  }
 }

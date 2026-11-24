@@ -11,11 +11,15 @@ export const KillFeedItemSchema = z.object({
 });
 export type KillFeedItem = z.infer<typeof KillFeedItemSchema>;
 
+export const HitKindSchema = z.enum(['flesh', 'armor_deflect', 'armor_break', 'headshot', 'kill']);
+export type HitKind = z.infer<typeof HitKindSchema>;
+
 export const HitFeedbackSchema = z.object({
   id: z.number().int().nonnegative(),
   isHeadshot: z.boolean(),
   isKill: z.boolean(),
   damage: z.number().nonnegative(),
+  hitKind: HitKindSchema.optional(),
 });
 export type HitFeedback = z.infer<typeof HitFeedbackSchema>;
 
@@ -73,7 +77,7 @@ export const ActiveTacticalHintSchema = z.object({
 export type ActiveTacticalHint = z.infer<typeof ActiveTacticalHintSchema>;
 
 export const IncomingThreatWarningSchema = z.object({
-  kind: z.enum(['sniper', 'rocket']),
+  kind: z.enum(['sniper', 'rocket', 'grenade']),
   label: z.string(),
   progress: z.number().min(0).max(1),
   angleRad: z.number(),
@@ -288,6 +292,20 @@ export const HudSnapshotSchema = z.object({
       roleBadge: z.string(),
       text: z.string(),
       priority: z.enum(['CRITICAL', 'TACTICAL', 'BANTER']),
+    })
+    .nullable()
+    .optional(),
+  suppressionLevel: z.number().min(0).max(1).optional(),
+  squadOrderPing: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      z: z.number(),
+      screenX: z.number(),
+      screenY: z.number(),
+      onScreen: z.boolean(),
+      label: z.string(),
+      distanceM: z.number().nonnegative(),
     })
     .nullable()
     .optional(),

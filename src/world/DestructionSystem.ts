@@ -56,6 +56,7 @@ export class DestructionSystem {
   private prewarmProbeMesh: THREE.Mesh | null = null;
   private prewarmProbeScene: THREE.Scene | null = null;
   private onColliderRegionChanged?: (box: SpatialAABB) => void;
+  private onEntityStateChanged?: (id: string, state: DestructionState) => void;
 
   constructor(
     private readonly colliderBackend: DestructionColliderBackend,
@@ -105,6 +106,10 @@ export class DestructionSystem {
     this.onColliderRegionChanged = cb;
   }
 
+  setOnEntityStateChanged(cb?: (id: string, state: DestructionState) => void): void {
+    this.onEntityStateChanged = cb;
+  }
+
   private insertCollider(box: SpatialAABB): void {
     if (isPhysicsWorld(this.colliderBackend)) {
       this.colliderBackend.addStaticCollider(box);
@@ -133,11 +138,13 @@ export class DestructionSystem {
   register(entity: DestructibleEntity): void {
     entity.meshGroup.userData.noMerge = true;
     entity.meshGroup.userData.isDestructible = true;
+    entity.meshGroup.userData.destructibleId = entity.id;
     const meshMaterials: Array<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }> = [];
     entity.meshGroup.traverse((c) => {
       if (c instanceof THREE.Mesh) {
         c.userData.noMerge = true;
         c.userData.isDestructible = true;
+        c.userData.destructibleId = entity.id;
         meshMaterials.push({ mesh: c, material: c.material });
       }
     });
@@ -177,6 +184,7 @@ export class DestructionSystem {
         this.syncUpdatedCollider(ent.collider);
         ent.meshGroup.scale.y = 0.65;
       }
+      this.onEntityStateChanged?.(ent.id, 'DAMAGED');
       return false;
     }
 
@@ -230,6 +238,7 @@ export class DestructionSystem {
         }
       }
 
+      this.onEntityStateChanged?.(ent.id, 'DESTROYED');
       if (ent.isObjectiveTarget) {
         onObjectiveDestroyed?.(ent);
       }
@@ -271,6 +280,7 @@ export class DestructionSystem {
         }
       });
     }
+    this.onEntityStateChanged?.(ent.id, 'DESTROYED');
     return true;
   }
 

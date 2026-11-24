@@ -680,11 +680,19 @@ export class PbrMaterialLibrary {
     return Object.values(PBR_MATERIAL_PROFILES).map((p) => p.provenance);
   }
 
-  public dispose(): void {
+  /**
+   * Disposes all GPU materials and textures between missions while retaining the lightweight
+   * offscreen base canvases so subsequent mission loads skip redundant CPU pixel synthesis.
+   */
+  public clearMissionMaterials(): void {
     for (const mat of this.materials.values()) mat.dispose();
     for (const tex of this.textures) tex.dispose();
     this.materials.clear();
     this.textures.length = 0;
+  }
+
+  public dispose(): void {
+    this.clearMissionMaterials();
     this.baseCanvases.clear();
   }
 

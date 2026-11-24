@@ -8,7 +8,7 @@ import {
 } from '@/src/gameplay/CombatTelemetryRecorder';
 import { PlaytestExperienceReport } from '@/src/gameplay/diagnostics/PlaytestTelemetrySummary';
 import { AssetLoadProgress } from '@/src/schemas/asset.schema';
-import { DamageArc, HitFeedback, HudSnapshot, KillFeedItem } from '@/src/schemas/events.schema';
+import { DamageArc, HitFeedback, HitKind, HudSnapshot, KillFeedItem } from '@/src/schemas/events.schema';
 import {
   CampaignEventDraft,
   CampaignRebaseDiff,
@@ -91,7 +91,7 @@ export interface GameSessionState {
   combatDebug: CombatDebugSnapshot | null;
   updateHudSnapshot: (snapshot: HudSnapshot) => void;
   pushKillFeed: (item: KillFeedItem) => void;
-  triggerHit: (isHeadshot: boolean, isKill: boolean, damage: number) => void;
+  triggerHit: (isHeadshot: boolean, isKill: boolean, damage: number, hitKind?: HitKind) => void;
   pushDamageArc: (angleRad: number, intensity: number) => void;
   decayDamageArcs: () => void;
   setLoadProgress: (progress: AssetLoadProgress) => void;
@@ -167,6 +167,8 @@ const DEFAULT_HUD: HudSnapshot = {
   spawnProtectionSec: 0,
   isRegenerating: false,
   incomingThreatWarning: null,
+  suppressionLevel: 0,
+  squadOrderPing: null,
 };
 
 const DEFAULT_DIAG: EngineDiagnosticsSnapshot = {
@@ -213,8 +215,16 @@ export const gameSessionStore = createStore<GameSessionState>()(
       set((s) => ({
         killFeed: [item, ...s.killFeed].slice(0, 5),
       })),
-    triggerHit: (isHeadshot, isKill, damage) =>
-      set({ hitFeedback: { id: ++hitSeq, isHeadshot, isKill, damage } }),
+    triggerHit: (isHeadshot, isKill, damage, hitKind) =>
+      set({
+        hitFeedback: {
+          id: ++hitSeq,
+          isHeadshot,
+          isKill,
+          damage,
+          hitKind: hitKind ?? (isKill ? 'kill' : isHeadshot ? 'headshot' : 'flesh'),
+        },
+      }),
     pushDamageArc: (angleRad, intensity) =>
       set((s) => ({
         damageArcs: [...s.damageArcs.slice(-3), { id: ++arcSeq, angleRad, intensity }],

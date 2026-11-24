@@ -107,12 +107,14 @@ export class BallisticSolver {
   private readonly _shotDir = new THREE.Vector3();
   private readonly _endPoint = new THREE.Vector3();
   private readonly _exposedPoint = new THREE.Vector3();
+  private readonly _nearMissPoint = new THREE.Vector3();
   private readonly _losResult: VisibilityCheckResult = {
     visible: false,
     exposedPoint: this._exposedPoint,
     blockerId: null,
     exposedZone: null,
   };
+  public onPlayerNearMiss: ((passPoint: THREE.Vector3, intensity: number) => void) | null = null;
 
   constructor(
     private readonly vfx: VFXPool | null,
@@ -468,14 +470,17 @@ export class BallisticSolver {
           this.vfx?.spawnImpact(this._endPoint.x, this._endPoint.y, this._endPoint.z, matKind);
         }
 
-        // Near-miss suppression pulse if ray passes close to player head or strikes cover right in front of player
+        // Near-miss suppression pulse & directional supersonic crack if ray passes close to player head
         const closestToHead = this.pointToSegmentDistance(
           hitboxes.headCenter,
           params.muzzleOrigin,
-          this._endPoint
+          this._endPoint,
+          this._nearMissPoint
         );
         if (closestToHead < 1.65) {
-          player.applySuppressionPulse(0.18);
+          const proximityIntensity = Math.max(0.25, Math.min(1, 1 - closestToHead / 1.65));
+          player.applySuppressionPulse(0.18 + proximityIntensity * 0.1);
+          this.onPlayerNearMiss?.(this._nearMissPoint, proximityIntensity);
         }
 
         if (blockedPlayerLine) {
@@ -610,13 +615,17 @@ export class BallisticSolver {
   private pointToSegmentDistance(
     pt: THREE.Vector3,
     segA: THREE.Vector3,
-    segB: THREE.Vector3
+    segB: THREE.Vector3,
+    outClosest?: THREE.Vector3
   ): number {
     const abX = segB.x - segA.x;
     const abY = segB.y - segA.y;
     const abZ = segB.z - segA.z;
     const lenSq = abX * abX + abY * abY + abZ * abZ;
-    if (lenSq < 0.0001) return pt.distanceTo(segA);
+    if (lenSq < 0.0001) {
+      outClosest?.copy(segA);
+      return pt.distanceTo(segA);
+    }
     const t = Math.max(
       0,
       Math.min(
@@ -627,6 +636,7 @@ export class BallisticSolver {
     const projX = segA.x + abX * t;
     const projY = segA.y + abY * t;
     const projZ = segA.z + abZ * t;
+    outClosest?.set(projX, projY, projZ);
     return Math.hypot(pt.x - projX, pt.y - projY, pt.z - projZ);
   }
 }
