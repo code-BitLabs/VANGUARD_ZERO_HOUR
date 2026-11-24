@@ -32,6 +32,7 @@ import {
   ResolvedWeaponProfile,
   resolveWeaponConfig,
 } from './weapons/AttachmentCompositionEngine';
+import { computeRangeFalloffMultiplier } from './weapons/WeaponBallistics';
 
 export interface WeaponRuntimeState {
   config: ResolvedWeaponProfile;
@@ -39,6 +40,7 @@ export interface WeaponRuntimeState {
   magSize: number;
   reserveAmmo: number;
   fireModeIndex: number;
+  fireCooldownSec: number;
 }
 
 export type EnemyHitboxZone = 'head' | 'upper_torso' | 'lower_body';
@@ -81,9 +83,12 @@ export class WeaponSystem {
   private viewModelSceneRef: THREE.Scene;
   private readonly animGraph = new FirstPersonAnimationGraph();
 
-  private fireCooldown = 0;
   private burstRemaining = 0;
   private reloadTimer = 0;
+  private activeReloadTotalSec = 0;
+  private isTacticalReload = false;
+  private shotgunShellIntervalSec = 0;
+  private shotgunShellAccumSec = 0;
   public isReloading = false;
   private equipTimer = 0;
   private sprintToFireTimer = 0;
@@ -234,10 +239,15 @@ export class WeaponSystem {
         magSize,
         reserveAmmo,
         fireModeIndex: 0,
+        fireCooldownSec: 0,
       });
     }
     this.isReloading = false;
     this.reloadTimer = 0;
+    this.activeReloadTotalSec = 0;
+    this.isTacticalReload = false;
+    this.shotgunShellIntervalSec = 0;
+    this.shotgunShellAccumSec = 0;
     this.lastReloadStage = 'READY';
     this.postShotCycleSoundPlayed = true;
     this.audio.cancelReloadFoley();
@@ -427,11 +437,17 @@ export class WeaponSystem {
   ): void {
     this.isReloading = false;
     this.reloadTimer = 0;
+    this.activeReloadTotalSec = 0;
+    this.isTacticalReload = false;
+    this.shotgunShellIntervalSec = 0;
+    this.shotgunShellAccumSec = 0;
     this.lastReloadStage = 'READY';
     this.postShotCycleSoundPlayed = true;
     this.audio.cancelReloadFoley();
     this.burstRemaining = 0;
-    this.fireCooldown = 0;
+    for (const st of this.weapons.values()) {
+      st.fireCooldownSec = 0;
+    }
     this.equipTimer = 0;
     this.sprintToFireTimer = 0;
     this.lockProgress = 0;
@@ -541,6 +557,10 @@ export class WeaponSystem {
     }
     this.isReloading = false;
     this.reloadTimer = 0;
+    this.activeReloadTotalSec = 0;
+    this.isTacticalReload = false;
+    this.shotgunShellIntervalSec = 0;
+    this.shotgunShellAccumSec = 0;
     this.lastReloadStage = 'READY';
     this.postShotCycleSoundPlayed = true;
     this.reloadBlend = 0;
@@ -551,9 +571,10 @@ export class WeaponSystem {
     this.muzzleFlashTimer = 0;
     this.shotAnimAge = 99;
     this.viewModelMuzzleLight.intensity = 0;
-    this.equipTimer = instant ? 0 : WEAPON_BY_ID[id].equipTimeSec;
-    if (instant) {
-      this.fireCooldown = 0;
+    const nextState = this.weapons.get(id);
+    this.equipTimer = instant ? 0 : (nextState?.config.equipTimeSec ?? WEAPON_BY_ID[id].equipTimeSec);
+    if (instant && nextState) {
+      nextState.fireCooldownSec = 0;
     }
     this.adsBlend = 0;
     this.lockProgress = 0;
@@ -589,9 +610,12 @@ export class WeaponSystem {
   getReloadProgress(): number {
     if (!this.isReloading) return 0;
     const st = this.getActiveState();
-    const reloadLv = progressionStore.getState().getUpgradeLevel(st.config.id, 'reload');
-    const total = st.config.reloadTimeSec * Math.max(0.58, 1 - reloadLv * 0.08);
+    const total = Math.max(0.05, this.activeReloadTotalSec || st.config.reloadTimeSec);
     return Math.min(1, Math.max(0, 1 - this.reloadTimer / total));
+  }
+
+  isTacticalReloadActive(): boolean {
+    return this.isReloading && this.isTacticalReload;
   }
 
   getReloadStage(): 'READY' | 'MAG_OUT' | 'MAG_IN' | 'CHAMBER' {
@@ -712,7 +736,12 @@ export class WeaponSystem {
       this.audio.play2D('reload', 5, 0.45);
     }
 
-    this.fireCooldown = Math.max(0, this.fireCooldown - dt);
+    // Tick down cyclic/bolt cooldowns across ALL weapons so holstered bolt cycles continue while sidearm draws freely
+    for (const st of this.weapons.values()) {
+      if (st.fireCooldownSec > 0) {
+        st.fireCooldownSec = Math.max(0, st.fireCooldownSec - dt);
+      }
+    }
     this.equipTimer = Math.max(0, this.equipTimer - dt);
     this.shotAnimAge = Math.min(10, this.shotAnimAge + dt);
     if (player.isSprinting) {
@@ -742,6 +771,37 @@ export class WeaponSystem {
       }
     }
 
+    // Firing mode & trigger state (evaluated ahead of reload completion so shotgun reload can be fire-interrupted)
+    const mode = this.getActiveFireMode();
+    const wantsFire =
+      mode === 'auto'
+        ? input.isActionHeld('fire') || input.wasActionPressed('fire')
+        : mode === 'burst'
+          ? input.wasActionPressed('fire') || this.burstRemaining > 0
+          : input.wasActionPressed('fire');
+
+    // Shotgun shell-by-shell fire interrupt when at least one shell is ready in tube
+    if (
+      this.isReloading &&
+      cfg.id === 'shotgun' &&
+      wantsFire &&
+      !player.isVaulting &&
+      state.ammoInMag > 0 &&
+      state.fireCooldownSec <= 0 &&
+      this.equipTimer <= 0
+    ) {
+      const interruptedStage = this.lastReloadStage;
+      this.isReloading = false;
+      this.reloadTimer = 0;
+      this.activeReloadTotalSec = 0;
+      this.isTacticalReload = false;
+      this.shotgunShellIntervalSec = 0;
+      this.shotgunShellAccumSec = 0;
+      this.lastReloadStage = 'READY';
+      this.audio.cancelReloadFoley();
+      this.animGraph.handleInterruption('weapon_switch_cancels_reload', interruptedStage);
+    }
+
     // Reload trigger & stage-synchronized Foley state machine
     if (
       !this.isReloading &&
@@ -752,8 +812,28 @@ export class WeaponSystem {
         (state.ammoInMag === 0 && (input.isActionHeld('fire') || input.wasActionPressed('fire'))))
     ) {
       this.isReloading = true;
-      const reloadLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'reload');
-      this.reloadTimer = cfg.reloadTimeSec * Math.max(0.58, 1 - reloadLv * 0.08);
+      const isShotgunShellReload = cfg.id === 'shotgun';
+      const tactical = state.ammoInMag > 0 && cfg.category !== 'launcher' && !isShotgunShellReload;
+      this.isTacticalReload = tactical;
+      if (isShotgunShellReload) {
+        const needed = Math.max(1, state.magSize - state.ammoInMag);
+        const toLoad = Math.max(1, Math.min(needed, state.reserveAmmo));
+        const totalShotgunSec = Math.max(
+          0.55,
+          cfg.reloadTimeSec * (toLoad / Math.max(1, state.magSize))
+        );
+        this.activeReloadTotalSec = totalShotgunSec;
+        this.reloadTimer = totalShotgunSec;
+        this.shotgunShellIntervalSec = totalShotgunSec / toLoad;
+        this.shotgunShellAccumSec = 0;
+      } else {
+        // Tactical reload (retained chamber round) completes ~20% faster than dry empty reload
+        const totalMagSec = tactical ? cfg.reloadTimeSec * 0.8 : cfg.reloadTimeSec * 1.05;
+        this.activeReloadTotalSec = totalMagSec;
+        this.reloadTimer = totalMagSec;
+        this.shotgunShellIntervalSec = 0;
+        this.shotgunShellAccumSec = 0;
+      }
       this.burstRemaining = 0;
       this.lastReloadStage = 'MAG_OUT';
       this.audio.playReloadStageFoley(cfg.id, 'MAG_OUT');
@@ -763,12 +843,28 @@ export class WeaponSystem {
 
     if (this.isReloading) {
       this.reloadTimer -= dt;
+      if (cfg.id === 'shotgun' && this.shotgunShellIntervalSec > 0) {
+        this.shotgunShellAccumSec += dt;
+        while (
+          this.shotgunShellAccumSec >= this.shotgunShellIntervalSec &&
+          state.ammoInMag < state.magSize &&
+          state.reserveAmmo > 0
+        ) {
+          this.shotgunShellAccumSec -= this.shotgunShellIntervalSec;
+          state.ammoInMag++;
+          state.reserveAmmo--;
+        }
+      }
       if (this.reloadTimer <= 0) {
         const needed = state.magSize - state.ammoInMag;
         const transfer = Math.min(needed, state.reserveAmmo);
         state.ammoInMag += transfer;
         state.reserveAmmo -= transfer;
         this.isReloading = false;
+        this.activeReloadTotalSec = 0;
+        this.isTacticalReload = false;
+        this.shotgunShellIntervalSec = 0;
+        this.shotgunShellAccumSec = 0;
         this.lastReloadStage = 'READY';
       } else {
         const curStage = this.getReloadStage();
@@ -786,19 +882,10 @@ export class WeaponSystem {
     // Guided Missile Lock-On State Machine
     this.updateLockOn(dt, cfg, camera, lockCandidates);
 
-    // Firing logic: auto supports continuous hold + immediate sub-frame tap; semi/burst enforce tap trigger
-    const mode = this.getActiveFireMode();
-    const wantsFire =
-      mode === 'auto'
-        ? input.isActionHeld('fire') || input.wasActionPressed('fire')
-        : mode === 'burst'
-          ? input.wasActionPressed('fire') || this.burstRemaining > 0
-          : input.wasActionPressed('fire');
-
     if (
       wantsFire &&
       !player.isVaulting &&
-      this.fireCooldown <= 0 &&
+      state.fireCooldownSec <= 0 &&
       !this.isReloading &&
       this.equipTimer <= 0 &&
       this.sprintToFireTimer <= 0 &&
@@ -879,7 +966,7 @@ export class WeaponSystem {
     const rig = this.rigs.get(cfg.id);
     const animProf = rig?.animProfile;
     state.ammoInMag--;
-    this.fireCooldown = 60 / cfg.fireRateRpm;
+    state.fireCooldownSec = 60 / cfg.fireRateRpm;
     this.muzzleFlashTimer = 0.055;
     this.shotAnimAge = 0;
     this.postShotCycleSoundPlayed =
@@ -896,11 +983,9 @@ export class WeaponSystem {
     this.animGraph.notifyShotFired(adsRecoilMul);
     this.shotsFired++;
 
-    // Armory Upgrade multipliers
-    const dmgLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'damage');
-    const recoilLv = progressionStore.getState().getUpgradeLevel(cfg.id, 'recoil');
-    const effectiveDamage = cfg.damage * (1 + dmgLv * 0.09);
-    const recoilScale = Math.max(0.55, 1 - recoilLv * 0.08) * (this.isAds ? 0.65 : 1.0);
+    // Resolved weapon config already applies progression upgrades & attachments once (single source of truth)
+    const effectiveDamage = cfg.damage;
+    const recoilScale = this.isAds ? 0.65 : 1.0;
 
     const sig = WEAPON_RECOIL_SIGNATURES[cfg.id];
     const st = settingsStore.getState();
@@ -931,7 +1016,15 @@ export class WeaponSystem {
       .addScaledVector(this._up, -0.14);
 
     this.vfx.spawnMuzzleLight(muzzleWorld.x, muzzleWorld.y, muzzleWorld.z);
-    if (cfg.category !== 'launcher') {
+    if (this.combatVfxHooks?.onMuzzleFired) {
+      this.combatVfxHooks.onMuzzleFired(
+        cfg.id,
+        muzzleWorld,
+        this._rayDir,
+        this._right,
+        cfg.category === 'launcher'
+      );
+    } else if (cfg.category !== 'launcher') {
       this.vfx.spawnShellCasing(
         this._rayOrigin.x + this._rayDir.x * 0.42 + this._right.x * (this.isAds ? 0.09 : 0.24),
         this._rayOrigin.y + this._rayDir.y * 0.42 - 0.15,
@@ -940,13 +1033,6 @@ export class WeaponSystem {
         this._right.z
       );
     }
-    this.combatVfxHooks?.onMuzzleFired?.(
-      cfg.id,
-      muzzleWorld,
-      this._rayDir,
-      this._right,
-      cfg.category === 'launcher'
-    );
 
     if (cfg.projectileType !== 'hitscan') {
       const homing =
@@ -1060,6 +1146,8 @@ export class WeaponSystem {
         this.vfx.spawnTracer(muzzleWorld.x, muzzleWorld.y, muzzleWorld.z, endPoint.x, endPoint.y, endPoint.z);
       }
 
+      const falloffMult = computeRangeFalloffMultiplier(cfg.category, bestDist, cfg.rangeMeters);
+
       if (hitTarget) {
         this.shotsHit++;
         if (hitTarget.kind === 'enemy') {
@@ -1068,7 +1156,7 @@ export class WeaponSystem {
         const zoneMult = hitHead
           ? cfg.headshotMultiplier * this.headshotDamageScale
           : (hitZone === 'lower_body' ? 0.85 : 1.0) * this.bodyDamageScale;
-        const finalDmg = effectiveDamage * zoneMult;
+        const finalDmg = effectiveDamage * falloffMult * zoneMult;
         hitTarget.onHit(
           finalDmg,
           hitHead,
@@ -1084,7 +1172,7 @@ export class WeaponSystem {
       } else if (worldHit) {
         if (this._worldHit.collider && (this._worldHit.collider.layer & COLLISION_LAYER.DESTRUCTIBLE) !== 0) {
           this.shotsHit++;
-          onDestructibleHit(this._worldHit.collider.id, effectiveDamage);
+          onDestructibleHit(this._worldHit.collider.id, effectiveDamage * falloffMult);
         }
         if (!this.combatVfxHooks?.onWorldImpact) {
           this.vfx.spawnImpact(endPoint.x, endPoint.y, endPoint.z, 'concrete');

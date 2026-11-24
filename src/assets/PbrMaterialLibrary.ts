@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ResourceManager } from '@/src/core/ResourceManager';
 import { ImpactSurfaceMaterial } from '@/src/effects/SurfaceDecalManager';
 
 export type PbrMaterialProfileId =
@@ -613,12 +614,19 @@ export function validateDropInAssetContract(input: {
 export class PbrMaterialLibrary {
   private readonly materials = new Map<string, THREE.MeshStandardMaterial>();
   private readonly textures: THREE.Texture[] = [];
+  private readonly baseTextures = new Map<
+    string,
+    { albedoBase: THREE.CanvasTexture; roughBase: THREE.CanvasTexture }
+  >();
   private readonly baseCanvases = new Map<
     string,
     { albedoCanvas: HTMLCanvasElement; roughCanvas: HTMLCanvasElement }
   >();
+  private readonly managedResourceIds: string[] = [];
   private anisotropy = 4;
   private onMaterialCreated?: (mat: THREE.MeshStandardMaterial) => void;
+
+  constructor(private readonly resourceManager?: ResourceManager) {}
 
   public setOnMaterialCreated(cb?: (mat: THREE.MeshStandardMaterial) => void): void {
     this.onMaterialCreated = cb;
@@ -672,6 +680,9 @@ export class PbrMaterialLibrary {
     mat.userData.provenanceId = spec.provenance.assetId;
 
     this.materials.set(cacheKey, mat);
+    if (this.resourceManager) {
+      this.managedResourceIds.push(this.resourceManager.registerMaterial(mat, 'pool:pbr'));
+    }
     this.onMaterialCreated?.(mat);
     return mat;
   }
@@ -685,10 +696,22 @@ export class PbrMaterialLibrary {
    * offscreen base canvases so subsequent mission loads skip redundant CPU pixel synthesis.
    */
   public clearMissionMaterials(): void {
-    for (const mat of this.materials.values()) mat.dispose();
-    for (const tex of this.textures) tex.dispose();
+    if (this.resourceManager && this.managedResourceIds.length > 0) {
+      for (const id of this.managedResourceIds) {
+        this.resourceManager.release(id);
+      }
+      this.managedResourceIds.length = 0;
+    } else {
+      for (const mat of this.materials.values()) mat.dispose();
+      for (const tex of this.textures) tex.dispose();
+      for (const base of this.baseTextures.values()) {
+        base.albedoBase.dispose();
+        base.roughBase.dispose();
+      }
+    }
     this.materials.clear();
     this.textures.length = 0;
+    this.baseTextures.clear();
   }
 
   public dispose(): void {
@@ -771,18 +794,56 @@ export class PbrMaterialLibrary {
     return created;
   }
 
+  private getOrBuildBaseTextures(
+    spec: PbrMaterialProfileSpec,
+    wetness: number
+  ): { albedoBase: THREE.CanvasTexture; roughBase: THREE.CanvasTexture } | null {
+    const key = `${spec.id}|w=${wetness}`;
+    const existing = this.baseTextures.get(key);
+    if (existing) return existing;
+
+    const canvases = this.getOrBuildBaseCanvases(spec, wetness);
+    if (!canvases) return null;
+
+    const albedoBase = new THREE.CanvasTexture(canvases.albedoCanvas);
+    albedoBase.colorSpace = THREE.SRGBColorSpace;
+    albedoBase.wrapS = THREE.RepeatWrapping;
+    albedoBase.wrapT = THREE.RepeatWrapping;
+    albedoBase.anisotropy = this.anisotropy;
+    albedoBase.generateMipmaps = true;
+
+    const roughBase = new THREE.CanvasTexture(canvases.roughCanvas);
+    roughBase.colorSpace = THREE.NoColorSpace;
+    roughBase.wrapS = THREE.RepeatWrapping;
+    roughBase.wrapT = THREE.RepeatWrapping;
+    roughBase.anisotropy = this.anisotropy;
+    roughBase.generateMipmaps = true;
+
+    if (this.resourceManager) {
+      this.managedResourceIds.push(
+        this.resourceManager.registerTexture(albedoBase, 'pool:pbr'),
+        this.resourceManager.registerTexture(roughBase, 'pool:pbr')
+      );
+    }
+
+    const pair = { albedoBase, roughBase };
+    this.baseTextures.set(key, pair);
+    return pair;
+  }
+
   private createCalibratedTextures(
     spec: PbrMaterialProfileSpec,
     repeatX: number,
     repeatY: number,
     wetness: number
   ): { albedo: THREE.CanvasTexture | null; roughnessMap: THREE.CanvasTexture | null } {
-    const canvases = this.getOrBuildBaseCanvases(spec, wetness);
-    if (!canvases) {
+    const base = this.getOrBuildBaseTextures(spec, wetness);
+    if (!base) {
       return { albedo: null, roughnessMap: null };
     }
 
-    const albedo = new THREE.CanvasTexture(canvases.albedoCanvas);
+    const albedo = base.albedoBase.clone();
+    albedo.source = base.albedoBase.source;
     albedo.colorSpace = THREE.SRGBColorSpace; // Strict sRGB albedo
     albedo.wrapS = THREE.RepeatWrapping;
     albedo.wrapT = THREE.RepeatWrapping;
@@ -790,7 +851,8 @@ export class PbrMaterialLibrary {
     albedo.anisotropy = this.anisotropy;
     albedo.generateMipmaps = true;
 
-    const roughnessMap = new THREE.CanvasTexture(canvases.roughCanvas);
+    const roughnessMap = base.roughBase.clone();
+    roughnessMap.source = base.roughBase.source;
     roughnessMap.colorSpace = THREE.NoColorSpace; // Strict linear roughness/bump
     roughnessMap.wrapS = THREE.RepeatWrapping;
     roughnessMap.wrapT = THREE.RepeatWrapping;
@@ -799,6 +861,12 @@ export class PbrMaterialLibrary {
     roughnessMap.generateMipmaps = true;
 
     this.textures.push(albedo, roughnessMap);
+    if (this.resourceManager) {
+      this.managedResourceIds.push(
+        this.resourceManager.registerTexture(albedo, 'pool:pbr'),
+        this.resourceManager.registerTexture(roughnessMap, 'pool:pbr')
+      );
+    }
     return { albedo, roughnessMap };
   }
 }

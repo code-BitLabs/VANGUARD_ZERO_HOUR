@@ -1004,9 +1004,9 @@ export const PerformanceDebugTab = React.memo(function PerformanceDebugTab({
           sub={`Avg ${performance.avgFps} · Min ${performance.minFps} · Max ${performance.maxFps}`}
         />
         <MetricTile
-          label="Frame (Avg / p95 / p99)"
-          value={`${performance.avgFrameMs} / ${performance.p95FrameMs} / ${performance.p99FrameMs}ms`}
-          sub={`CPU Total: ${performance.cpuTimeMs}ms`}
+          label="Frame (p50 / p95 / p99)"
+          value={`${performance.p50FrameMs ?? performance.avgFrameMs} / ${performance.p95FrameMs} / ${performance.p99FrameMs}ms`}
+          sub={`Avg ${performance.avgFrameMs}ms · CPU ${performance.cpuTimeMs}ms${performance.gpuFrameMs != null ? ` · GPU ${performance.gpuFrameMs}ms` : ''}`}
         />
         <MetricTile
           label="Render & Pixel Ratio"
@@ -1015,7 +1015,7 @@ export const PerformanceDebugTab = React.memo(function PerformanceDebugTab({
               ? `${performance.renderWidth}×${performance.renderHeight}`
               : `${Math.round(performance.renderScale * 100)}%`
           }
-          sub={`Scale ${Math.round(performance.renderScale * 100)}% · DPR ${(performance.pixelRatio ?? 1).toFixed(2)}x · ${performance.governorTier}`}
+          sub={`Scale ${Math.round(performance.renderScale * 100)}% · DPR ${(performance.pixelRatio ?? 1).toFixed(2)}x · AA ${performance.aaMode ?? 'auto'} · ${performance.governorTier}`}
         />
         <MetricTile
           label="Draw / Tris / Mem"

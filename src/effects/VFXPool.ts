@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ResourceManager } from '@/src/core/ResourceManager';
+import { TacticalLightBudgetManager } from '@/src/engine/RenderingBenchmarkSlice';
 
 interface ParticleState {
   x: number;
@@ -57,6 +58,33 @@ const _vfxQuatSpin = new THREE.Quaternion();
 const _vfxEulerSpin = new THREE.Euler();
 const _vfxMat4 = new THREE.Matrix4();
 const _vfxLookHelper = new THREE.Object3D();
+
+function createVfxSpriteTexture(kind: 'soft' | 'spark'): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 1, size / 2, size / 2, size / 2);
+  if (kind === 'spark') {
+    grad.addColorStop(0, 'rgba(255,255,255,1.0)');
+    grad.addColorStop(0.28, 'rgba(255,220,140,0.88)');
+    grad.addColorStop(1, 'rgba(255,140,0,0.0)');
+  } else {
+    grad.addColorStop(0, 'rgba(255,255,255,0.92)');
+    grad.addColorStop(0.45, 'rgba(235,235,235,0.58)');
+    grad.addColorStop(1, 'rgba(200,200,200,0.0)');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function createParticleBatch(
   name: string,
@@ -124,22 +152,34 @@ export class VFXPool {
   private readonly tracerBatch: InstancedBatch<TracerState>;
   private readonly nukePool: PooledNukeSequence[] = [];
   private readonly rootGroup = new THREE.Group();
-  private readonly flashLight: THREE.PointLight;
+  private readonly flashLight: THREE.PointLight | null;
+  private readonly lightBudgetManager?: TacticalLightBudgetManager;
   private flashTimer = 0;
   private maxBudgetRatio = 1.0;
 
   constructor(
     scene: THREE.Scene,
-    resourceManager: ResourceManager
+    resourceManager: ResourceManager,
+    lightBudgetManager?: TacticalLightBudgetManager
   ) {
     this.rootGroup.name = 'vfx_pool_root';
     scene.add(this.rootGroup);
+    this.lightBudgetManager = lightBudgetManager;
 
-    this.flashLight = new THREE.PointLight(0xffb347, 0, 24, 2);
-    this.rootGroup.add(this.flashLight);
+    if (!lightBudgetManager) {
+      this.flashLight = new THREE.PointLight(0xffb347, 0, 24, 2);
+      this.rootGroup.add(this.flashLight);
+    } else {
+      this.flashLight = null;
+    }
 
-    const sphereGeo = new THREE.IcosahedronGeometry(0.28, 1);
-    resourceManager.registerGeometry(sphereGeo, 'shared', 'vfx_particle_geo');
+    const softSpriteTex = createVfxSpriteTexture('soft');
+    const sparkSpriteTex = createVfxSpriteTexture('spark');
+    if (softSpriteTex) resourceManager.registerTexture(softSpriteTex, 'shared', 'vfx_soft_tex');
+    if (sparkSpriteTex) resourceManager.registerTexture(sparkSpriteTex, 'shared', 'vfx_spark_tex');
+
+    const spriteGeo = new THREE.PlaneGeometry(0.56, 0.56);
+    resourceManager.registerGeometry(spriteGeo, 'shared', 'vfx_particle_geo');
 
     // Realistic brass cartridge cylinder (replaces spherical brass orbs)
     const brassGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.92, 6);
@@ -159,34 +199,49 @@ export class VFXPool {
     resourceManager.registerMaterial(tracerMat, 'shared', 'vfx_tracer_mat');
 
     const fireMat = new THREE.MeshBasicMaterial({
+      ...(sparkSpriteTex ? { map: sparkSpriteTex } : {}),
       color: 0xff8c38,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.88,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const smokeMat = new THREE.MeshStandardMaterial({
+      ...(softSpriteTex ? { map: softSpriteTex } : {}),
       color: 0x2d3238,
       roughness: 0.96,
       transparent: true,
       opacity: 0.62,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const exhaustMat = new THREE.MeshStandardMaterial({
+      ...(softSpriteTex ? { map: softSpriteTex } : {}),
       color: 0x9ca3af,
       roughness: 0.92,
       transparent: true,
       opacity: 0.45,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
-    const sparkMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
+    const sparkMat = new THREE.MeshBasicMaterial({
+      ...(sparkSpriteTex ? { map: sparkSpriteTex } : {}),
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
     const brassMat = new THREE.MeshStandardMaterial({ color: 0xd4a038, metalness: 0.85, roughness: 0.25 });
     const bloodMat = new THREE.MeshStandardMaterial({
+      ...(softSpriteTex ? { map: softSpriteTex } : {}),
       color: 0x7f1d1d,
       roughness: 0.82,
       metalness: 0.05,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.76,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     resourceManager.registerMaterial(fireMat, 'shared', 'vfx_fire_mat');
     resourceManager.registerMaterial(smokeMat, 'shared', 'vfx_smoke_mat');
@@ -196,12 +251,12 @@ export class VFXPool {
     resourceManager.registerMaterial(bloodMat, 'shared', 'vfx_blood_mat');
 
     // GPU-instanced batches replacing 200+ individual particle Mesh scene nodes
-    this.fireBatch = createParticleBatch('vfx_fire_instanced', 50, sphereGeo, fireMat, this.rootGroup, resourceManager);
-    this.sparkBatch = createParticleBatch('vfx_spark_instanced', 30, sphereGeo, sparkMat, this.rootGroup, resourceManager);
-    this.smokeBatch = createParticleBatch('vfx_smoke_instanced', 60, sphereGeo, smokeMat, this.rootGroup, resourceManager);
-    this.exhaustBatch = createParticleBatch('vfx_exhaust_instanced', 20, sphereGeo, exhaustMat, this.rootGroup, resourceManager);
+    this.fireBatch = createParticleBatch('vfx_fire_instanced', 50, spriteGeo, fireMat, this.rootGroup, resourceManager);
+    this.sparkBatch = createParticleBatch('vfx_spark_instanced', 30, spriteGeo, sparkMat, this.rootGroup, resourceManager);
+    this.smokeBatch = createParticleBatch('vfx_smoke_instanced', 60, spriteGeo, smokeMat, this.rootGroup, resourceManager);
+    this.exhaustBatch = createParticleBatch('vfx_exhaust_instanced', 20, spriteGeo, exhaustMat, this.rootGroup, resourceManager);
     this.brassBatch = createParticleBatch('vfx_brass_instanced', 20, brassGeo, brassMat, this.rootGroup, resourceManager);
-    this.bloodBatch = createParticleBatch('vfx_blood_instanced', 20, sphereGeo, bloodMat, this.rootGroup, resourceManager);
+    this.bloodBatch = createParticleBatch('vfx_blood_instanced', 20, spriteGeo, bloodMat, this.rootGroup, resourceManager);
     this.particleBatches = [
       this.fireBatch,
       this.sparkBatch,
@@ -379,6 +434,20 @@ export class VFXPool {
   }
 
   spawnMuzzleLight(x: number, y: number, z: number): void {
+    if (this.lightBudgetManager) {
+      this.lightBudgetManager.requestTransientLight({
+        category: 'muzzle',
+        x,
+        y,
+        z,
+        colorHex: 0xffb347,
+        intensity: 6.5,
+        distance: 18,
+        durationSec: 0.055,
+      });
+      return;
+    }
+    if (!this.flashLight) return;
     this.flashLight.position.set(x, y, z);
     this.flashLight.color.setHex(0xffb347);
     this.flashLight.distance = 18;
@@ -449,11 +518,24 @@ export class VFXPool {
 
   spawnExplosion(x: number, y: number, z: number, scale = 1.0): void {
     const clampedScale = Math.min(2.2, Math.max(0.4, scale));
-    this.flashLight.position.set(x, y + 1.5, z);
-    this.flashLight.color.setHex(0xffb347);
-    this.flashLight.distance = 24 * Math.min(2.5, clampedScale);
-    this.flashLight.intensity = 16 * Math.min(2.5, clampedScale);
-    this.flashTimer = 0.22;
+    if (this.lightBudgetManager) {
+      this.lightBudgetManager.requestTransientLight({
+        category: 'explosion',
+        x,
+        y: y + 1.5,
+        z,
+        colorHex: 0xffb347,
+        intensity: 16 * Math.min(2.5, clampedScale),
+        distance: 24 * Math.min(2.5, clampedScale),
+        durationSec: 0.22,
+      });
+    } else if (this.flashLight) {
+      this.flashLight.position.set(x, y + 1.5, z);
+      this.flashLight.color.setHex(0xffb347);
+      this.flashLight.distance = 24 * Math.min(2.5, clampedScale);
+      this.flashLight.intensity = 16 * Math.min(2.5, clampedScale);
+      this.flashTimer = 0.22;
+    }
 
     const fireCount = Math.max(4, Math.round(11 * this.maxBudgetRatio));
     for (let i = 0; i < fireCount; i++) {
@@ -492,11 +574,24 @@ export class VFXPool {
   }
 
   spawnStrategicNukeVfx(x: number, y: number, z: number, reducedMotion = false): void {
-    this.flashLight.position.set(x, y + 14, z);
-    this.flashLight.color.setHex(0xfef3c7);
-    this.flashLight.distance = 180;
-    this.flashLight.intensity = reducedMotion ? 18 : 48;
-    this.flashTimer = 0.85;
+    if (this.lightBudgetManager) {
+      this.lightBudgetManager.requestTransientLight({
+        category: 'explosion',
+        x,
+        y: y + 14,
+        z,
+        colorHex: 0xfef3c7,
+        intensity: reducedMotion ? 18 : 48,
+        distance: 180,
+        durationSec: 0.85,
+      });
+    } else if (this.flashLight) {
+      this.flashLight.position.set(x, y + 14, z);
+      this.flashLight.color.setHex(0xfef3c7);
+      this.flashLight.distance = 180;
+      this.flashLight.intensity = reducedMotion ? 18 : 48;
+      this.flashTimer = 0.85;
+    }
 
     const seq = this.nukePool.find((n) => !n.active) ?? this.nukePool[0];
     seq.active = true;
@@ -524,8 +619,10 @@ export class VFXPool {
     this.spawnExplosion(x, y + 1, z, 2.2);
   }
 
-  update(dt: number): void {
-    if (this.flashTimer > 0) {
+  update(dt: number, cameraPosition?: THREE.Vector3): void {
+    if (this.lightBudgetManager) {
+      this.lightBudgetManager.update(dt);
+    } else if (this.flashTimer > 0 && this.flashLight) {
       this.flashTimer -= dt;
       if (this.flashTimer <= 0) this.flashLight.intensity = 0;
     }
@@ -562,16 +659,24 @@ export class VFXPool {
         continue;
       }
 
+      const isSpinningBatch = batch === this.brassBatch;
       for (let i = 0; i < batch.activeCount; i++) {
         const p = batch.items[i];
         const t = p.life / p.maxLife;
         const s = p.scaleStart + (p.scaleEnd - p.scaleStart) * t;
         _vfxPos.set(p.x, p.y, p.z);
         _vfxScale.set(s, s, s);
-        if (p.spinX !== 0 || p.spinY !== 0) {
+        if (p.spinX !== 0 || p.spinY !== 0 || isSpinningBatch) {
           _vfxEulerSpin.set(p.rotX, p.rotY, 0);
           _vfxQuatSpin.setFromEuler(_vfxEulerSpin);
           _vfxMat4.compose(_vfxPos, _vfxQuatSpin, _vfxScale);
+        } else if (cameraPosition) {
+          _vfxLookHelper.position.copy(_vfxPos);
+          _vfxLookHelper.lookAt(cameraPosition);
+          _vfxLookHelper.scale.copy(_vfxScale);
+          _vfxLookHelper.updateMatrix();
+          batch.mesh.setMatrixAt(i, _vfxLookHelper.matrix);
+          continue;
         } else {
           _vfxMat4.compose(_vfxPos, _vfxQuatIdentity, _vfxScale);
         }
@@ -683,7 +788,9 @@ export class VFXPool {
       seq.capMesh.visible = false;
       seq.falloutRing.visible = false;
     }
-    this.flashLight.intensity = 0;
+    if (this.flashLight) {
+      this.flashLight.intensity = 0;
+    }
   }
 
   getActiveCount(): number {

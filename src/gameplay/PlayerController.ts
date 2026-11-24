@@ -207,9 +207,20 @@ export class PlayerController {
   constructor(private readonly audio: AudioManager) {}
 
   private incomingDamageScale = 1.0;
+  private cameraShakeScale = 1.0;
+  private reducedMotion = false;
+  private activeHeadBobIntensity = 1.0;
 
   setIncomingDamageScale(scale: number): void {
     this.incomingDamageScale = Math.max(0.5, Math.min(2.5, scale));
+  }
+
+  setMotionSettings(cameraShakeScale: number, reducedMotion: boolean): void {
+    this.cameraShakeScale = Math.max(
+      0,
+      Math.min(1.5, Number.isFinite(cameraShakeScale) ? cameraShakeScale : 1.0)
+    );
+    this.reducedMotion = Boolean(reducedMotion);
   }
 
   setDifficultyProfile(profile: DifficultyCombatProfile): void {
@@ -438,13 +449,21 @@ export class PlayerController {
   }
 
   addCameraShake(amount: number): void {
-    this.trauma = Math.min(1, this.trauma + amount);
+    const motionMul = this.reducedMotion ? 0.35 : 1.0;
+    const scaled = amount * this.cameraShakeScale * motionMul;
+    if (scaled > 0) {
+      this.trauma = Math.min(1, this.trauma + scaled);
+    }
   }
 
   applySuppressionPulse(intensity: number): void {
     this.suppressionLevel = Math.min(1, this.suppressionLevel + intensity);
     // TRN-12: Reduced near-miss suppression camera shake by 50% for fair aim readability
-    this.trauma = Math.min(0.24, this.trauma + intensity * 0.06);
+    const motionMul = this.reducedMotion ? 0.35 : 1.0;
+    const scaledTrauma = intensity * 0.06 * this.cameraShakeScale * motionMul;
+    if (scaledTrauma > 0) {
+      this.trauma = Math.min(0.24, this.trauma + scaledTrauma);
+    }
   }
 
   emitAcousticEvent(radiusMeters: number, nowSec: number): void {
@@ -761,7 +780,8 @@ export class PlayerController {
   }
 
   private triggerLandingSpring(impactVy: number): void {
-    const mag = Math.min(0.22, Math.max(0.035, impactVy * 0.016));
+    const motionScale = this.reducedMotion ? 0.35 : Math.max(0.2, this.cameraShakeScale);
+    const mag = Math.min(0.22, Math.max(0.035, impactVy * 0.016)) * motionScale;
     this.landCompressionOffset = Math.max(-0.22, this.landCompressionOffset - mag * 0.45);
     this.landSpringVel = Math.max(-3.4, this.landSpringVel - mag * 14.5);
   }
@@ -1135,6 +1155,10 @@ export class PlayerController {
   ): void {
     if (!this.alive) return;
     this.prevPosition.copy(this.position);
+    this.activeHeadBobIntensity = Math.max(
+      0,
+      Math.min(1.5, Number.isFinite(headBobIntensity) ? headBobIntensity : 1.0)
+    );
 
     this.timeSinceDamage += dt;
     this.spawnProtectionRemainingSec = Math.max(0, this.spawnProtectionRemainingSec - dt);
@@ -1468,7 +1492,7 @@ export class PlayerController {
     }
 
     if (this.grounded && this.currentSpeed > 1.2 && !this.isSliding) {
-      this.bobTime += dt * (this.isSprinting ? 13 : 8.8) * headBobIntensity;
+      this.bobTime += dt * (this.isSprinting ? 13 : 8.8);
       this.stepDistAccum += this.currentSpeed * dt;
       if (this.stepDistAccum >= (this.isSprinting ? 2.6 : 2.1)) {
         this.stepDistAccum = 0;
@@ -1490,9 +1514,10 @@ export class PlayerController {
     const targetEye = this.isSliding
       ? this.slideEyeHeight
       : THREE.MathUtils.lerp(this.standingEyeHeight, this.crouchEyeHeight, this.crouchBlend);
+    const bobMotionScale = this.activeHeadBobIntensity * (this.reducedMotion ? 0.45 : 1.0);
     const bobOffset =
       this.grounded && !this.isVaulting && this.currentSpeed > 1.2 && !isAds
-        ? Math.sin(this.bobTime) * 0.045
+        ? Math.sin(this.bobTime) * 0.045 * bobMotionScale
         : 0;
     const shake = this.trauma * this.trauma * 0.035;
     let sx = (Math.random() - 0.5) * shake;
@@ -1522,7 +1547,8 @@ export class PlayerController {
       this._interpPos.z
     );
 
-    const rollOffset = (this.isSliding ? -0.05 : 0) + this.vaultRollOffset + this.cameraRollKick;
+    const slideRoll = this.isSliding ? -0.05 * (this.reducedMotion ? 0.4 : 1.0) : 0;
+    const rollOffset = slideRoll + this.vaultRollOffset + this.cameraRollKick;
     this._camEuler.set(
       Math.max(-1.45, Math.min(1.45, this.pitch + this.recoilPitchOffset + this.vaultPitchOffset)),
       this.yaw + this.recoilYawOffset,

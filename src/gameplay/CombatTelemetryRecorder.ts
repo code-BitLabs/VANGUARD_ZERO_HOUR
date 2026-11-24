@@ -258,6 +258,7 @@ export interface PerformanceTelemetrySnapshot {
   maxFps: number;
   frameMs: number;
   avgFrameMs: number;
+  p50FrameMs?: number;
   p95FrameMs: number;
   p99FrameMs: number;
   cpuTimeMs: number;
@@ -283,6 +284,8 @@ export interface PerformanceTelemetrySnapshot {
   renderWidth?: number;
   renderHeight?: number;
   pixelRatio?: number;
+  aaMode?: string;
+  gpuFrameMs?: number | null;
   memoryUsedMb?: number | null;
   gpuTimerNote: string;
 }
@@ -615,6 +618,7 @@ export class CombatTelemetryRecorder {
     maxFps: 60,
     frameMs: 16.6,
     avgFrameMs: 16.6,
+    p50FrameMs: 16.6,
     p95FrameMs: 16.6,
     p99FrameMs: 16.6,
     cpuTimeMs: 0,
@@ -640,6 +644,8 @@ export class CombatTelemetryRecorder {
     renderWidth: 1280,
     renderHeight: 720,
     pixelRatio: 1,
+    aaMode: 'auto',
+    gpuFrameMs: null,
     memoryUsedMb: null,
     gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
   };

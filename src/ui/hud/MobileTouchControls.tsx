@@ -109,6 +109,10 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
 
   const lookPointerId = useRef<number | null>(null);
   const lookLastPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const fireLookPointerId = useRef<number | null>(null);
+  const fireLookStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const fireLookLastPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const fireLookDragEngaged = useRef<boolean>(false);
 
   const heldButtonPointers = useRef<Map<number, ExtendedInputAction[]>>(new Map());
   const heldFireSides = useRef<Map<number, 'left' | 'right'>>(new Map());
@@ -224,6 +228,8 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
     stickPointerId.current = null;
     stickTouchFallbackId.current = null;
     lookPointerId.current = null;
+    fireLookPointerId.current = null;
+    fireLookDragEngaged.current = false;
     wheelPointerId.current = null;
     vehSteerPointers.current.clear();
     vehPedalPointers.current.clear();
@@ -362,8 +368,31 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
     lookPointerId.current = null;
   }, []);
 
+  const moveFireLookByPointerId = useCallback((pointerId: number, clientX: number, clientY: number) => {
+    if (fireLookPointerId.current !== pointerId) return;
+    const dx = clientX - fireLookLastPos.current.x;
+    const dy = clientY - fireLookLastPos.current.y;
+    fireLookLastPos.current = { x: clientX, y: clientY };
+    if (lookPointerId.current !== null) return;
+    if (!fireLookDragEngaged.current) {
+      const dist = Math.hypot(
+        clientX - fireLookStartPos.current.x,
+        clientY - fireLookStartPos.current.y
+      );
+      if (dist <= 4) return;
+      fireLookDragEngaged.current = true;
+    }
+    if (dx !== 0 || dy !== 0) {
+      inputManagerRef.current?.addVirtualLookDelta(dx, dy);
+    }
+  }, []);
+
   const endHoldByPointerId = useCallback(
     (pointerId: number) => {
+      if (fireLookPointerId.current === pointerId) {
+        fireLookPointerId.current = null;
+        fireLookDragEngaged.current = false;
+      }
       const actions = heldButtonPointers.current.get(pointerId);
       heldFireSides.current.delete(pointerId);
       if (!actions) {
@@ -408,6 +437,8 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
       stickPointerId.current = null;
       stickTouchFallbackId.current = null;
       lookPointerId.current = null;
+      fireLookPointerId.current = null;
+      fireLookDragEngaged.current = false;
       wheelPointerId.current = null;
       vehSteerPointers.current.clear();
       vehPedalPointers.current.clear();
@@ -443,6 +474,8 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
         applyWheelPosition(e.clientX);
       } else if (e.pointerId === lookPointerId.current) {
         moveLookByPointerId(e.pointerId, e.clientX, e.clientY);
+      } else if (e.pointerId === fireLookPointerId.current) {
+        moveFireLookByPointerId(e.pointerId, e.clientX, e.clientY);
       }
     };
 
@@ -560,6 +593,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
     endLookByPointerId,
     endStickByPointerId,
     endVehiclePointerId,
+    moveFireLookByPointerId,
     moveLookByPointerId,
     releaseAllVirtual,
   ]);
@@ -722,6 +756,12 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
     heldButtonPointers.current.set(e.pointerId, actions);
     if (fireSide) {
       heldFireSides.current.set(e.pointerId, fireSide);
+      if (fireSide === 'right' && !inVehicleRef.current) {
+        fireLookPointerId.current = e.pointerId;
+        fireLookStartPos.current = { x: e.clientX, y: e.clientY };
+        fireLookLastPos.current = { x: e.clientX, y: e.clientY };
+        fireLookDragEngaged.current = false;
+      }
     }
     for (const a of actions) {
       inputManager?.setVirtualActionState(a, true);
@@ -1422,6 +1462,12 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
               aria-label="Fire Weapon"
               aria-pressed={isRightFiring}
               onPointerDown={(e) => startHoldActions(e, fireActions, 'right')}
+              onPointerMove={(e) => {
+                if (fireLookPointerId.current === e.pointerId) {
+                  e.stopPropagation();
+                  moveFireLookByPointerId(e.pointerId, e.clientX, e.clientY);
+                }
+              }}
               onPointerUp={endHoldActions}
               onPointerCancel={endHoldActions}
               onLostPointerCapture={endHoldActions}

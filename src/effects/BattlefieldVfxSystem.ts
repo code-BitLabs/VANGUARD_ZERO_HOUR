@@ -147,7 +147,7 @@ export class BattlefieldVfxSystem {
     }
 
     const additiveGeo = new THREE.PlaneGeometry(0.45, 0.45);
-    const smokeGeo = new THREE.IcosahedronGeometry(0.35, 1);
+    const smokeGeo = new THREE.PlaneGeometry(0.7, 0.7);
     const debrisGeo = new THREE.DodecahedronGeometry(0.11, 0);
     const casingGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.042, 6);
     const rainGeo = new THREE.BoxGeometry(0.012, 0.68, 0.012);
@@ -173,6 +173,7 @@ export class BattlefieldVfxSystem {
       transparent: true,
       opacity: 0.56,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const debrisMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -616,7 +617,7 @@ export class BattlefieldVfxSystem {
         const t = s.life / s.maxLife;
         const scale = s.scaleStart + (s.scaleEnd - s.scaleStart) * t;
         this.dummy.position.set(s.px, s.py, s.pz);
-        if (kind === 'additive' && cameraPosition) {
+        if ((kind === 'additive' || kind === 'smoke') && cameraPosition) {
           this.dummy.lookAt(cameraPosition);
         } else {
           this.dummy.rotation.set(s.rx, s.ry, s.rz);

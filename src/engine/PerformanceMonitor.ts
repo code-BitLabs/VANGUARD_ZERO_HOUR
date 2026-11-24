@@ -47,6 +47,7 @@ export class PerformanceMonitor {
     maxFps: 60,
     frameMs: 16.6,
     avgFrameMs: 16.6,
+    p50FrameMs: 16.6,
     p95FrameMs: 16.6,
     p99FrameMs: 16.6,
     cpuTimeMs: 0,
@@ -72,6 +73,8 @@ export class PerformanceMonitor {
     renderWidth: 1280,
     renderHeight: 720,
     pixelRatio: 1,
+    aaMode: 'auto',
+    gpuFrameMs: null,
     memoryUsedMb: null,
     gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
   };
@@ -166,12 +169,21 @@ export class PerformanceMonitor {
       const sorted = [...this.frameHistory].sort((a, b) => a - b);
       const n = sorted.length;
       const avgFrameMs = n > 0 ? sorted.reduce((a, b) => a + b, 0) / n : this.smoothedFrameMs;
+      const p50FrameMs = n > 0 ? sorted[Math.min(n - 1, Math.floor(n * 0.5))] : this.smoothedFrameMs;
       const p95FrameMs = n > 0 ? sorted[Math.min(n - 1, Math.floor(n * 0.95))] : this.smoothedFrameMs;
       const p99FrameMs = n > 0 ? sorted[Math.min(n - 1, Math.floor(n * 0.99))] : this.smoothedFrameMs;
       const fps1PercentLow = Math.max(1, Math.round(1000 / Math.max(1, p99FrameMs)));
 
       const drawInfo = renderer.getDrawInfo();
       const renderMetrics = renderer.getRenderMetrics();
+      const postState =
+        typeof (renderer as { getPostProcessState?: () => { aaMode?: string; gpuFrameMs?: number | null } }).getPostProcessState === 'function'
+          ? renderer.getPostProcessState()
+          : null;
+      const gpuFrameMs =
+        typeof (renderer as { getGpuFrameMs?: () => number | null }).getGpuFrameMs === 'function'
+          ? renderer.getGpuFrameMs()
+          : (postState?.gpuFrameMs ?? null);
       const resSnap = resourceManager.getSnapshot();
       const profile = governor.getProfile();
       const lastSpikeAgeSec =
@@ -191,6 +203,7 @@ export class PerformanceMonitor {
         fps1PercentLow,
         frameMs: Number(this.smoothedFrameMs.toFixed(2)),
         avgFrameMs: Number(avgFrameMs.toFixed(2)),
+        p50FrameMs: Number(p50FrameMs.toFixed(2)),
         p95FrameMs: Number(p95FrameMs.toFixed(2)),
         p99FrameMs: Number(p99FrameMs.toFixed(2)),
         cpuTimeMs: Number(this.getCpuTimeMs().toFixed(2)),
@@ -215,8 +228,13 @@ export class PerformanceMonitor {
         renderWidth: renderMetrics.renderWidth,
         renderHeight: renderMetrics.renderHeight,
         pixelRatio: renderMetrics.pixelRatio,
+        aaMode: postState?.aaMode ?? 'off',
+        gpuFrameMs,
         memoryUsedMb,
-        gpuTimerNote: 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
+        gpuTimerNote:
+          gpuFrameMs !== null
+            ? `WebGL2 EXT_disjoint_timer_query GPU frame: ${gpuFrameMs}ms`
+            : 'WebGL2 CPU draw/triangle counters (hardware GPU timer query unavailable in browser)',
       };
 
       gameSessionStore.getState().updateDiagnostics({

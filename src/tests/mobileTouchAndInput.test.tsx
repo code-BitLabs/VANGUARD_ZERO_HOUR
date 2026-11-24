@@ -259,9 +259,9 @@ describe('PUBG-Style Mobile Multitouch Controls, 360° Movement & Camera Look', 
     const fireBtn = screen.getByTestId('touch-btn-fire');
     const adsBtn = screen.getByTestId('touch-btn-ads');
 
-    // Pressing and wiggling a finger on the Fire button MUST NOT cause an unintended camera jump
+    // Pressing and micro-wiggling (<= 4px deadzone) on the Fire button MUST NOT cause an unintended camera jump
     fireEvent.pointerDown(fireBtn, makePointerEventInit(3, 760, 310));
-    fireEvent.pointerMove(window, makePointerEventInit(3, 780, 290));
+    fireEvent.pointerMove(window, makePointerEventInit(3, 762, 308));
     expect(input.isActionHeld('fire')).toBe(true);
     expect(input.consumeLookDelta(false)).toEqual({ yawDelta: 0, pitchDelta: 0 });
 

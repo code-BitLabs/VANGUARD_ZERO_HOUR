@@ -98,6 +98,7 @@ import { GraphicsAdaptiveCoordinator } from './GraphicsAdaptiveCoordinator';
 import { HudSnapshotPublisher } from './HudSnapshotPublisher';
 import { InputManager } from './InputManager';
 import { MissionLifecycleLoader } from './MissionLifecycleLoader';
+import { MissionLoadCoordinator } from './MissionLoadCoordinator';
 import { PerformanceGovernor } from './PerformanceGovernor';
 import { PerformanceMonitor } from './PerformanceMonitor';
 import { PbrMaterialLibrary } from '@/src/assets/PbrMaterialLibrary';
@@ -243,7 +244,7 @@ export class GameEngine {
   private readonly hudPublisher = new HudSnapshotPublisher();
   private readonly combatFeedback: CombatFeedbackDirector;
   private readonly combatDamage: CombatDamageResolver;
-  private missionLoadGeneration = 0;
+  private readonly loadCoordinator = new MissionLoadCoordinator(this.resourceManager);
   private readonly _audioOcclusionRayHit: RayHit = {
     hit: false,
     distance: 0,
@@ -267,7 +268,7 @@ export class GameEngine {
   private c4KeyPriming = false;
   private readonly _convoyMarkerScratch = new THREE.Vector3();
 
-  private readonly pbrLibrary = new PbrMaterialLibrary();
+  private readonly pbrLibrary = new PbrMaterialLibrary(this.resourceManager);
   private readonly spatialAcoustics = new SpatialAcousticEngine();
   private readonly battlefieldVfx: BattlefieldVfxSystem;
   private readonly surfaceDecals: SurfaceDecalManager;
@@ -291,7 +292,6 @@ export class GameEngine {
   private activeMission: MissionConfig | null = null;
   private activeScope: ResourceScope | null = null;
   private activeEntityScope: ResourceScope | null = null;
-  private activeAbortController: AbortController | null = null;
   private attemptContext: MissionAttemptContext | null = null;
   private activeCheckpointSnapshot: MissionCheckpointSnapshot | null = null;
   private pendingDefeatPayload: MissionResultPayload | null = null;
@@ -390,7 +390,11 @@ export class GameEngine {
     this.input.attach(this.renderer.renderer.domElement);
 
     this.debugRenderer = new CombatDebugRenderer(this.renderer.scene, this.resourceManager);
-    this.vfx = new VFXPool(this.renderer.scene, this.resourceManager);
+    this.vfx = new VFXPool(
+      this.renderer.scene,
+      this.resourceManager,
+      this.renderer.lightBudgetManager
+    );
     this.ballistics = new BallisticSolver(this.vfx, this.telemetry);
     this.projectiles = new ProjectileManager(
       this.renderer.scene,
@@ -542,7 +546,6 @@ export class GameEngine {
       feedbackDirector: this.combatFeedback,
       onEnemyImpactVfx: (point, hitKind) => {
         if (hitKind === 'armor_deflect' || hitKind === 'armor_break') {
-          this.vfx.spawnImpact(point.x, point.y, point.z, 'metal');
           this.battlefieldVfx.emitSurfaceImpact('metal', point, this.tmpUpVec);
         } else {
           this.vfx.spawnImpact(point.x, point.y, point.z, 'blood');
@@ -598,6 +601,23 @@ export class GameEngine {
         this.tmpDownOrigin.set(x, y + 1.6, z);
         const groundY = this.collisionWorld.getGroundHeightAt(x, z);
         const onGround = Math.abs(y - groundY) <= 0.35;
+        let hitColliderId: string | null = null;
+        if (!onGround) {
+          const hitDown = this.collisionWorld.sweptSegmentTest(
+            this.tmpDownOrigin.x,
+            this.tmpDownOrigin.y,
+            this.tmpDownOrigin.z,
+            0,
+            -1,
+            0,
+            Math.max(4.5, radius),
+            SOLID_OBSTRUCTION_MASK,
+            this._audioOcclusionRayHit
+          );
+          if (hitDown && this._audioOcclusionRayHit.hit) {
+            hitColliderId = this._audioOcclusionRayHit.collider?.id ?? null;
+          }
+        }
         const groundMesh = onGround
           ? (this.worldData?.groundMesh ?? null)
           : this.findDecalTargetMesh(
@@ -605,17 +625,22 @@ export class GameEngine {
               this.tmpDownDir,
               0.05,
               Math.max(4.5, radius),
-              null,
+              hitColliderId,
               this.tmpExplosionPos
             );
         if (groundMesh) {
           this.tmpExplosionPos.set(x, Number.isFinite(groundY) ? groundY + 0.02 : y, z);
+          const destructibleId =
+            typeof groundMesh.userData?.destructibleId === 'string'
+              ? groundMesh.userData.destructibleId
+              : hitColliderId;
           this.surfaceDecals.spawnImpactDecal({
             targetMesh: groundMesh,
             point: this.tmpExplosionPos,
             normal: this.tmpUpVec,
             isExplosion: true,
             radiusScale: scale,
+            destructibleId,
           });
         }
       },
@@ -860,13 +885,14 @@ export class GameEngine {
     preferredWeapon?: WeaponId,
     deploymentMode?: DeploymentMode
   ): Promise<void> {
-    const myGen = ++this.missionLoadGeneration;
-    // Abort any prior in-flight load immediately before touching world state
-    this.activeAbortController?.abort();
+    const mission = getMissionById(missionId);
+    const scope: ResourceScope = `mission:${mission.id}`;
+    const entityScope: ResourceScope = `mission:${mission.id}:entities`;
+    // Abort any prior in-flight load and advance generation before touching world state
+    const loadToken = this.loadCoordinator.beginLoad(scope);
     this.audio.unlock();
     this.input.clearAllInputs();
     this.flushPendingDefeatProgression();
-    const mission = getMissionById(missionId);
     const resolvedMode: DeploymentMode =
       deploymentMode ?? missionSelectionStore.getState().getDeploymentModeForMission(mission.id);
     this.activeDeploymentMode = resolvedMode;
@@ -890,14 +916,10 @@ export class GameEngine {
     uiStore.getState().setScreen('loading');
     gameSessionStore.getState().resetSession();
 
-    const scope: ResourceScope = `mission:${mission.id}`;
-    const entityScope: ResourceScope = `mission:${mission.id}:entities`;
     this.activeScope = scope;
     this.activeEntityScope = entityScope;
     this.activeMission = mission;
-    this.activeAbortController = this.resourceManager.createAbortController(scope);
-    const signal = this.activeAbortController.signal;
-    const isStale = () => signal.aborted || myGen !== this.missionLoadGeneration;
+    const { signal, isStale, generation: myGen } = loadToken;
 
     try {
       const totalStages = 4;
@@ -941,7 +963,7 @@ export class GameEngine {
       this.publishHudSnapshot();
     } catch (err) {
       // Never clobber a newer startMission() call if this load was superseded by a newer generation!
-      if (myGen !== this.missionLoadGeneration) {
+      if (!this.loadCoordinator.isCurrentGeneration(myGen)) {
         return;
       }
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -1407,8 +1429,7 @@ export class GameEngine {
   }
 
   cancelLoad(): void {
-    this.missionLoadGeneration++;
-    this.activeAbortController?.abort();
+    this.loadCoordinator.invalidateActiveLoad();
     this.lifecycle.send({ type: 'CANCEL_LOAD' });
     this.unloadToMenu();
   }
@@ -1456,8 +1477,7 @@ export class GameEngine {
     const preservedAttempt = this.attemptContext;
     const snapshotToRestore = this.activeCheckpointSnapshot;
 
-    this.activeAbortController?.abort();
-    this.activeAbortController = null;
+    this.loadCoordinator.invalidateActiveLoad();
     this.audio.resume();
     this.audio.unlock();
     this.audio.stopMissionLoops();
@@ -1604,6 +1624,7 @@ export class GameEngine {
   }
 
   private unloadToMenu(targetScreen: 'title' | 'campaign' = 'title'): void {
+    this.loadCoordinator.invalidateActiveLoad();
     this.input.clearAllInputs();
     this.unloadCurrentWorld();
     const curState = this.lifecycle.getSnapshot().value;
@@ -2262,6 +2283,12 @@ export class GameEngine {
       this.cargoLiftManager.updateFixed(dt, this._liftOccupantScratch);
     }
 
+    this.player.setMotionSettings(
+      settings.accessibility.screenShakeReduction
+        ? Math.min(0.4, settings.gameplay.cameraShakeIntensity)
+        : settings.gameplay.cameraShakeIntensity,
+      settings.accessibility.reducedMotion
+    );
     this.player.update(
       dt,
       this.input,
@@ -2940,7 +2967,7 @@ export class GameEngine {
 
   private onUpdateVfx = (dt: number): void => {
     if (uiStore.getState().screen !== 'playing') return;
-    this.vfx.update(dt);
+    this.vfx.update(dt, this.renderer.camera.position);
     this.battlefieldVfx.update(dt, this.renderer.camera.position);
     this.surfaceDecals.update(dt, this.renderer.camera.position);
     this.missionEnhancement?.update(dt);
