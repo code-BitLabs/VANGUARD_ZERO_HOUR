@@ -42,6 +42,7 @@ import {
 import { useAudioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore } from '@/src/stores/uiStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import {
   MobileControlLayoutPreview,
   MobileHudEditorModal,
@@ -126,6 +127,9 @@ export function SettingsPanel({
   const resetDefaults = useSettingsStore((s) => s.resetDefaults);
 
   const audio = useAudioSettingsStore((s) => s);
+  const viewport = useViewportMode();
+  const isMobileControlsFirst =
+    viewport.isCoarsePointer || viewport.isCompactLandscape || viewport.isPortrait;
 
   const [activeTab, setActiveTab] = useState<SettingsTabId>('graphics');
   const [, startSettingsTransition] = useTransition();
@@ -302,7 +306,7 @@ export function SettingsPanel({
     >
       <div className="w-full max-w-5xl bg-[var(--vg-bg-panel)] border border-[var(--vg-border-subtle)] rounded-sm shadow-2xl flex flex-col max-h-[96dvh]">
         {/* Top Command Rail + Session Actions */}
-        <div className="px-4 sm:px-6 pt-3 pb-2 shrink-0">
+        <div className="px-4 sm:px-6 [@media(max-height:520px)]:px-3 pt-3 [@media(max-height:520px)]:pt-2 pb-2 [@media(max-height:520px)]:pb-1.5 shrink-0">
           <CommandHQTopBar
             activeSection="settings"
             subtitle="7-Category Tactical Configuration"
@@ -310,31 +314,36 @@ export function SettingsPanel({
             onNavigate={(target) => requestNavigation(target)}
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5">
-            <div className="flex items-center gap-2 text-xs font-mono">
+          <div className="flex flex-wrap [@media(max-height:520px)]:flex-nowrap items-center justify-between gap-1.5 sm:gap-2 [@media(max-height:520px)]:gap-1.5 pt-2 [@media(max-height:520px)]:pt-1 [@media(max-height:520px)]:overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 text-xs font-mono shrink-0">
               {isDirty ? (
                 <span
                   data-testid="settings-dirty-banner"
-                  className="inline-flex items-center gap-1.5 text-[var(--vg-accent-amber)]"
+                  className="inline-flex items-center gap-1 text-[var(--vg-accent-amber)] whitespace-nowrap"
                 >
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  Modified in this session (live preview active)
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span className="[@media(max-height:520px)]:hidden">
+                    Modified in this session (live preview active)
+                  </span>
+                  <span className="hidden [@media(max-height:520px)]:inline text-[11px]">
+                    Modified
+                  </span>
                 </span>
               ) : (
-                <span className="text-[var(--vg-text-muted)]">
+                <span className="text-[var(--vg-text-muted)] [@media(max-height:520px)]:hidden">
                   Profile synced · Changes preview live
                 </span>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap [@media(max-height:520px)]:flex-nowrap items-center gap-1.5 sm:gap-2 [@media(max-height:520px)]:gap-1 ml-auto shrink-0">
               {isDirty && (
                 <>
                   <Button
                     variant="outline"
                     size="sm"
                     data-testid="settings-revert-btn"
-                    className="min-h-[40px]"
+                    className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:px-2 [@media(max-height:520px)]:text-[11px] whitespace-nowrap shrink-0"
                     onClick={handleRevertChanges}
                   >
                     <Undo2 className="w-3.5 h-3.5" /> Revert
@@ -343,7 +352,7 @@ export function SettingsPanel({
                     variant="primary"
                     size="sm"
                     data-testid="settings-apply-btn"
-                    className="min-h-[40px]"
+                    className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:px-2 [@media(max-height:520px)]:text-[11px] whitespace-nowrap shrink-0"
                     onClick={handleApplyAndSave}
                   >
                     <Check className="w-3.5 h-3.5" /> Save Snapshot
@@ -355,7 +364,7 @@ export function SettingsPanel({
                   variant="ghost"
                   size="sm"
                   data-testid="settings-reset-category-btn"
-                  className="min-h-[40px]"
+                  className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:px-2 [@media(max-height:520px)]:text-[11px] whitespace-nowrap shrink-0"
                   onClick={handleResetCurrentCategory}
                 >
                   Reset Tab
@@ -365,7 +374,7 @@ export function SettingsPanel({
                 variant="ghost"
                 size="sm"
                 data-testid="settings-reset-all-btn"
-                className="min-h-[40px]"
+                className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:px-2 [@media(max-height:520px)]:text-[11px] whitespace-nowrap shrink-0"
                 onClick={() => setConfirmResetAllOpen(true)}
               >
                 <RotateCcw className="w-3.5 h-3.5" /> Reset All
@@ -373,7 +382,7 @@ export function SettingsPanel({
               <Button
                 variant="secondary"
                 size="sm"
-                className="min-h-[40px] px-4"
+                className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] px-4 [@media(max-height:520px)]:px-2.5 [@media(max-height:520px)]:text-[11px] whitespace-nowrap shrink-0"
                 onClick={() => {
                   commitBaseline();
                   onBack();
@@ -392,18 +401,18 @@ export function SettingsPanel({
               setActiveTab(v as SettingsTabId);
             })
           }
-          className="flex-1 flex flex-col overflow-hidden px-3 sm:px-6 pb-4"
+          className="flex-1 flex flex-col overflow-hidden px-3 sm:px-6 [@media(max-height:520px)]:px-3 pb-4 [@media(max-height:520px)]:pb-2"
         >
-          <TabsList className="mb-3 shrink-0 min-h-[48px] py-1 w-full max-w-full overflow-x-auto flex-nowrap sm:flex-wrap justify-start">
-            <TabsTrigger value="display" className="min-h-[40px] whitespace-nowrap shrink-0">Display</TabsTrigger>
-            <TabsTrigger value="graphics" className="min-h-[40px] whitespace-nowrap shrink-0">Graphics</TabsTrigger>
-            <TabsTrigger value="audio" className="min-h-[40px] whitespace-nowrap shrink-0">Audio</TabsTrigger>
-            <TabsTrigger value="controls" className="min-h-[40px] whitespace-nowrap shrink-0">Controls &amp; Keys</TabsTrigger>
-            <TabsTrigger value="gameplay" className="min-h-[40px] whitespace-nowrap shrink-0">Gameplay</TabsTrigger>
-            <TabsTrigger value="hud" className="min-h-[40px] whitespace-nowrap shrink-0">HUD</TabsTrigger>
-            <TabsTrigger value="accessibility" className="min-h-[40px] whitespace-nowrap shrink-0">Accessibility</TabsTrigger>
+          <TabsList className="mb-3 [@media(max-height:520px)]:mb-1.5 shrink-0 min-h-[48px] [@media(max-height:520px)]:min-h-[38px] py-1 [@media(max-height:520px)]:py-0.5 w-full max-w-full overflow-x-auto flex-nowrap lg:flex-wrap [@media(max-height:520px)]:flex-nowrap justify-start">
+            <TabsTrigger value="display" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Display</TabsTrigger>
+            <TabsTrigger value="graphics" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Graphics</TabsTrigger>
+            <TabsTrigger value="audio" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Audio</TabsTrigger>
+            <TabsTrigger value="controls" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Controls &amp; Keys</TabsTrigger>
+            <TabsTrigger value="gameplay" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Gameplay</TabsTrigger>
+            <TabsTrigger value="hud" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">HUD</TabsTrigger>
+            <TabsTrigger value="accessibility" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Accessibility</TabsTrigger>
             {isEnvDevModeAllowed() && (
-              <TabsTrigger value="developer" className="min-h-[40px] whitespace-nowrap shrink-0">Developer Tools</TabsTrigger>
+              <TabsTrigger value="developer" className="min-h-[40px] [@media(max-height:520px)]:min-h-[32px] [@media(max-height:520px)]:py-1 whitespace-nowrap shrink-0">Developer Tools</TabsTrigger>
             )}
           </TabsList>
 
@@ -969,38 +978,51 @@ export function SettingsPanel({
             </TabsContent>
 
             {/* 4. CONTROLS & KEYS */}
-            <TabsContent value="controls" className="space-y-4">
-              <SettingRow label={`Mouse Sensitivity (${input.mouseSensitivity.toFixed(2)}x)`}>
-                <div className="w-48 sm:w-52">
-                  <Slider
-                    aria-label="Mouse Sensitivity"
-                    value={input.mouseSensitivity}
-                    min={0.2}
-                    max={3.0}
-                    step={0.05}
-                    onValueChange={(mouseSensitivity) => updateInput({ mouseSensitivity })}
+            <TabsContent value="controls" className="flex flex-col gap-4">
+              <div
+                data-testid="controls-desktop-mouse-section"
+                className={`space-y-3 ${isMobileControlsFirst ? 'order-2 pt-3 border-t border-[var(--vg-border-subtle)]' : 'order-1'}`}
+              >
+                {isMobileControlsFirst && (
+                  <p className="font-mono text-xs uppercase tracking-wider text-[var(--vg-text-secondary)]">
+                    Mouse &amp; Desktop Aiming
+                  </p>
+                )}
+                <SettingRow label={`Mouse Sensitivity (${input.mouseSensitivity.toFixed(2)}x)`}>
+                  <div className="w-full sm:w-52">
+                    <Slider
+                      aria-label="Mouse Sensitivity"
+                      value={input.mouseSensitivity}
+                      min={0.2}
+                      max={3.0}
+                      step={0.05}
+                      onValueChange={(mouseSensitivity) => updateInput({ mouseSensitivity })}
+                    />
+                  </div>
+                </SettingRow>
+
+                <SettingRow label="Invert Vertical Look (Y-Axis)">
+                  <Switch
+                    aria-label="Invert Y-Axis"
+                    checked={input.invertY}
+                    onCheckedChange={(invertY) => updateInput({ invertY })}
                   />
-                </div>
-              </SettingRow>
+                </SettingRow>
 
-              <SettingRow label="Invert Vertical Look (Y-Axis)">
-                <Switch
-                  aria-label="Invert Y-Axis"
-                  checked={input.invertY}
-                  onCheckedChange={(invertY) => updateInput({ invertY })}
-                />
-              </SettingRow>
+                <SettingRow label="Hold Aim Down Sights (Mouse)" hint="Hold RMB to aim, or switch off to toggle ADS with one click.">
+                  <Switch
+                    aria-label="Hold ADS"
+                    checked={gameplay.holdToAds}
+                    onCheckedChange={(holdToAds) => updateGameplay({ holdToAds })}
+                  />
+                </SettingRow>
+              </div>
 
-              <SettingRow label="Hold Aim Down Sights (Mouse)" hint="Hold RMB to aim, or switch off to toggle ADS with one click.">
-                <Switch
-                  aria-label="Hold ADS"
-                  checked={gameplay.holdToAds}
-                  onCheckedChange={(holdToAds) => updateGameplay({ holdToAds })}
-                />
-              </SettingRow>
-
-              {/* Mobile / Touch Controls & Layout Engine (Preserved with exact test IDs) */}
-              <div className="pt-3 border-t border-[var(--vg-border-subtle)] space-y-3">
+              {/* Mobile / Touch Controls & Layout Engine (Prioritized first on mobile/touch viewports) */}
+              <div
+                data-testid="controls-mobile-touch-section"
+                className={`space-y-3 ${isMobileControlsFirst ? 'order-1' : 'order-2 pt-3 border-t border-[var(--vg-border-subtle)]'}`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Hand className="w-4 h-4 text-[var(--vg-accent-amber)]" />
@@ -1194,7 +1216,7 @@ export function SettingsPanel({
               </div>
 
               {/* Interactive Key Bindings with Live Conflict Resolution */}
-              <div className="pt-3 border-t border-[var(--vg-border-subtle)]">
+              <div className="order-3 pt-3 border-t border-[var(--vg-border-subtle)]">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                   <p className="font-mono text-xs uppercase tracking-wider text-[var(--vg-text-secondary)]">
                     Key Bindings (Click to capture · ESC to cancel)
@@ -1695,12 +1717,12 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[var(--vg-bg-recessed)]/85 border border-[var(--vg-border-subtle)] px-4 py-3 rounded-sm">
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 bg-[var(--vg-bg-recessed)]/85 border border-[var(--vg-border-subtle)] px-3 sm:px-4 py-2.5 sm:py-3 rounded-sm">
       <div className="min-w-0">
         <div className="text-sm font-medium text-[var(--vg-text-primary)]">{label}</div>
         {hint && <div className="text-xs text-[var(--vg-text-muted)] mt-0.5">{hint}</div>}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="w-full sm:w-auto sm:shrink-0 max-w-full">{children}</div>
     </div>
   );
 }

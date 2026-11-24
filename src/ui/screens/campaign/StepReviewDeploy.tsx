@@ -8,6 +8,7 @@ import {
   MapPin,
   Play,
   Sliders,
+  Smartphone,
   User,
   Users,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import {
 import { DeploymentMode } from '@/src/schemas/campaign.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { SecondaryDrawerTab } from '@/src/ui/screens/campaign/CampaignSecondaryDrawers';
 import { Button } from '@/src/ui/primitives/Button';
 
@@ -61,6 +63,7 @@ export function StepReviewDeploy({
   const hasConfirmedDeploymentMode = useMissionSelectionStore(
     (s) => s.hasConfirmedDeploymentMode
   );
+  const viewport = useViewportMode();
 
   const mission = getMissionById(missionId);
   const loadout = save.activeMissionLoadout;
@@ -184,9 +187,9 @@ export function StepReviewDeploy({
       )}
 
       {/* Structured Pre-Deployment Manifest */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* 1. Mission */}
-        <div className="bg-[#141920] border border-zinc-800 rounded-sm p-4 space-y-2">
+        <div className="bg-[#141920] border border-zinc-800 rounded-sm p-3.5 sm:p-4 space-y-1.5 sm:space-y-2">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
               <MapPin className="w-3.5 h-3.5 text-amber-400" /> Operation
@@ -363,18 +366,27 @@ export function StepReviewDeploy({
       </div>
 
       {/* Primary Launch Call-To-Action Card */}
-      <div className="bg-[#141920] border border-amber-500/40 rounded-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
+      <div className="bg-[#141920] border border-amber-500/40 rounded-sm p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="space-y-1">
           <div className="font-mono text-[10px] uppercase tracking-wider text-amber-400">
             Ready for Insertion
           </div>
-          <div className="text-sm text-zinc-200 mt-0.5">
+          <div className="text-sm text-zinc-200">
             Deploying into <span className="font-semibold text-white">{mission.title}</span> as{' '}
             <span className="font-semibold text-white">
               {deploymentMode === 'solo' ? 'Solo Operator' : 'Fireteam Commander'}
             </span>
             .
           </div>
+          {viewport.isPortrait && (
+            <div
+              data-testid="review-portrait-landscape-note"
+              className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase text-cyan-300"
+            >
+              <Smartphone className="w-3.5 h-3.5 rotate-90 shrink-0" />
+              <span>Combat deploys in landscape mode — rotate sideways after launch.</span>
+            </div>
+          )}
         </div>
         <Button
           type="button"
@@ -386,7 +398,7 @@ export function StepReviewDeploy({
             onUiClick();
             onDeploy();
           }}
-          className="min-h-[48px] px-6 shrink-0"
+          className="w-full sm:w-auto min-h-[48px] px-6 shrink-0"
         >
           <Play className="w-4 h-4 mr-2 fill-current" />
           Deploy Operation

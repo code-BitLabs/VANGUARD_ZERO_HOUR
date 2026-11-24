@@ -26,6 +26,7 @@ import { DeploymentMode, ReplayMode } from '@/src/schemas/campaign.schema';
 import { Difficulty } from '@/src/schemas/common.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { Button } from '@/src/ui/primitives/Button';
 
 export type SecondaryDrawerTab = 'intel' | 'rules' | 'performance' | 'controls' | 'briefing';
@@ -80,6 +81,7 @@ export function CampaignSecondaryDrawers({
   onClose,
   onUiClick,
 }: CampaignSecondaryDrawersProps) {
+  const viewport = useViewportMode();
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
   const setDifficulty = useMissionSelectionStore((s) => s.setDifficulty);
   const replayMode = useMissionSelectionStore((s) => s.replayMode);
@@ -136,12 +138,12 @@ export function CampaignSecondaryDrawers({
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
         {/* Header */}
-        <div className="px-4 py-3 border-b border-zinc-800 bg-[#141920] flex items-center justify-between gap-3 shrink-0">
+        <div className="px-4 py-3 [@media(max-height:480px)]:py-2 border-b border-zinc-800 bg-[#141920] flex items-center justify-between gap-3 shrink-0">
           <div className="min-w-0">
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-400">
               {mission.codeName} · Tactical Reference
             </div>
-            <h2 className="font-display text-lg font-bold uppercase text-white truncate">
+            <h2 className="font-display text-lg [@media(max-height:480px)]:text-base font-bold uppercase text-white truncate">
               {mission.title}
             </h2>
           </div>
@@ -153,14 +155,14 @@ export function CampaignSecondaryDrawers({
               onUiClick();
               onClose();
             }}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-[#0B0E11] hover:bg-zinc-800 border border-zinc-700 rounded-sm text-zinc-300 cursor-pointer shrink-0"
+            className="min-w-[44px] min-h-[44px] [@media(max-height:480px)]:min-w-[38px] [@media(max-height:480px)]:min-h-[38px] flex items-center justify-center bg-[#0B0E11] hover:bg-zinc-800 border border-zinc-700 rounded-sm text-zinc-300 cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Tab Bar */}
-        <div className="px-3 py-2 border-b border-zinc-800 bg-[#0F1319] flex items-center gap-1.5 overflow-x-auto shrink-0">
+        <div className="px-3 pr-4 py-2 [@media(max-height:480px)]:py-1.5 border-b border-zinc-800 bg-[#0F1319] flex items-center gap-1 sm:gap-1.5 overflow-x-auto shrink-0">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -171,7 +173,7 @@ export function CampaignSecondaryDrawers({
                 onUiClick();
                 onSelectTab(tab.id);
               }}
-              className={`min-h-[38px] px-2.5 py-1.5 rounded-sm border font-mono text-[10.5px] uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              className={`min-h-[36px] px-2 sm:px-2.5 py-1 rounded-sm border font-mono text-[10px] uppercase tracking-wider flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
                 openTab === tab.id
                   ? 'bg-amber-500/15 border-amber-400 text-amber-300 font-bold'
                   : 'bg-[#141920] border-zinc-800 text-zinc-400 hover:text-zinc-200'
@@ -604,9 +606,10 @@ export function CampaignSecondaryDrawers({
         </div>
 
         {/* Footer */}
-        <div className="px-4 py-2.5 border-t border-zinc-800 bg-[#141920] flex items-center justify-between shrink-0">
+        <div className="px-4 py-2.5 [@media(max-height:480px)]:py-1.5 border-t border-zinc-800 bg-[#141920] flex items-center justify-between shrink-0">
           <span className="font-mono text-[10px] text-zinc-400 flex items-center gap-1.5">
-            <BookOpen className="w-3.5 h-3.5" /> Press [ESC] to close
+            <BookOpen className="w-3.5 h-3.5" />
+            {viewport.isCoarsePointer ? 'Tap Done or outside to close' : 'Press [ESC] to close'}
           </span>
           <Button
             size="sm"
@@ -615,7 +618,7 @@ export function CampaignSecondaryDrawers({
               onUiClick();
               onClose();
             }}
-            className="min-h-[40px]"
+            className="min-h-[40px] [@media(max-height:480px)]:min-h-[34px]"
           >
             Done
           </Button>

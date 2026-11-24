@@ -92,13 +92,23 @@ export default function App() {
   const viewport = useViewportMode();
   const [portraitGateDismissed, setPortraitGateDismissed] = useState(false);
   const touchControlsVisible = resolveTouchControlsVisible(touchMode, touchHudOverride, viewport);
-  const effectivePortraitBlocked = viewport.shouldBlockPortrait && !portraitGateDismissed;
+  const screenRequiresLandscape =
+    screen === 'loading' || screen === 'playing' || screen === 'paused';
+  const effectivePortraitBlocked =
+    screenRequiresLandscape && viewport.shouldBlockPortrait && !portraitGateDismissed;
 
   useEffect(() => {
     if (!viewport.shouldBlockPortrait && portraitGateDismissed) {
       setPortraitGateDismissed(false);
     }
   }, [viewport.shouldBlockPortrait, portraitGateDismissed]);
+
+  // Auto-pause active combat if the player rotates into portrait mid-firefight
+  useEffect(() => {
+    if (screen === 'playing' && viewport.shouldBlockPortrait && !portraitGateDismissed) {
+      engineRef.current?.pauseMission();
+    }
+  }, [screen, viewport.shouldBlockPortrait, portraitGateDismissed]);
 
   const enginePromiseRef = useRef<Promise<GameEngine | null> | null>(null);
   const ensureEngineRef = useRef<(() => Promise<GameEngine | null>) | null>(null);
@@ -447,12 +457,13 @@ export default function App() {
 
           <ToastAndRecoveryLayer />
 
-          {/* Portrait Orientation Enforcement Gate for Mobile Smartphones */}
+          {/* Portrait Orientation Enforcement Gate for Landscape Combat Modes Only */}
           {effectivePortraitBlocked && (
             <div
               role="dialog"
               aria-modal="true"
               aria-label="Rotate Device to Landscape"
+              data-testid="portrait-orientation-gate"
               className="fixed inset-0 z-[70] h-[100dvh] bg-[#0B0E11] flex flex-col items-center justify-center p-6 text-center"
               style={{
                 paddingTop: 'max(24px, env(safe-area-inset-top, 0px))',
@@ -461,28 +472,45 @@ export default function App() {
                 paddingRight: 'max(24px, env(safe-area-inset-right, 0px))',
               }}
             >
-              <div className="max-w-sm bg-[#141920] border border-amber-500/70 p-6 rounded-sm space-y-3 shadow-2xl">
+              <div className="max-w-sm w-full bg-[#141920] border border-amber-500/70 p-5 sm:p-6 rounded-sm space-y-3 shadow-2xl">
                 <Smartphone className="w-10 h-10 text-amber-400 mx-auto rotate-90" />
                 <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-amber-500">
-                  Landscape Display Required
+                  Landscape Combat Required
                 </p>
                 <h2 className="font-display text-2xl font-bold uppercase text-white">
                   Rotate Device to Landscape
                 </h2>
                 <p className="text-xs text-zinc-300 leading-relaxed">
-                  VANGUARD: ZERO HOUR uses twin-stick landscape tactical controls and wide-angle combat optics.
-                  Rotate your phone sideways to continue.
+                  {screen === 'loading'
+                    ? 'Operation deployment uses twin-stick landscape tactical controls. Rotate your phone sideways to enter combat.'
+                    : 'Combat is paused while in portrait orientation. Rotate your phone sideways to resume twin-stick tactical controls.'}
                 </p>
-                {!viewport.isCoarsePointer && (
+                <div className="pt-1 flex flex-col gap-2">
+                  {!viewport.isCoarsePointer && (
+                    <button
+                      type="button"
+                      data-testid="portrait-preview-continue"
+                      onClick={() => setPortraitGateDismissed(true)}
+                      className="w-full min-h-[44px] px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
+                    >
+                      Continue in Narrow Preview
+                    </button>
+                  )}
                   <button
                     type="button"
-                    data-testid="portrait-preview-continue"
-                    onClick={() => setPortraitGateDismissed(true)}
-                    className="mt-2 w-full min-h-[40px] px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
+                    data-testid="portrait-gate-escape-btn"
+                    onClick={() => {
+                      if (screen === 'loading') {
+                        engineRef.current?.cancelLoad();
+                      } else {
+                        handleAbort();
+                      }
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2 bg-[#0B0E11] hover:bg-zinc-900 border border-zinc-700 text-zinc-200 font-mono text-xs uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
                   >
-                    Continue in Narrow Preview
+                    {screen === 'loading' ? 'Cancel Deployment' : 'Return to HQ (Portrait Safe)'}
                   </button>
-                )}
+                </div>
               </div>
             </div>
           )}

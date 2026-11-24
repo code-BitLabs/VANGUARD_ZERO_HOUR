@@ -19,6 +19,7 @@ import { useAudioSettingsStore } from '@/src/stores/audioSettingsStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
 import { uiStore } from '@/src/stores/uiStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { Button } from '@/src/ui/primitives/Button';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
 
@@ -47,6 +48,9 @@ export function TitleScreen({
     s.getDeploymentModeForMission(s.selectedMissionId)
   );
   const seenBriefings = useMissionSelectionStore((s) => s.seenMissionBriefings);
+  const viewport = useViewportMode();
+  const isTouchOrCompact =
+    viewport.isCoarsePointer || viewport.isCompactLandscape || viewport.isPortrait;
   const selectedMission = getMissionById(selectedMissionId);
   const hasSeenVersionedBriefing =
     seenBriefings[selectedMission.missionKey] === selectedMission.briefingVersion;
@@ -59,12 +63,12 @@ export function TitleScreen({
 
   return (
     <div
-      className="fixed inset-0 z-20 isolate flex flex-col justify-between gap-3 [@media(max-height:460px)]:gap-1.5 overflow-y-auto bg-[var(--vg-bg-canvas)]"
+      className="fixed inset-0 z-20 isolate flex flex-col justify-between gap-3 [@media(max-height:460px)]:gap-1 overflow-y-auto bg-[var(--vg-bg-canvas)] [@media(max-height:460px)]:!py-2 [@media(max-height:460px)]:!px-3.5"
       style={{
         paddingTop: 'max(14px, env(safe-area-inset-top, 0px))',
         paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))',
-        paddingLeft: 'max(18px, env(safe-area-inset-left, 0px))',
-        paddingRight: 'max(18px, env(safe-area-inset-right, 0px))',
+        paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
       {/* Full-bleed Theater Artwork Backdrop + Directional Readability Scrim */}
@@ -82,25 +86,25 @@ export function TitleScreen({
       </div>
 
       {/* Top Bar: Operator Rank, Career Summary & Quick Audio */}
-      <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-3 bg-[var(--vg-bg-panel)]/92 border border-[var(--vg-border-subtle)] px-3.5 py-2 rounded-sm">
-          <Award className="w-5 h-5 text-[var(--vg-accent-amber)] shrink-0" />
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--vg-text-secondary)]">
+      <div className="relative z-10 flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3 bg-[var(--vg-bg-panel)]/92 border border-[var(--vg-border-subtle)] px-2.5 sm:px-3.5 py-1.5 sm:py-2 [@media(max-height:460px)]:px-2.5 [@media(max-height:460px)]:py-1 rounded-sm min-w-0">
+          <Award className="w-4 h-4 sm:w-5 sm:h-5 [@media(max-height:460px)]:w-4 [@media(max-height:460px)]:h-4 text-[var(--vg-accent-amber)] shrink-0" />
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-wider sm:tracking-widest text-[var(--vg-text-secondary)] truncate">
               {rank.current.insignia} · {rank.current.title}
             </div>
-            <div className="flex items-center gap-3 mt-1">
-              <div className="w-24 sm:w-28">
+            <div className="flex items-center gap-2 sm:gap-3 mt-1 [@media(max-height:460px)]:mt-0.5">
+              <div className="w-16 min-[360px]:w-24 sm:w-28 shrink-0">
                 <ProgressBar value={rank.progressPct} className="h-1.5" />
               </div>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--vg-accent-amber)]">
+              <span className="font-mono text-[11px] tabular-nums text-[var(--vg-accent-amber)] whitespace-nowrap">
                 {save.requisitionPoints} REQ
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <div className="hidden md:flex items-center gap-2.5 font-mono text-xs text-[var(--vg-text-secondary)] bg-[var(--vg-bg-panel)]/90 border border-[var(--vg-border-subtle)] px-3 py-2 rounded-sm tabular-nums">
             <span>KILLS {save.totalKills}</span>
             <span className="text-[var(--vg-border-strong)]">|</span>
@@ -119,7 +123,7 @@ export function TitleScreen({
             variant="outline"
             size="sm"
             aria-label={muted ? 'Unmute Audio' : 'Mute Audio'}
-            className="min-h-[40px] min-w-[40px] px-2.5"
+            className="min-h-[44px] min-w-[44px] [@media(max-height:460px)]:min-h-[40px] [@media(max-height:460px)]:min-w-[40px] px-2.5"
             onClick={() => {
               onUiClick();
               updateAudio({ muted: !muted });
@@ -136,10 +140,10 @@ export function TitleScreen({
 
       {/* Center-Left Hero Lockup & Primary Navigation */}
       <div className="relative z-10 max-w-xl my-auto py-2 [@media(max-height:460px)]:py-0.5">
-        <div className="flex items-center gap-3.5 mb-3 sm:mb-4 [@media(max-height:460px)]:mb-2">
+        <div className="flex items-center gap-3 sm:gap-3.5 mb-3 sm:mb-4 [@media(max-height:460px)]:mb-2">
           <svg
             viewBox="0 0 48 48"
-            className="w-9 h-9 sm:w-11 sm:h-11 text-[var(--vg-accent-amber)] shrink-0"
+            className="w-8 h-8 sm:w-11 sm:h-11 text-[var(--vg-accent-amber)] shrink-0"
             aria-hidden="true"
           >
             <polygon
@@ -151,30 +155,30 @@ export function TitleScreen({
             <polygon points="24,10 35,28 24,23 13,28" fill="currentColor" />
             <rect x="22" y="28" width="4" height="10" fill="#22D3EE" />
           </svg>
-          <div>
-            <p className="font-mono text-[10px] sm:text-xs uppercase tracking-[0.24em] text-[var(--vg-accent-cyan)]">
+          <div className="min-w-0">
+            <p className="font-mono text-[9.5px] sm:text-xs uppercase tracking-[0.16em] sm:tracking-[0.24em] text-[var(--vg-accent-cyan)]">
               Special Operations Command · Op 0{selectedMission.id} Ready
             </p>
-            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl [@media(max-height:460px)]:text-3xl font-bold uppercase tracking-wider text-[var(--vg-text-primary)] leading-none mt-1">
+            <h1 className="font-display text-3xl min-[360px]:text-4xl sm:text-5xl lg:text-6xl [@media(max-height:460px)]:text-3xl font-bold uppercase tracking-wider text-[var(--vg-text-primary)] leading-none mt-1">
               VANGUARD
-              <span className="block text-[var(--vg-accent-amber)] text-lg sm:text-2xl lg:text-3xl [@media(max-height:460px)]:text-base tracking-[0.22em] mt-1">
+              <span className="block text-[var(--vg-accent-amber)] text-base min-[360px]:text-lg sm:text-2xl lg:text-3xl [@media(max-height:460px)]:text-base tracking-[0.18em] sm:tracking-[0.22em] mt-1">
                 ZERO HOUR
               </span>
             </h1>
           </div>
         </div>
 
-        <p className="text-xs sm:text-sm lg:text-base text-[var(--vg-text-secondary)] leading-relaxed max-w-lg mb-5 sm:mb-6 [@media(max-height:460px)]:mb-2.5 [@media(max-height:460px)]:text-xs">
+        <p className="text-xs sm:text-sm lg:text-base text-[var(--vg-text-secondary)] leading-relaxed max-w-lg mb-4 sm:mb-6 [@media(max-height:460px)]:mb-1.5 [@media(max-height:460px)]:text-xs [@media(max-height:460px)]:leading-snug [@media(max-height:410px)]:line-clamp-2">
           Five tactical single-player operations across warzone cities, desert convoys, river valleys,
           and industrial foundries. Deploy Solo or lead a Fireteam, command armored vehicles, and
           customize your arsenal.
         </p>
 
-        <div className="flex flex-wrap gap-2.5 mb-3">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-2.5 [@media(max-height:460px)]:flex-row [@media(max-height:460px)]:gap-2 mb-2.5 sm:mb-3 [@media(max-height:460px)]:mb-1.5">
           <Button
             size="lg"
             onClick={() => nav('campaign')}
-            className="min-h-[44px] sm:min-w-[210px]"
+            className="w-full sm:w-auto [@media(max-height:460px)]:w-auto min-h-[46px] [@media(max-height:460px)]:min-h-[44px] sm:min-w-[210px]"
           >
             <Play className="w-4 h-4 fill-current" /> Play Campaign
           </Button>
@@ -188,29 +192,31 @@ export function TitleScreen({
                 onUiClick();
                 onQuickDeploy();
               }}
-              className="min-h-[44px]"
+              className="w-full sm:w-auto [@media(max-height:460px)]:w-auto min-h-[46px] [@media(max-height:460px)]:min-h-[44px]"
             >
-              <Zap className="w-4 h-4 text-[var(--vg-accent-amber)]" /> Quick Deploy (Op 0
-              {selectedMission.id} · {difficulty} ·{' '}
-              {deploymentMode === 'solo' ? 'Solo' : 'Fireteam'})
+              <Zap className="w-4 h-4 text-[var(--vg-accent-amber)] shrink-0" />
+              <span className="truncate">
+                Quick Deploy (Op 0{selectedMission.id} · {difficulty} ·{' '}
+                {deploymentMode === 'solo' ? 'Solo' : 'Fireteam'})
+              </span>
             </Button>
           ) : (
             <Button
               variant="secondary"
               size="lg"
               onClick={() => nav('campaign')}
-              className="min-h-[44px]"
+              className="w-full sm:w-auto [@media(max-height:460px)]:w-auto min-h-[46px] [@media(max-height:460px)]:min-h-[44px]"
             >
               <ShieldAlert className="w-4 h-4 text-[var(--vg-accent-amber)]" /> Select Operation
             </Button>
           )}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap [@media(max-height:460px)]:flex gap-2">
           <Button
             variant="outline"
             size="md"
-            className="min-h-[44px]"
+            className="col-span-2 sm:col-span-1 min-h-[44px]"
             onClick={() => nav('armory')}
           >
             <Crosshair className="w-4 h-4 text-[var(--vg-accent-cyan)]" /> Armory &amp; Upgrades
@@ -241,11 +247,17 @@ export function TitleScreen({
       </div>
 
       {/* Bottom Operational Control Reference */}
-      <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] sm:text-[11px] text-[var(--vg-text-muted)] tracking-wider shrink-0 border-t border-[var(--vg-border-subtle)]/60 pt-2.5">
-        <span>
-          DESKTOP: WASD · MOUSE · [7] RPG · [E] VEHICLE · [TAB] TACTICAL OVERVIEW
+      <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] sm:text-[11px] text-[var(--vg-text-muted)] tracking-wider shrink-0 border-t border-[var(--vg-border-subtle)]/60 pt-2.5 [@media(max-height:460px)]:pt-1.5">
+        {!isTouchOrCompact && (
+          <span className="[@media(pointer:coarse)]:hidden [@media(max-height:520px)]:hidden">
+            DESKTOP: WASD · MOUSE · [7] RPG · [E] VEHICLE · [TAB] TACTICAL OVERVIEW
+          </span>
+        )}
+        <span className={isTouchOrCompact ? 'text-[var(--vg-text-secondary)]' : ''}>
+          {viewport.isPortrait
+            ? 'PORTRAIT HQ READY · COMBAT DEPLOYS IN LANDSCAPE TWIN-STICK MODE'
+            : 'TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · 1-TAP ORDNANCE'}
         </span>
-        <span>TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · 1-TAP ORDNANCE</span>
       </div>
     </div>
   );

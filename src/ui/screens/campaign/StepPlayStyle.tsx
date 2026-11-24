@@ -75,18 +75,18 @@ export function StepPlayStyle({
   ];
 
   return (
-    <div data-testid="campaign-step-playstyle" className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-zinc-800 pb-3">
+    <div data-testid="campaign-step-playstyle" className="space-y-3 [@media(max-height:520px)]:space-y-2">
+      <div className="flex flex-wrap items-end justify-between gap-1.5 border-b border-zinc-800 pb-2 [@media(max-height:520px)]:pb-1.5">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-400">
             Step 2 of 4 · {mission.codeName}
           </div>
-          <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white mt-0.5">
+          <h2 className="font-display text-lg sm:text-2xl [@media(max-height:520px)]:text-base font-bold uppercase text-white mt-0.5">
             Choose Your Single-Player Deployment Style
           </h2>
         </div>
 
-        <div className="font-mono text-[11px] text-zinc-400">
+        <div className="font-mono text-[10.5px] sm:text-[11px] text-zinc-400 [@media(max-height:520px)]:hidden">
           {hasConfirmedMode
             ? `Remembered default: ${selectedMode === 'solo' ? 'Solo Operator' : 'Fireteam'} (editable per operation)`
             : 'Select your preferred tactical mode to continue'}
@@ -94,7 +94,7 @@ export function StepPlayStyle({
       </div>
 
       {/* Two Distinct Mode Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 [@media(max-height:520px)]:gap-2.5">
         {cards.map((card) => {
           const isSelected = selectedMode === card.mode;
           const imgFailed = Boolean(imgErrors[card.mode]);
@@ -118,7 +118,7 @@ export function StepPlayStyle({
             >
               {/* Card Artwork */}
               <div
-                className="relative h-36 sm:h-44 w-full overflow-hidden border-b border-zinc-800"
+                className="relative h-32 sm:h-40 [@media(max-height:520px)]:h-20 w-full overflow-hidden border-b border-zinc-800"
                 style={{ background: card.fallbackGradient }}
               >
                 {!imgFailed && (
@@ -132,10 +132,10 @@ export function StepPlayStyle({
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-[#141920] via-[#141920]/40 to-transparent" />
 
-                <div className="absolute top-3 right-3">
+                <div className="absolute top-2 right-2 sm:top-3 sm:right-3">
                   {isSelected ? (
                     <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
                         card.mode === 'solo'
                           ? 'bg-amber-500 text-zinc-950'
                           : 'bg-cyan-400 text-zinc-950'
@@ -144,21 +144,21 @@ export function StepPlayStyle({
                       <Check className="w-3 h-3" /> Selected
                     </span>
                   ) : (
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-xs bg-[#0B0E11]/85 border border-zinc-700 font-mono text-[10px] uppercase text-zinc-300">
+                    <span className="inline-flex items-center px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-xs bg-[#0B0E11]/85 border border-zinc-700 font-mono text-[9.5px] sm:text-[10px] uppercase text-zinc-300">
                       Single-Player
                     </span>
                   )}
                 </div>
 
-                <div className="absolute bottom-3 left-4 right-4 flex items-center gap-2.5">
-                  <div className="p-2 bg-[#0B0E11]/90 border border-zinc-700 rounded-xs shrink-0">
+                <div className="absolute bottom-2 left-3 right-3 sm:bottom-3 sm:left-4 sm:right-4 flex items-center gap-2">
+                  <div className="p-1.5 sm:p-2 bg-[#0B0E11]/90 border border-zinc-700 rounded-xs shrink-0">
                     {card.icon}
                   </div>
                   <div className="min-w-0">
-                    <div className="font-display text-xl sm:text-2xl font-bold uppercase text-white leading-none">
+                    <div className="font-display text-lg sm:text-2xl [@media(max-height:520px)]:text-base font-bold uppercase text-white leading-none">
                       {card.title}
                     </div>
-                    <div className="font-mono text-[10px] uppercase tracking-wider text-zinc-300 mt-1">
+                    <div className="font-mono text-[9.5px] sm:text-[10px] uppercase tracking-wider text-zinc-300 mt-0.5 truncate">
                       {card.subtitle}
                     </div>
                   </div>
@@ -166,10 +166,10 @@ export function StepPlayStyle({
               </div>
 
               {/* Card Structured Tactical Points */}
-              <div className="p-4 flex-1 flex flex-col justify-between gap-3">
-                <ul className="space-y-2 text-xs sm:text-[13px] text-zinc-200 leading-snug">
+              <div className="p-3 sm:p-4 [@media(max-height:520px)]:p-2.5 flex-1 flex flex-col justify-between gap-2 [@media(max-height:520px)]:gap-1.5">
+                <ul className="space-y-1.5 [@media(max-height:520px)]:space-y-1 text-xs sm:text-[13px] [@media(max-height:520px)]:text-[11px] text-zinc-200 leading-snug">
                   {card.points.map((pt, i) => (
-                    <li key={i} className="flex items-start gap-2">
+                    <li key={i} className="flex items-start gap-1.5">
                       <span
                         className={`font-mono text-xs shrink-0 mt-0.5 ${
                           card.mode === 'solo' ? 'text-amber-400' : 'text-cyan-400'
@@ -182,7 +182,7 @@ export function StepPlayStyle({
                   ))}
                 </ul>
 
-                <div className="pt-2.5 border-t border-zinc-800/90 flex items-center gap-2 font-mono text-[10.5px] text-zinc-400">
+                <div className="pt-2 [@media(max-height:520px)]:pt-1.5 border-t border-zinc-800/90 flex items-center gap-1.5 font-mono text-[10px] sm:text-[10.5px] text-zinc-400">
                   <Shield className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                   <span>{card.rosterNote}</span>
                 </div>

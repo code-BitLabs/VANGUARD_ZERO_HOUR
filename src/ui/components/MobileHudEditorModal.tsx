@@ -4,11 +4,14 @@ import {
   ArrowUp,
   Car,
   Check,
+  ChevronDown,
+  ChevronUp,
   Crosshair,
   Maximize2,
   RefreshCw,
   Repeat,
   RotateCcw,
+  Smartphone,
   Target,
   User,
 } from 'lucide-react';
@@ -434,6 +437,7 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
   const [selectedVehId, setSelectedVehId] = useState<VehicleTouchControlId>('veh_gas');
   const [draggingId, setDraggingId] = useState<TouchControlId | null>(null);
   const [draggingVehId, setDraggingVehId] = useState<VehicleTouchControlId | null>(null);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
   const layout = computeMobileHudLayout(
     input,
@@ -493,6 +497,41 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
     editorMode === 'vehicle'
       ? vehicleLayout.overlappingPairs.length
       : layout.overlappingPairs.length;
+
+  if (viewport.isPortrait) {
+    return (
+      <div
+        data-testid="fullscreen-hud-editor"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Rotate to Landscape for 1:1 HUD Editor"
+        className="fixed inset-0 z-[80] bg-[#090d12]/98 flex flex-col items-center justify-center p-6 text-center select-none"
+      >
+        <div className="max-w-sm w-full bg-[#141920] border border-amber-500/70 p-5 rounded-sm space-y-3 shadow-2xl">
+          <Smartphone className="w-9 h-9 text-amber-400 mx-auto rotate-90" />
+          <p className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-amber-400">
+            Landscape Editor Required
+          </p>
+          <h2 className="font-display text-xl font-bold uppercase text-white">
+            Rotate Device to Landscape
+          </h2>
+          <p className="text-xs text-zinc-300 leading-relaxed">
+            The 1:1 Mobile HUD Layout Editor maps touch controls directly onto your landscape combat
+            screen. Rotate sideways to drag buttons, or close to return to Settings.
+          </p>
+          <Button
+            variant="primary"
+            size="md"
+            data-testid="close-fullscreen-hud-editor"
+            className="w-full min-h-[44px]"
+            onClick={onClose}
+          >
+            Back to Settings
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -586,230 +625,274 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
       <div
         data-testid="hud-editor-toolbar"
         onPointerDown={(e) => e.stopPropagation()}
-        className="fixed left-1/2 -translate-x-1/2 top-2 z-[90] bg-[#0B0E11]/95 border border-amber-500/50 rounded-sm px-3 py-2 shadow-2xl flex flex-wrap items-center gap-2 max-w-[96vw]"
+        className="fixed left-1/2 -translate-x-1/2 top-1.5 z-[90] bg-[#0B0E11]/95 border border-amber-500/50 rounded-sm px-2.5 py-1.5 [@media(max-height:500px)]:px-2 [@media(max-height:500px)]:py-1 shadow-2xl flex flex-wrap items-center justify-center gap-1.5 [@media(max-height:500px)]:gap-1 w-max max-w-[96vw]"
       >
-        {/* Infantry vs Vehicle Mode Switcher */}
-        <div className="flex items-center gap-1 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
-          <button
-            type="button"
-            data-testid="editor-mode-infantry"
-            onClick={() => setEditorMode('infantry')}
-            className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase flex items-center gap-1 ${
-              editorMode === 'infantry'
-                ? 'bg-cyan-500 text-zinc-950'
-                : 'text-zinc-300 hover:text-white'
-            }`}
-          >
-            <User className="w-3 h-3" /> Infantry
-          </button>
-          <button
-            type="button"
-            data-testid="editor-mode-vehicle"
-            onClick={() => setEditorMode('vehicle')}
-            className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase flex items-center gap-1 ${
-              editorMode === 'vehicle'
-                ? 'bg-cyan-500 text-zinc-950'
-                : 'text-zinc-300 hover:text-white'
-            }`}
-          >
-            <Car className="w-3 h-3" /> Vehicle
-          </button>
-        </div>
-
-        {editorMode === 'infantry' ? (
-          <>
-            <div className="flex items-center gap-1 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
-              <button
-                type="button"
-                data-testid="editor-profile-two-finger"
-                onClick={() =>
-                  updateInput({ touchControlProfile: TouchControlProfileSchema.parse('two_finger') })
-                }
-                className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
-                  input.touchControlProfile === 'two_finger'
-                    ? 'bg-amber-500 text-zinc-950'
-                    : 'text-zinc-300 hover:text-white'
-                }`}
-              >
-                2 Fingers
-              </button>
-              <button
-                type="button"
-                data-testid="editor-profile-three-finger"
-                onClick={() =>
-                  updateInput({ touchControlProfile: TouchControlProfileSchema.parse('three_finger') })
-                }
-                className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
-                  input.touchControlProfile === 'three_finger'
-                    ? 'bg-amber-500 text-zinc-950'
-                    : 'text-zinc-300 hover:text-white'
-                }`}
-              >
-                3 Fingers
-              </button>
-              <button
-                type="button"
-                data-testid="editor-profile-custom"
-                onClick={() =>
-                  updateInput({ touchControlProfile: TouchControlProfileSchema.parse('custom') })
-                }
-                className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
-                  input.touchControlProfile === 'custom'
-                    ? 'bg-amber-500 text-zinc-950'
-                    : 'text-zinc-300 hover:text-white'
-                }`}
-              >
-                Custom
-              </button>
-            </div>
-
+        {toolbarCollapsed ? (
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[10px] uppercase text-amber-300 font-bold px-1">
+              HUD Editor
+            </span>
+            <span
+              data-testid="editor-overlap-status"
+              className="font-mono text-[10px] px-1.5 py-0.5 rounded-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
+            >
+              {overlapCount === 0 ? '0 Overlaps' : `${overlapCount} Overlap`}
+            </span>
             <button
               type="button"
-              data-testid="editor-toggle-left-fire"
-              aria-pressed={input.leftFireEnabled}
-              onClick={() =>
-                updateInput({
-                  touchControlProfile: 'custom',
-                  leftFireEnabled: !input.leftFireEnabled,
-                })
-              }
-              className={`px-2 py-1 rounded-xs border font-mono text-[10px] font-bold uppercase ${
-                input.leftFireEnabled
-                  ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                  : 'bg-[#141920] border-zinc-700 text-zinc-400'
-              }`}
+              data-testid="editor-toolbar-toggle"
+              aria-label="Expand Editor Controls"
+              onClick={() => setToolbarCollapsed(false)}
+              className="px-2 py-1 rounded-xs border border-zinc-700 bg-[#141920] font-mono text-[10px] font-bold uppercase text-zinc-200 flex items-center gap-1 cursor-pointer"
             >
-              Left Fire: {input.leftFireEnabled ? 'ON' : 'OFF'}
+              <ChevronDown className="w-3 h-3" /> Controls
             </button>
-
-            <button
-              type="button"
-              data-testid="editor-toggle-right-fire"
-              aria-pressed={input.rightFireEnabled}
-              onClick={() =>
-                updateInput({
-                  touchControlProfile: 'custom',
-                  rightFireEnabled: !input.rightFireEnabled,
-                })
-              }
-              className={`px-2 py-1 rounded-xs border font-mono text-[10px] font-bold uppercase ${
-                input.rightFireEnabled
-                  ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                  : 'bg-[#141920] border-zinc-700 text-zinc-400'
-              }`}
+            <Button
+              variant="primary"
+              size="sm"
+              data-testid="close-fullscreen-hud-editor"
+              className="min-h-[28px] px-2.5 text-[10px]"
+              onClick={onClose}
             >
-              Right Fire: {input.rightFireEnabled ? 'ON' : 'OFF'}
-            </button>
-          </>
+              <Check className="w-3.5 h-3.5" /> Save &amp; Exit
+            </Button>
+          </div>
         ) : (
           <>
-            <div className="flex items-center gap-1 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
+            {/* Infantry vs Vehicle Mode Switcher */}
+            <div className="flex items-center gap-0.5 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
               <button
                 type="button"
-                data-testid="editor-veh-steer-buttons"
-                onClick={() =>
-                  updateInput({
-                    touchVehicleSteeringMode: VehicleSteeringModeSchema.parse('buttons'),
-                  })
-                }
-                className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
-                  input.touchVehicleSteeringMode === 'buttons'
-                    ? 'bg-amber-500 text-zinc-950'
+                data-testid="editor-mode-infantry"
+                onClick={() => setEditorMode('infantry')}
+                className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase flex items-center gap-1 ${
+                  editorMode === 'infantry'
+                    ? 'bg-cyan-500 text-zinc-950'
                     : 'text-zinc-300 hover:text-white'
                 }`}
               >
-                Buttons
+                <User className="w-3 h-3" /> Infantry
               </button>
               <button
                 type="button"
-                data-testid="editor-veh-steer-wheel"
-                onClick={() =>
-                  updateInput({
-                    touchVehicleSteeringMode: VehicleSteeringModeSchema.parse('wheel'),
-                  })
-                }
-                className={`px-2 py-1 rounded-xs font-mono text-[10px] font-bold uppercase ${
-                  input.touchVehicleSteeringMode === 'wheel'
-                    ? 'bg-amber-500 text-zinc-950'
+                data-testid="editor-mode-vehicle"
+                onClick={() => setEditorMode('vehicle')}
+                className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase flex items-center gap-1 ${
+                  editorMode === 'vehicle'
+                    ? 'bg-cyan-500 text-zinc-950'
                     : 'text-zinc-300 hover:text-white'
                 }`}
               >
-                Wheel
+                <Car className="w-3 h-3" /> Vehicle
               </button>
             </div>
 
+            {editorMode === 'infantry' ? (
+              <>
+                <div className="flex items-center gap-0.5 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
+                  <button
+                    type="button"
+                    data-testid="editor-profile-two-finger"
+                    onClick={() =>
+                      updateInput({ touchControlProfile: TouchControlProfileSchema.parse('two_finger') })
+                    }
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                      input.touchControlProfile === 'two_finger'
+                        ? 'bg-amber-500 text-zinc-950'
+                        : 'text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    2F
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="editor-profile-three-finger"
+                    onClick={() =>
+                      updateInput({ touchControlProfile: TouchControlProfileSchema.parse('three_finger') })
+                    }
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                      input.touchControlProfile === 'three_finger'
+                        ? 'bg-amber-500 text-zinc-950'
+                        : 'text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    3F
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="editor-profile-custom"
+                    onClick={() =>
+                      updateInput({ touchControlProfile: TouchControlProfileSchema.parse('custom') })
+                    }
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                      input.touchControlProfile === 'custom'
+                        ? 'bg-amber-500 text-zinc-950'
+                        : 'text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    Custom
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="editor-toggle-left-fire"
+                  aria-pressed={input.leftFireEnabled}
+                  onClick={() =>
+                    updateInput({
+                      touchControlProfile: 'custom',
+                      leftFireEnabled: !input.leftFireEnabled,
+                    })
+                  }
+                  className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs border font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                    input.leftFireEnabled
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                      : 'bg-[#141920] border-zinc-700 text-zinc-400'
+                  }`}
+                >
+                  L-Fire: {input.leftFireEnabled ? 'ON' : 'OFF'}
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="editor-toggle-right-fire"
+                  aria-pressed={input.rightFireEnabled}
+                  onClick={() =>
+                    updateInput({
+                      touchControlProfile: 'custom',
+                      rightFireEnabled: !input.rightFireEnabled,
+                    })
+                  }
+                  className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs border font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                    input.rightFireEnabled
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                      : 'bg-[#141920] border-zinc-700 text-zinc-400'
+                  }`}
+                >
+                  R-Fire: {input.rightFireEnabled ? 'ON' : 'OFF'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-0.5 bg-[#141920] p-0.5 rounded-xs border border-zinc-800">
+                  <button
+                    type="button"
+                    data-testid="editor-veh-steer-buttons"
+                    onClick={() =>
+                      updateInput({
+                        touchVehicleSteeringMode: VehicleSteeringModeSchema.parse('buttons'),
+                      })
+                    }
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                      input.touchVehicleSteeringMode === 'buttons'
+                        ? 'bg-amber-500 text-zinc-950'
+                        : 'text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    Buttons
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="editor-veh-steer-wheel"
+                    onClick={() =>
+                      updateInput({
+                        touchVehicleSteeringMode: VehicleSteeringModeSchema.parse('wheel'),
+                      })
+                    }
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                      input.touchVehicleSteeringMode === 'wheel'
+                        ? 'bg-amber-500 text-zinc-950'
+                        : 'text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    Wheel
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="editor-veh-left-handed"
+                  aria-pressed={input.touchVehicleLeftHanded}
+                  onClick={() =>
+                    updateInput({
+                      touchVehicleLeftHanded: !input.touchVehicleLeftHanded,
+                      touchVehicleLayout: cloneVehicleControlLayoutMap(
+                        !input.touchVehicleLeftHanded
+                          ? LEFT_HANDED_VEHICLE_CONTROL_MAP
+                          : DEFAULT_VEHICLE_CONTROL_MAP
+                      ),
+                    })
+                  }
+                  className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-xs border font-mono text-[9.5px] sm:text-[10px] font-bold uppercase ${
+                    input.touchVehicleLeftHanded
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                      : 'bg-[#141920] border-zinc-700 text-zinc-400'
+                  }`}
+                >
+                  Left-Hand: {input.touchVehicleLeftHanded ? 'ON' : 'OFF'}
+                </button>
+              </>
+            )}
+
+            {/* Selected Control Scale Slider */}
+            <div className="flex items-center gap-1.5 bg-[#141920] border border-zinc-800 px-2 py-0.5 rounded-xs">
+              <span className="font-mono text-[9.5px] sm:text-[10px] text-amber-300 uppercase whitespace-nowrap">
+                {editorMode === 'infantry'
+                  ? `${selectedRect.shortLabel} (${Math.round(selectedNode.scale * 100)}%)`
+                  : `${selectedVehRect.shortLabel} (${Math.round(selectedVehNode.scale * 100)}%)`}
+              </span>
+              <div className="w-16 sm:w-24">
+                <Slider
+                  aria-label="Selected Control Size"
+                  value={editorMode === 'infantry' ? selectedNode.scale : selectedVehNode.scale}
+                  min={0.75}
+                  max={1.45}
+                  step={0.05}
+                  onValueChange={updateSelectedScale}
+                />
+              </div>
+            </div>
+
+            {/* Collision Validation Badge */}
+            <span
+              data-testid="editor-overlap-status"
+              className="font-mono text-[9.5px] sm:text-[10px] px-1.5 py-0.5 rounded-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 whitespace-nowrap"
+            >
+              {overlapCount === 0 ? '0 Overlaps' : `${overlapCount} Overlap`}
+            </span>
+
+            {/* Collapse, Reset & Save */}
             <button
               type="button"
-              data-testid="editor-veh-left-handed"
-              aria-pressed={input.touchVehicleLeftHanded}
-              onClick={() =>
-                updateInput({
-                  touchVehicleLeftHanded: !input.touchVehicleLeftHanded,
-                  touchVehicleLayout: cloneVehicleControlLayoutMap(
-                    !input.touchVehicleLeftHanded
-                      ? LEFT_HANDED_VEHICLE_CONTROL_MAP
-                      : DEFAULT_VEHICLE_CONTROL_MAP
-                  ),
-                })
-              }
-              className={`px-2 py-1 rounded-xs border font-mono text-[10px] font-bold uppercase ${
-                input.touchVehicleLeftHanded
-                  ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                  : 'bg-[#141920] border-zinc-700 text-zinc-400'
-              }`}
+              data-testid="editor-toolbar-toggle"
+              aria-label="Minimize Editor Controls"
+              onClick={() => setToolbarCollapsed(true)}
+              className="min-h-[26px] px-1.5 rounded-xs border border-zinc-700 bg-[#141920] font-mono text-[9.5px] text-zinc-300 hover:text-white flex items-center gap-0.5 cursor-pointer"
             >
-              Left-Handed: {input.touchVehicleLeftHanded ? 'ON' : 'OFF'}
+              <ChevronUp className="w-3 h-3" /> Hide
             </button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="editor-reset-defaults"
+              className="min-h-[26px] px-2 text-[10px]"
+              onClick={resetMobileControlSettingsToDefaults}
+            >
+              <RotateCcw className="w-3 h-3" /> Reset
+            </Button>
+
+            <Button
+              variant="primary"
+              size="sm"
+              data-testid="close-fullscreen-hud-editor"
+              className="min-h-[26px] px-2.5 text-[10px]"
+              onClick={onClose}
+            >
+              <Check className="w-3.5 h-3.5" /> Save &amp; Exit
+            </Button>
           </>
         )}
-
-        {/* Selected Control Scale Slider */}
-        <div className="flex items-center gap-2 bg-[#141920] border border-zinc-800 px-2 py-1 rounded-xs">
-          <span className="font-mono text-[10px] text-amber-300 uppercase">
-            {editorMode === 'infantry'
-              ? `${selectedRect.shortLabel} Size (${Math.round(selectedNode.scale * 100)}%)`
-              : `${selectedVehRect.shortLabel} Size (${Math.round(selectedVehNode.scale * 100)}%)`}
-          </span>
-          <div className="w-24">
-            <Slider
-              aria-label="Selected Control Size"
-              value={editorMode === 'infantry' ? selectedNode.scale : selectedVehNode.scale}
-              min={0.75}
-              max={1.45}
-              step={0.05}
-              onValueChange={updateSelectedScale}
-            />
-          </div>
-        </div>
-
-        {/* Collision Validation Badge */}
-        <span
-          data-testid="editor-overlap-status"
-          className="font-mono text-[10px] px-2 py-1 rounded-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
-        >
-          {overlapCount === 0 ? '0 Overlaps' : `${overlapCount} Overlap`}
-        </span>
-
-        {/* Reset & Save */}
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="editor-reset-defaults"
-          className="min-h-[30px] px-2 text-[10px]"
-          onClick={resetMobileControlSettingsToDefaults}
-        >
-          <RotateCcw className="w-3 h-3" /> Reset
-        </Button>
-
-        <Button
-          variant="primary"
-          size="sm"
-          data-testid="close-fullscreen-hud-editor"
-          className="min-h-[30px] px-2.5 text-[10px]"
-          onClick={onClose}
-        >
-          <Check className="w-3.5 h-3.5" /> Save &amp; Exit
-        </Button>
       </div>
 
       {/* Render 1:1 Interactive Draggable Control Nodes */}

@@ -504,9 +504,9 @@ export function ArmoryWeaponStage3D({
       </div>
 
       {/* Bottom Camera Angle Preset Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t border-[var(--vg-border-subtle)] bg-[var(--vg-bg-panel)]/95">
-        <div className="flex items-center gap-1.5" role="group" aria-label="Inspection camera angle presets">
-          <Eye className="w-3.5 h-3.5 text-[var(--vg-text-muted)] mr-0.5" />
+      <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 border-t border-[var(--vg-border-subtle)] bg-[var(--vg-bg-panel)]/95">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-1.5" role="group" aria-label="Inspection camera angle presets">
+          <Eye className="w-3.5 h-3.5 text-[var(--vg-text-muted)] mr-0.5 hidden min-[380px]:block" />
           {(Object.keys(CAMERA_PRESETS) as ArmoryCameraPreset[]).map((key) => {
             const active = preset === key;
             return (
@@ -515,7 +515,7 @@ export function ArmoryWeaponStage3D({
                 type="button"
                 data-testid={`armory-angle-${key}`}
                 onClick={() => setPreset(key)}
-                className={`min-h-[32px] px-2.5 rounded-sm font-mono text-[10px] uppercase tracking-wider border transition-colors cursor-pointer ${
+                className={`min-h-[34px] px-2 sm:px-2.5 rounded-sm font-mono text-[9.5px] sm:text-[10px] uppercase tracking-wider border transition-colors cursor-pointer ${
                   active
                     ? 'bg-[var(--vg-bg-elevated)] border-[var(--vg-accent-amber)] text-[var(--vg-accent-amber)]'
                     : 'bg-[var(--vg-bg-recessed)] border-[var(--vg-border-subtle)] text-[var(--vg-text-secondary)] hover:text-[var(--vg-text-primary)]'
@@ -530,7 +530,7 @@ export function ArmoryWeaponStage3D({
         <button
           type="button"
           onClick={() => setPreset('profile')}
-          className="inline-flex items-center gap-1 min-h-[32px] px-2 font-mono text-[10px] uppercase tracking-wider text-[var(--vg-text-muted)] hover:text-[var(--vg-text-primary)] cursor-pointer"
+          className="inline-flex items-center gap-1 min-h-[34px] px-2 font-mono text-[10px] uppercase tracking-wider text-[var(--vg-text-muted)] hover:text-[var(--vg-text-primary)] cursor-pointer shrink-0"
         >
           <RotateCcw className="w-3 h-3" /> Reset View
         </button>

@@ -147,7 +147,7 @@ export function MobileSquadCommandStrip({
       {expanded && (
         <div
           data-testid="mobile-squad-slide-menu"
-          className="absolute right-[52px] top-1/2 -translate-y-1/2 flex flex-col gap-1.5 pointer-events-none"
+          className="absolute right-[52px] top-0 flex flex-col gap-1.5 pointer-events-none"
         >
           {(['FLANK', 'REGROUP', 'HOLD', 'SUPPRESS'] as const).map((ord) => {
             const active = selectedOrder === ord;

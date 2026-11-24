@@ -125,25 +125,26 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
       className="fixed inset-0 z-30 flex flex-col bg-[#0B0E11] text-zinc-100 select-none overflow-hidden"
     >
       {/* Top HQ Command Header */}
-      <header className="shrink-0 bg-[#11161D] border-b border-zinc-800 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <header className="shrink-0 bg-[#11161D] border-b border-zinc-800 px-3 sm:px-6 py-2 [@media(max-height:520px)]:py-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
+            aria-label="HQ Menu"
             onClick={() => {
               onUiClick();
               setScreen('title');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+            className="min-h-[44px] sm:min-h-[36px] [@media(max-height:520px)]:min-h-[34px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">HQ Menu</span>
           </button>
 
           <div className="min-w-0">
-            <h1 className="font-display text-sm sm:text-lg font-bold uppercase tracking-wide text-white truncate">
+            <h1 className="font-display text-sm sm:text-lg [@media(max-height:520px)]:text-sm font-bold uppercase tracking-wide text-white truncate">
               Campaign Operations
             </h1>
-            <div className="font-mono text-[10px] text-zinc-400 tabular-nums hidden sm:block">
+            <div className="font-mono text-[10px] text-zinc-400 tabular-nums hidden sm:block [@media(max-height:520px)]:hidden">
               {clearedCount}/5 Operations Cleared · {save.requisitionPoints} REQ
             </div>
           </div>
@@ -151,18 +152,20 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
 
         {/* Utility Actions (Compact, Non-Competing) */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="sm:hidden font-mono text-[10px] text-amber-300 tabular-nums mr-1">
+          <span className="sm:hidden [@media(max-height:520px)]:inline font-mono text-[10px] text-amber-300 tabular-nums mr-1">
             {save.requisitionPoints} REQ
           </span>
 
           <button
             type="button"
             data-testid="header-open-briefing"
+            aria-label="Briefing Dossier"
+            title="Briefing Dossier"
             onClick={() => {
               onUiClick();
               setSecondaryDrawerTab('briefing');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[44px] sm:min-h-[36px] [@media(max-height:520px)]:min-h-[34px] min-w-[40px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <FileText className="w-3.5 h-3.5 text-amber-400" />
             <span className="hidden md:inline">Briefing Dossier</span>
@@ -171,11 +174,13 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
           <button
             type="button"
             data-testid="header-open-armory"
+            aria-label="Full Armory"
+            title="Full Armory"
             onClick={() => {
               onUiClick();
               setScreen('armory');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[44px] sm:min-h-[36px] [@media(max-height:520px)]:min-h-[34px] min-w-[40px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Wrench className="w-3.5 h-3.5 text-cyan-400" />
             <span className="hidden md:inline">Full Armory</span>
@@ -186,7 +191,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
       {/* 4-Step Progressive Disclosure Stepper Rail */}
       <nav
         aria-label="Campaign deployment steps"
-        className="shrink-0 bg-[#0E1319] border-b border-zinc-800/90 px-3 sm:px-6 py-1.5"
+        className="shrink-0 bg-[#0E1319] border-b border-zinc-800/90 px-3 sm:px-6 py-1.5 [@media(max-height:520px)]:py-0.5"
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
           <ol className="flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar">
@@ -203,7 +208,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                       onUiClick();
                       handleGoToStep(item.step);
                     }}
-                    className={`min-h-[44px] sm:min-h-[34px] px-2.5 sm:px-3 py-1 rounded-xs border font-mono text-[10.5px] uppercase tracking-wider inline-flex items-center gap-1.5 transition-colors motion-reduce:transition-none cursor-pointer ${
+                    className={`min-h-[40px] sm:min-h-[34px] [@media(max-height:520px)]:min-h-[30px] px-2 sm:px-3 [@media(max-height:520px)]:px-2 py-1 [@media(max-height:520px)]:py-0.5 rounded-xs border font-mono text-[10px] sm:text-[10.5px] uppercase tracking-wider inline-flex items-center gap-1 transition-colors motion-reduce:transition-none cursor-pointer ${
                       isCurrent
                         ? 'bg-amber-500/15 border-amber-400 text-amber-200 font-bold'
                         : isCompleted
@@ -234,7 +239,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
       </nav>
 
       {/* Main Step Workspace */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 sm:py-5">
+      <main className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 [@media(max-height:520px)]:py-2">
         <div className="max-w-7xl mx-auto">
           {activeStep === 1 && (
             <StepMissionSelect
@@ -284,10 +289,10 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
       {/* Compact Sticky Bottom Step Navigation Bar (capped <= 52px + safe area for constrained mobile landscape) */}
       <footer
         data-testid="campaign-sticky-footer"
-        className="shrink-0 bg-[#11161D] border-t border-zinc-800 px-3 sm:px-6 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+        className="shrink-0 bg-[#11161D] border-t border-zinc-800 px-3 sm:px-6 py-2 [@media(max-height:520px)]:py-1.5 pb-[max(0.45rem,env(safe-area-inset-bottom))]"
       >
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             {activeStep > 1 ? (
               <Button
                 type="button"
@@ -298,19 +303,19 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                   onUiClick();
                   handleGoToStep((activeStep - 1) as CampaignStep);
                 }}
-                className="min-h-[44px] sm:min-h-[38px]"
+                className="min-h-[44px] sm:min-h-[38px] [@media(max-height:520px)]:min-h-[34px]"
               >
                 <ArrowLeft className="w-4 h-4 mr-1.5" />
                 Back
               </Button>
             ) : (
-              <div className="font-mono text-[10.5px] text-zinc-400 truncate max-w-[180px] sm:max-w-none">
+              <div className="font-mono text-[10.5px] text-zinc-400 truncate max-w-[136px] min-[380px]:max-w-[180px] sm:max-w-none">
                 Selected: <span className="text-zinc-200">{mission.title}</span>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {activeStep === 1 && (
               <Button
                 type="button"
@@ -321,7 +326,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                   onUiClick();
                   handleGoToStep(2);
                 }}
-                className="min-h-[44px] sm:min-h-[38px]"
+                className="min-h-[44px] sm:min-h-[38px] [@media(max-height:520px)]:min-h-[34px]"
               >
                 Prepare Deployment
                 <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -339,7 +344,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                   confirmDeploymentMode(activeMode, selectedMissionId);
                   handleGoToStep(3);
                 }}
-                className="min-h-[44px] sm:min-h-[38px]"
+                className="min-h-[44px] sm:min-h-[38px] [@media(max-height:520px)]:min-h-[34px]"
               >
                 Continue as {activeMode === 'solo' ? 'Solo' : 'Fireteam'}
                 <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -356,7 +361,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                   onUiClick();
                   handleGoToStep(4);
                 }}
-                className="min-h-[44px] sm:min-h-[38px]"
+                className="min-h-[44px] sm:min-h-[38px] [@media(max-height:520px)]:min-h-[34px]"
               >
                 Review & Deploy
                 <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -374,7 +379,7 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
                   onUiClick();
                   handleDeployNow();
                 }}
-                className="min-h-[44px] sm:min-h-[38px]"
+                className="min-h-[44px] sm:min-h-[38px] [@media(max-height:520px)]:min-h-[34px]"
               >
                 <Play className="w-4 h-4 mr-1.5 fill-current" />
                 Deploy Operation

@@ -106,7 +106,13 @@ export const GameHUD = React.memo(function GameHUD({
           ? '#f43f5e'
           : '#ef4444';
 
-  const radarSizePx = compactHud ? 52 : viewport.width < 1200 ? 74 : 98;
+  const radarSizePx = compactHud
+    ? viewport.width < 760
+      ? 40
+      : 48
+    : viewport.width < 1200
+      ? 74
+      : 98;
   const radarCenter = radarSizePx / 2;
   const radarRadius = radarCenter - 4;
 
@@ -148,6 +154,7 @@ export const GameHUD = React.memo(function GameHUD({
       <HudTopCenterStack
         showCompass={showCompass}
         compactHud={compactHud}
+        viewportWidth={viewport.width}
         downedActive={downedActive}
         pointerLocked={pointerLocked}
         combatDebugOpen={combatDebugOpen}

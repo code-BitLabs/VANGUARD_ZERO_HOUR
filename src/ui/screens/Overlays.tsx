@@ -29,42 +29,46 @@ export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
         paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
-      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-4 sm:p-6 rounded-sm shadow-2xl my-auto">
+      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-4 sm:p-6 [@media(max-height:480px)]:p-3 rounded-sm shadow-2xl my-auto">
         <p className="font-mono text-[10px] sm:text-[11px] uppercase tracking-[0.24em] text-amber-500">
           Deploying Operation // {mission.codeName}
         </p>
-        <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white mt-0.5">
+        <h2 className="font-display text-xl sm:text-2xl [@media(max-height:480px)]:text-lg font-bold uppercase text-white mt-0.5">
           {mission.title}
         </h2>
-        <p className="text-xs text-zinc-300 mt-1.5 leading-relaxed">{mission.briefing}</p>
+        <p className="text-xs text-zinc-300 mt-1.5 [@media(max-height:480px)]:mt-1 leading-relaxed [@media(max-height:480px)]:line-clamp-2">
+          {mission.briefing}
+        </p>
 
-        <div className="mt-3 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 rounded-sm space-y-1.5">
+        <div className="mt-3 [@media(max-height:480px)]:mt-2 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 [@media(max-height:480px)]:p-2 rounded-sm space-y-1.5 [@media(max-height:480px)]:space-y-1">
           <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
             Staged Tactical Objectives ({mission.objectives.length} Stages)
           </div>
           {mission.objectives.map((obj, idx) => (
             <div key={obj.id} className="text-xs text-zinc-200 flex items-start justify-between gap-3">
-              <div>
-                <span className="font-mono text-[10px] text-cyan-400 block">
+              <div className="min-w-0">
+                <span className="font-mono text-[10px] text-cyan-400 block [@media(max-height:480px)]:inline [@media(max-height:480px)]:mr-1.5">
                   {obj.stageTitle || `STAGE ${idx + 1}`}
                 </span>
                 <span className="font-medium text-white">{obj.title}</span>
-                <span className="block text-[11px] text-zinc-400">{obj.description}</span>
+                <span className="block [@media(max-height:480px)]:hidden text-[11px] text-zinc-400">
+                  {obj.description}
+                </span>
               </div>
               <span className="font-mono text-[10px] text-amber-400 shrink-0">0/{obj.targetCount}</span>
             </div>
           ))}
         </div>
 
-        <div className="mt-4">
-          <div className="flex justify-between font-mono text-xs text-zinc-300 mb-1.5">
-            <span>{progress.currentAsset}</span>
-            <span className="tabular-nums text-amber-400">{progress.percent}%</span>
+        <div className="mt-4 [@media(max-height:480px)]:mt-2.5">
+          <div className="flex justify-between font-mono text-xs text-zinc-300 mb-1">
+            <span className="truncate pr-2">{progress.currentAsset}</span>
+            <span className="tabular-nums text-amber-400 shrink-0">{progress.percent}%</span>
           </div>
           <ProgressBar value={progress.percent} className="h-2" />
         </div>
-        <div className="mt-4 flex justify-end">
-          <Button variant="outline" size="sm" className="min-h-[44px]" onClick={onCancel}>
+        <div className="mt-4 [@media(max-height:480px)]:mt-2.5 flex justify-end">
+          <Button variant="outline" size="sm" className="min-h-[44px] [@media(max-height:480px)]:min-h-[38px]" onClick={onCancel}>
             <XCircle className="w-4 h-4" /> Cancel Deployment
           </Button>
         </div>
@@ -100,63 +104,65 @@ export function PauseOverlay({
         paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
-      <Card className="max-w-md w-full my-auto">
-        <CardContent className="space-y-2.5 p-4 sm:p-5">
-          <div className="border-b border-zinc-800 pb-2.5">
+      <Card className="max-w-md [@media(max-height:460px)]:max-w-lg w-full my-auto max-h-[94dvh] overflow-y-auto">
+        <CardContent className="space-y-2.5 [@media(max-height:460px)]:space-y-1.5 p-4 sm:p-5 [@media(max-height:460px)]:p-3">
+          <div className="border-b border-zinc-800 pb-2.5 [@media(max-height:460px)]:pb-1.5">
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-500">
               Operation Suspended // Stage {hud.activeStageIndex}/{hud.totalStages}
             </p>
-            <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white">
+            <h2 className="font-display text-xl sm:text-2xl [@media(max-height:460px)]:text-lg font-bold uppercase text-white">
               Mission Paused
             </h2>
             {activeObj && (
-              <div className="mt-1.5 bg-[#0B0E11] border border-zinc-800 px-2.5 py-1.5 rounded-sm">
+              <div className="mt-1.5 [@media(max-height:460px)]:mt-1 bg-[#0B0E11] border border-zinc-800 px-2.5 py-1.5 [@media(max-height:460px)]:py-1 rounded-sm">
                 <div className="font-mono text-[10px] text-cyan-400 uppercase">{activeObj.stageTitle}</div>
                 <div className="text-xs font-bold text-zinc-100 mt-0.5">
                   {activeObj.title} ({activeObj.current}/{activeObj.target})
                 </div>
                 {activeObj.description && (
-                  <div className="text-[11px] text-zinc-400 mt-0.5 leading-snug">{activeObj.description}</div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5 leading-snug [@media(max-height:460px)]:line-clamp-1">
+                    {activeObj.description}
+                  </div>
                 )}
               </div>
             )}
           </div>
 
-          <Button className="w-full min-h-[44px]" size="lg" onClick={onResume}>
+          <Button className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px]" size="lg" onClick={onResume}>
             <Play className="w-4 h-4 fill-current" /> Resume Combat
           </Button>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <Button className="w-full min-h-[44px]" variant="secondary" onClick={onRestartCheckpoint}>
-              <RotateCcw className="w-4 h-4" /> Restart Checkpoint
+          <div className="grid grid-cols-1 sm:grid-cols-2 [@media(max-height:460px)]:grid-cols-3 gap-2 [@media(max-height:460px)]:gap-1.5">
+            <Button className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs" variant="secondary" onClick={onRestartCheckpoint}>
+              <RotateCcw className="w-4 h-4 shrink-0" /> Restart Checkpoint
             </Button>
             {onRestartMission && (
-              <Button className="w-full min-h-[44px]" variant="outline" onClick={onRestartMission}>
-                <RotateCcw className="w-4 h-4" /> Restart Mission
+              <Button className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs" variant="outline" onClick={onRestartMission}>
+                <RotateCcw className="w-4 h-4 shrink-0" /> Restart Mission
               </Button>
             )}
             <Button
-              className="w-full min-h-[44px]"
+              className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs"
               variant="outline"
               onClick={() => uiStore.getState().openHowToPlayFrom('paused')}
             >
-              <BookOpen className="w-4 h-4" /> Field Manual &amp; Controls
+              <BookOpen className="w-4 h-4 shrink-0" /> Field Manual &amp; Controls
             </Button>
             <Button
-              className="w-full min-h-[44px]"
+              className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs"
               variant="outline"
               onClick={() => uiStore.getState().openSettingsFrom('paused')}
             >
-              <Settings className="w-4 h-4" /> Settings
+              <Settings className="w-4 h-4 shrink-0" /> Settings
             </Button>
             <Button
-              className="w-full min-h-[44px]"
+              className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs"
               variant="outline"
               onClick={() => setQaOpen(true)}
             >
-              <MonitorCheck className="w-4 h-4" /> System Info
+              <MonitorCheck className="w-4 h-4 shrink-0" /> System Info
             </Button>
-            <Button className="w-full min-h-[44px]" variant="danger" onClick={onAbort}>
+            <Button className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs" variant="danger" onClick={onAbort}>
               Abort to HQ
             </Button>
           </div>
@@ -217,7 +223,7 @@ export function DebriefScreen({
       }}
     >
       <Card className="max-w-2xl w-full border-zinc-700 my-auto">
-        <CardContent className="space-y-4 p-4 sm:p-6">
+        <CardContent className="space-y-4 [@media(max-height:460px)]:space-y-2.5 p-4 sm:p-6 [@media(max-height:460px)]:p-3.5">
           <div className="flex items-start justify-between border-b border-zinc-800 pb-3">
             <div>
               <p
@@ -583,9 +589,9 @@ export function DebriefScreen({
 
 function MetricBox({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-[#0B0E11] border border-zinc-800 px-3 py-2.5 rounded-sm">
+    <div className="bg-[#0B0E11] border border-zinc-800 px-3 py-2.5 [@media(max-height:460px)]:px-2.5 [@media(max-height:460px)]:py-1.5 rounded-sm">
       <div className="text-[10px] uppercase text-zinc-400">{label}</div>
-      <div className="text-lg font-bold text-white tabular-nums mt-0.5">{value}</div>
+      <div className="text-lg [@media(max-height:460px)]:text-base font-bold text-white tabular-nums mt-0.5">{value}</div>
     </div>
   );
 }

@@ -101,7 +101,7 @@ export function AttachmentBenchPanel({ weapon, onUiClick }: AttachmentBenchPanel
       className="mt-4 pt-4 border-t border-zinc-800 space-y-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto max-w-full no-scrollbar">
           <button
             type="button"
             data-testid="armory-tab-attachments"
@@ -109,13 +109,13 @@ export function AttachmentBenchPanel({ weapon, onUiClick }: AttachmentBenchPanel
               onUiClick();
               setTab('attachments');
             }}
-            className={`min-h-[38px] px-3 py-1 rounded-xs border font-mono text-[11px] uppercase flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            className={`min-h-[42px] px-2.5 sm:px-3 py-1 rounded-xs border font-mono text-[10.5px] sm:text-[11px] uppercase flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
               tab === 'attachments'
                 ? 'bg-amber-500/20 border-amber-400 text-amber-200 font-bold'
                 : 'bg-[#0B0E11] border-zinc-800 text-zinc-400'
             }`}
           >
-            <Wrench className="w-3.5 h-3.5" /> Weapon Attachments
+            <Wrench className="w-3.5 h-3.5 shrink-0" /> Weapon Attachments
           </button>
           <button
             type="button"
@@ -124,13 +124,13 @@ export function AttachmentBenchPanel({ weapon, onUiClick }: AttachmentBenchPanel
               onUiClick();
               setTab('cosmetics');
             }}
-            className={`min-h-[38px] px-3 py-1 rounded-xs border font-mono text-[11px] uppercase flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            className={`min-h-[42px] px-2.5 sm:px-3 py-1 rounded-xs border font-mono text-[10.5px] sm:text-[11px] uppercase flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
               tab === 'cosmetics'
                 ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 font-bold'
                 : 'bg-[#0B0E11] border-zinc-800 text-zinc-400'
             }`}
           >
-            <Palette className="w-3.5 h-3.5" /> Operator Cosmetics
+            <Palette className="w-3.5 h-3.5 shrink-0" /> Operator Cosmetics
           </button>
         </div>
 

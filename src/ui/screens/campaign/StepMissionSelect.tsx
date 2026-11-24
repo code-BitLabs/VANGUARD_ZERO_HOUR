@@ -45,20 +45,20 @@ export function StepMissionSelect({
   return (
     <div
       data-testid="campaign-step-mission"
-      className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 items-start"
+      className="grid grid-cols-1 sm:grid-cols-12 gap-3 sm:gap-4 lg:gap-6 items-start"
     >
       {/* Scannable 5-Mission List */}
-      <section aria-label="Campaign Operations List" className="lg:col-span-5 space-y-2">
-        <div className="flex items-center justify-between px-0.5 pb-1">
-          <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+      <section aria-label="Campaign Operations List" className="sm:col-span-5 space-y-1.5 sm:space-y-2">
+        <div className="flex items-center justify-between px-0.5 pb-0.5">
+          <span className="font-mono text-[10.5px] sm:text-[11px] uppercase tracking-[0.16em] text-zinc-400">
             Select Operation (5 Missions)
           </span>
-          <span className="font-mono text-[11px] text-amber-400 tabular-nums">
+          <span className="font-mono text-[10.5px] sm:text-[11px] text-amber-400 tabular-nums">
             {Object.values(save.missionRecords).filter((r) => r.completed).length}/5 Cleared
           </span>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
           {MISSION_CATALOG.map((m) => {
             const mRec = save.missionRecords[String(m.id)];
             const mArt = resolveMissionPreviewArtwork(m.id);
@@ -73,35 +73,35 @@ export function StepMissionSelect({
                   onUiClick();
                   onSelectMission(m.id);
                 }}
-                className={`w-full min-h-[68px] p-3.5 rounded-sm border text-left transition-colors motion-reduce:transition-none cursor-pointer flex items-center justify-between gap-3 ${
+                className={`w-full min-h-[58px] sm:min-h-[52px] lg:min-h-[68px] [@media(max-height:520px)]:min-h-[44px] p-3 sm:p-2.5 lg:p-3.5 [@media(max-height:520px)]:py-1.5 [@media(max-height:520px)]:px-2.5 rounded-sm border text-left transition-colors motion-reduce:transition-none cursor-pointer flex items-center justify-between gap-2.5 ${
                   isSelected
                     ? 'bg-[#141920] border-amber-400 shadow-[inset_3px_0_0_0_#F59E0B]'
                     : 'bg-[#11161D]/90 border-zinc-800 hover:border-zinc-600'
                 }`}
               >
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+                  <div className="flex items-center gap-1.5 font-mono text-[9.5px] sm:text-[10px] uppercase tracking-wider text-zinc-400">
                     <span className={isSelected ? 'text-amber-400 font-bold' : 'text-zinc-400'}>
                       OP 0{m.id}
                     </span>
                     <span className="text-zinc-700">|</span>
                     <span className="truncate">{mArt.theaterLabel}</span>
-                    <span className="text-zinc-700 hidden sm:inline">|</span>
-                    <span className="hidden sm:inline text-zinc-500">{mArt.lightingLabel}</span>
+                    <span className="text-zinc-700 hidden lg:inline">|</span>
+                    <span className="hidden lg:inline text-zinc-500">{mArt.lightingLabel}</span>
                   </div>
-                  <div className="font-display text-base sm:text-lg font-bold uppercase text-white truncate mt-0.5">
+                  <div className="font-display text-sm sm:text-base lg:text-lg [@media(max-height:520px)]:text-sm font-bold uppercase text-white truncate mt-0.5">
                     {m.title}
                   </div>
                 </div>
 
-                <div className="shrink-0 text-right font-mono text-[11px] tabular-nums">
+                <div className="shrink-0 text-right font-mono text-[10.5px] sm:text-[11px] tabular-nums">
                   {mRec?.completed ? (
-                    <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <div className="flex items-center gap-1 text-emerald-400 font-bold">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span>RANK {mRec.bestGrade ?? 'C'}</span>
                     </div>
                   ) : (
-                    <span className="text-zinc-500 uppercase text-[10px]">Ready</span>
+                    <span className="text-zinc-500 uppercase text-[9.5px]">Ready</span>
                   )}
                 </div>
               </button>
@@ -114,11 +114,11 @@ export function StepMissionSelect({
       <section
         aria-label="Selected Operation Overview"
         data-testid="mission-overview-panel"
-        className="lg:col-span-7 bg-[#141920] border border-zinc-800 rounded-sm overflow-hidden"
+        className="sm:col-span-7 bg-[#141920] border border-zinc-800 rounded-sm overflow-hidden"
       >
         {/* Theater Artwork Header */}
         <div
-          className="relative h-44 sm:h-52 w-full overflow-hidden border-b border-zinc-800"
+          className="relative h-36 sm:h-40 lg:h-52 [@media(max-height:520px)]:h-24 w-full overflow-hidden border-b border-zinc-800"
           style={{ background: artwork.fallbackGradient }}
         >
           {!imgFailed && (
@@ -131,16 +131,16 @@ export function StepMissionSelect({
             />
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-[#141920] via-[#141920]/45 to-transparent" />
-          <div className="absolute bottom-3 left-4 right-4 flex flex-wrap items-end justify-between gap-2">
+          <div className="absolute bottom-2.5 sm:bottom-3 left-3 sm:left-4 right-3 sm:right-4 flex flex-wrap items-end justify-between gap-1.5">
             <div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-400">
+              <div className="font-mono text-[9.5px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400">
                 {mission.codeName} · Single-Player Operation
               </div>
-              <h2 className="font-display text-2xl sm:text-3xl font-bold uppercase text-white leading-tight mt-0.5">
+              <h2 className="font-display text-xl sm:text-2xl lg:text-3xl [@media(max-height:520px)]:text-lg font-bold uppercase text-white leading-tight mt-0.5">
                 {mission.title}
               </h2>
             </div>
-            <div className="font-mono text-[10.5px] text-zinc-200 bg-[#0B0E11]/85 border border-zinc-700/80 px-2.5 py-1 rounded-xs flex items-center gap-2">
+            <div className="font-mono text-[10px] text-zinc-200 bg-[#0B0E11]/85 border border-zinc-700/80 px-2 py-0.5 rounded-xs flex items-center gap-1.5">
               <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
               <span>{artwork.theaterLabel}</span>
               <span className="text-zinc-600">|</span>
@@ -151,8 +151,8 @@ export function StepMissionSelect({
         </div>
 
         {/* Structured Mission Summary Body */}
-        <div className="p-4 sm:p-5 space-y-4">
-          <p className="text-sm text-zinc-200 leading-relaxed">{mission.subtitle}</p>
+        <div className="p-3.5 sm:p-4 lg:p-5 [@media(max-height:520px)]:p-3 space-y-3 [@media(max-height:520px)]:space-y-2">
+          <p className="text-xs sm:text-sm [@media(max-height:520px)]:text-xs text-zinc-200 leading-relaxed">{mission.subtitle}</p>
 
           {/* Compact Staged Objectives & Threats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">

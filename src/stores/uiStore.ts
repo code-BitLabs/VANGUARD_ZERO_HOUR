@@ -34,6 +34,7 @@ export interface UIStoreState {
   isPortraitBlocked: boolean;
   touchHudOverride: boolean | null;
   tacticalOverviewOpen: boolean;
+  tacticalKitOpen: boolean;
   toast: ToastNotice | null;
   setScreen: (screen: ScreenState) => void;
   openSettingsFrom: (from: 'title' | 'campaign' | 'paused') => void;
@@ -44,6 +45,7 @@ export interface UIStoreState {
   toggleTouchHudOverride: (currentlyVisible: boolean) => void;
   setTacticalOverviewOpen: (open: boolean) => void;
   toggleTacticalOverview: () => void;
+  setTacticalKitOpen: (open: boolean) => void;
   toggleDiagnostics: () => void;
   setCombatDebugOpen: (open: boolean) => void;
   toggleCombatDebug: () => void;
@@ -78,22 +80,50 @@ export const uiStore = createStore<UIStoreState>()(
     isPortraitBlocked: false,
     touchHudOverride: null,
     tacticalOverviewOpen: false,
+    tacticalKitOpen: false,
     toast: null,
     setScreen: (screen) =>
       set((s) => ({
         screen,
         tacticalOverviewOpen: screen === 'playing' ? s.tacticalOverviewOpen : false,
+        tacticalKitOpen: screen === 'playing' ? s.tacticalKitOpen : false,
       })),
     openSettingsFrom: (from) =>
-      set({ previousMenuScreen: from, screen: 'settings', tacticalOverviewOpen: false }),
+      set({
+        previousMenuScreen: from,
+        screen: 'settings',
+        tacticalOverviewOpen: false,
+        tacticalKitOpen: false,
+      }),
     openHowToPlayFrom: (from) =>
-      set({ previousMenuScreen: from, screen: 'howToPlay', tacticalOverviewOpen: false }),
+      set({
+        previousMenuScreen: from,
+        screen: 'howToPlay',
+        tacticalOverviewOpen: false,
+        tacticalKitOpen: false,
+      }),
     setPointerLocked: (pointerLocked) => set({ pointerLocked }),
     setPortraitBlocked: (isPortraitBlocked) => set({ isPortraitBlocked }),
     setTouchHudOverride: (touchHudOverride) => set({ touchHudOverride }),
     toggleTouchHudOverride: (currentlyVisible) => set({ touchHudOverride: !currentlyVisible }),
-    setTacticalOverviewOpen: (tacticalOverviewOpen) => set({ tacticalOverviewOpen }),
-    toggleTacticalOverview: () => set((s) => ({ tacticalOverviewOpen: !s.tacticalOverviewOpen })),
+    setTacticalOverviewOpen: (tacticalOverviewOpen) =>
+      set((s) => ({
+        tacticalOverviewOpen,
+        tacticalKitOpen: tacticalOverviewOpen ? false : s.tacticalKitOpen,
+      })),
+    toggleTacticalOverview: () =>
+      set((s) => {
+        const next = !s.tacticalOverviewOpen;
+        return {
+          tacticalOverviewOpen: next,
+          tacticalKitOpen: next ? false : s.tacticalKitOpen,
+        };
+      }),
+    setTacticalKitOpen: (tacticalKitOpen) =>
+      set((s) => ({
+        tacticalKitOpen,
+        tacticalOverviewOpen: tacticalKitOpen ? false : s.tacticalOverviewOpen,
+      })),
     toggleDiagnostics: () => {
       if (!isDeveloperModeActive()) {
         set({ diagnosticsOpen: false });

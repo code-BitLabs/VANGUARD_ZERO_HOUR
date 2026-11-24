@@ -60,7 +60,7 @@ export function ArmoryScreen({
         paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
-      <div className="max-w-6xl w-full mx-auto flex flex-col gap-4 sm:gap-5 flex-1">
+      <div className="max-w-6xl w-full mx-auto flex flex-col gap-3 sm:gap-4 [@media(max-height:520px)]:gap-2.5 flex-1">
         <CommandHQTopBar
           activeSection="armory"
           subtitle="All 9 Arsenal Slots & M67 Ordnance"
@@ -69,38 +69,42 @@ export function ArmoryScreen({
           onUiClick={onUiClick}
         />
 
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-5 flex-1">
-          {/* Weapon Roster */}
-          <div className="md:col-span-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2 content-start md:sticky md:top-0 md:self-start md:max-h-[calc(100dvh-132px)] md:overflow-y-auto md:pr-1">
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 sm:gap-4 [@media(max-height:520px)]:gap-2.5 flex-1">
+          {/* Weapon Roster: compact horizontal rail on portrait phones, sticky left sidebar from 640px+ */}
+          <div
+            data-testid="armory-weapon-roster"
+            className="sm:col-span-4 md:col-span-5 flex sm:grid sm:grid-cols-1 gap-1.5 sm:gap-2 overflow-x-auto sm:overflow-x-visible pb-1 sm:pb-0 content-start sm:sticky sm:top-0 sm:self-start sm:max-h-[calc(100dvh-108px)] [@media(max-height:520px)]:sm:max-h-[calc(100dvh-76px)] sm:overflow-y-auto sm:pr-1 no-scrollbar"
+          >
             {WEAPON_CATALOG.map((w) => {
               const activeCard = w.id === active.id;
               return (
                 <button
                   key={w.id}
                   type="button"
+                  aria-pressed={activeCard}
                   onClick={() => {
                     onUiClick();
                     startWeaponTransition(() => {
                       setSelectedId(w.id);
                     });
                   }}
-                  className={`flex items-center justify-between min-h-[48px] px-3.5 py-2 rounded-sm border text-left transition-colors cursor-pointer ${
+                  className={`flex items-center justify-between gap-2 shrink-0 sm:shrink min-w-[144px] sm:min-w-0 min-h-[48px] [@media(max-height:520px)]:min-h-[42px] px-2.5 sm:px-3 [@media(max-height:520px)]:px-2.5 py-1.5 sm:py-2 rounded-sm border text-left transition-colors cursor-pointer ${
                     activeCard
                       ? 'bg-[var(--vg-bg-elevated)] border-[var(--vg-accent-amber)]'
                       : 'bg-[var(--vg-bg-panel)] border-[var(--vg-border-subtle)] hover:border-[var(--vg-border-strong)]'
                   }`}
                 >
                   <div className="min-w-0">
-                    <div className="font-mono text-[10px] text-[var(--vg-accent-amber)] uppercase tracking-wider">
-                      Slot {w.slot} · {w.category}
+                    <div className="font-mono text-[9.5px] sm:text-[10px] text-[var(--vg-accent-amber)] uppercase tracking-wider truncate">
+                      S{w.slot} · {w.category}
                     </div>
-                    <div className="font-display text-sm font-bold uppercase text-[var(--vg-text-primary)] truncate">
+                    <div className="font-display text-xs sm:text-sm font-bold uppercase text-[var(--vg-text-primary)] truncate">
                       {w.name}
                     </div>
                   </div>
                   <WeaponSilhouette
                     weaponId={w.id}
-                    className="w-16 h-6 text-[var(--vg-text-secondary)] shrink-0"
+                    className="w-11 sm:w-14 md:w-16 h-5 sm:h-6 text-[var(--vg-text-secondary)] shrink-0"
                   />
                 </button>
               );
@@ -108,8 +112,8 @@ export function ArmoryScreen({
           </div>
 
           {/* Interactive 3D Weapon Inspection Stage, Telemetry & Modifications */}
-          <Card className="md:col-span-7 flex flex-col">
-            <CardContent className="flex flex-col justify-between gap-4 sm:gap-5 flex-1">
+          <Card className="sm:col-span-8 md:col-span-7 flex flex-col min-w-0">
+            <CardContent className="flex flex-col justify-between gap-3.5 sm:gap-5 [@media(max-height:520px)]:p-3 flex-1">
               <div>
                 <ArmoryWeaponStage3D
                   weaponId={active.id}
@@ -119,7 +123,7 @@ export function ArmoryScreen({
                   isSoftwareGl={isSoftwareGl}
                 />
 
-                <h3 className="font-display text-xl sm:text-2xl font-bold uppercase text-[var(--vg-text-primary)] mt-3.5">
+                <h3 className="font-display text-lg sm:text-2xl font-bold uppercase text-[var(--vg-text-primary)] mt-3">
                   {active.name}
                 </h3>
                 <p className="text-xs sm:text-sm text-[var(--vg-text-secondary)] mt-1">

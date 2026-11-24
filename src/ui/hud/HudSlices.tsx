@@ -423,12 +423,12 @@ const HudCompassStrip = React.memo(function HudCompassStrip({ compactHud }: { co
       <span className="text-zinc-300">{Math.round(headingDeg)}°</span>
       <span className="text-amber-400 font-bold w-4 text-center">{cardinal}</span>
       {activeObjective && !activeObjective.completed && activeObjective.markerPos && (
-        <>
+        <span className={compactHud ? 'hidden min-[760px]:inline-flex items-center gap-1.5' : 'inline-flex items-center gap-1.5'}>
           <span className="text-zinc-600">·</span>
           <span className="text-amber-300 font-bold">
             OBJ {calcObjectiveDistance(activeObjective, playerX, playerZ) ?? 0}M
           </span>
-        </>
+        </span>
       )}
       {!compactHud && (
         <span className="hidden lg:inline-flex items-center gap-2">
@@ -485,19 +485,23 @@ const HudCenterAlertsStack = React.memo(function HudCenterAlertsStack({
       {activeBossLabel && (
         <div
           data-testid="hud-boss-bar"
-          className={`w-48 sm:w-64 bg-[#0B0E11]/82 border px-2 py-1 rounded-sm shadow-sm transition-colors ${
+          className={`${
+            compactHud ? 'w-40 min-[780px]:w-64' : 'w-48 sm:w-64'
+          } bg-[#0B0E11]/82 border px-2 py-1 rounded-sm shadow-sm transition-colors ${
             activeBossVulnerable ? 'border-amber-400/85' : 'border-red-500/55'
           }`}
         >
-          <div className="flex justify-between items-center font-mono text-[9px] sm:text-[10px] leading-none mb-0.5">
+          <div className="flex justify-between items-center font-mono text-[9px] sm:text-[10px] leading-none mb-0.5 gap-1">
             <span
-              className={`truncate max-w-[135px] sm:max-w-[190px] ${
+              className={`truncate ${
+                compactHud ? 'max-w-[112px] min-[780px]:max-w-[190px]' : 'max-w-[135px] sm:max-w-[190px]'
+              } ${
                 activeBossVulnerable ? 'text-amber-300 font-bold' : 'text-red-300'
               }`}
             >
               {activeBossLabel}
             </span>
-            <span className="tabular-nums font-bold text-zinc-100">
+            <span className="tabular-nums font-bold text-zinc-100 shrink-0">
               {Math.round(activeBossHealthPct * 100)}%
             </span>
           </div>
@@ -557,14 +561,20 @@ const HudCenterAlertsStack = React.memo(function HudCenterAlertsStack({
       {(spawnProtectionSec ?? 0) > 0 && !downedActive && (
         <div
           data-testid="hud-spawn-protection"
-          className="bg-cyan-950/88 border border-cyan-400/70 px-2.5 py-0.5 rounded-sm font-mono text-[9.5px] uppercase tracking-wider text-cyan-300 shadow-md whitespace-nowrap"
+          className={`bg-cyan-950/88 border border-cyan-400/70 rounded-sm font-mono uppercase tracking-wider text-cyan-300 shadow-md whitespace-nowrap ${
+            compactHud ? 'px-2 py-0.5 text-[8.5px]' : 'px-2.5 py-0.5 text-[9.5px]'
+          }`}
         >
           SPAWN COVER SHIELD ACTIVE ({spawnProtectionSec?.toFixed(1)}s)
         </div>
       )}
 
       {missionAlert && (
-        <div className="bg-[#141920]/90 border border-amber-500/70 px-3 py-1 rounded-sm font-display text-[11px] sm:text-xs uppercase tracking-widest text-amber-400 shadow-lg text-center">
+        <div
+          className={`bg-[#141920]/90 border border-amber-500/70 rounded-sm font-display uppercase tracking-widest text-amber-400 shadow-lg text-center ${
+            compactHud ? 'px-2.5 py-0.5 text-[10px]' : 'px-3 py-1 text-[11px] sm:text-xs'
+          }`}
+        >
           {missionAlert}
         </div>
       )}
@@ -627,6 +637,7 @@ const HudCenterAlertsStack = React.memo(function HudCenterAlertsStack({
 export const HudTopCenterStack = React.memo(function HudTopCenterStack({
   showCompass,
   compactHud,
+  viewportWidth = 1024,
   downedActive,
   pointerLocked,
   combatDebugOpen,
@@ -637,6 +648,7 @@ export const HudTopCenterStack = React.memo(function HudTopCenterStack({
 }: {
   showCompass: boolean;
   compactHud: boolean;
+  viewportWidth?: number;
   downedActive: boolean;
   pointerLocked: boolean;
   combatDebugOpen: boolean;
@@ -645,6 +657,12 @@ export const HudTopCenterStack = React.memo(function HudTopCenterStack({
   hudMode: 'adaptive' | 'minimal' | 'expanded';
   onRequestPointerLock: () => void;
 }) {
+  const inputSettings = useSettingsStore((s) => s.input);
+  const leftFireTopLeft =
+    touchControlsVisible &&
+    (inputSettings.leftFireEnabled || inputSettings.touchControlProfile === 'three_finger');
+  const narrowShiftRight = compactHud && viewportWidth < 760 && leftFireTopLeft;
+
   const isIntenseCombat = useGameSessionStore(
     (s) =>
       hudMode === 'adaptive' &&
@@ -656,7 +674,9 @@ export const HudTopCenterStack = React.memo(function HudTopCenterStack({
   return (
     <div
       data-testid="hud-top-center-strip"
-      className="absolute left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 transition-opacity duration-150 max-w-[min(92vw,420px)]"
+      className={`absolute -translate-x-1/2 z-20 flex flex-col items-center gap-1 transition-opacity duration-150 max-w-[min(92vw,420px)] ${
+        narrowShiftRight ? 'left-[57%]' : 'left-1/2'
+      }`}
       style={{
         top: 'max(6px, env(safe-area-inset-top, 0px))',
         opacity: secondaryChromeOpacity,
@@ -799,7 +819,7 @@ const HudObjectivesCard = React.memo(function HudObjectivesCard({
       {compactHud ? (
         <div
           data-testid="hud-objectives-compact"
-          className="pointer-events-auto bg-[#0B0E11]/76 border border-white/12 rounded-sm px-2 py-1 min-w-[150px] max-w-[210px] shadow-sm"
+          className="pointer-events-auto bg-[#0B0E11]/76 border border-white/12 rounded-sm px-1.5 min-[760px]:px-2 py-1 min-w-[118px] max-w-[144px] min-[760px]:min-w-[146px] min-[760px]:max-w-[192px] shadow-sm"
         >
           <button
             type="button"
@@ -1285,7 +1305,7 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
     >
       <div
         data-testid="hud-top-right-bar"
-        className="flex items-center gap-1.5 pointer-events-none"
+        className={`flex items-center ${compactHud ? 'gap-1' : 'gap-1.5'} pointer-events-none`}
       >
         {compactHud && <HudCompactMobileWeaponReadout />}
 
@@ -1318,11 +1338,14 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
+            if (!tacticalOverviewOpen) {
+              uiStore.getState().setTacticalKitOpen(false);
+            }
             toggleTacticalOverview();
           }}
-          className={`pointer-events-auto min-w-[40px] min-h-[40px] ${
-            compactHud ? 'px-2' : 'px-2.5'
-          } rounded-sm border flex items-center justify-center gap-1.5 font-mono text-[10px] transition-colors ${
+          className={`pointer-events-auto ${
+            compactHud ? 'min-w-[44px] min-h-[44px] px-1.5' : 'min-w-[40px] min-h-[40px] px-2.5'
+          } rounded-sm border flex items-center justify-center gap-1.5 font-mono text-[10px] transition-colors cursor-pointer ${
             tacticalOverviewOpen
               ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
               : 'bg-[#0B0E11]/85 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
@@ -1342,7 +1365,9 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
             e.stopPropagation();
             uiStore.getState().toggleTouchHudOverride(touchControlsVisible);
           }}
-          className={`pointer-events-auto min-w-[40px] min-h-[40px] px-2 rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors ${
+          className={`pointer-events-auto ${
+            compactHud ? 'min-w-[44px] min-h-[44px] px-1.5' : 'min-w-[40px] min-h-[40px] px-2'
+          } rounded-sm border flex items-center justify-center gap-1 font-mono text-[10px] transition-colors cursor-pointer ${
             touchControlsVisible
               ? 'bg-amber-500/20 border-amber-400 text-amber-300'
               : 'bg-[#0B0E11]/80 border-zinc-700 text-zinc-300 hover:bg-[#141920]'
@@ -1363,7 +1388,9 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
               e.stopPropagation();
               onPause();
             }}
-            className="pointer-events-auto min-w-[40px] min-h-[40px] px-2 bg-[#0B0E11]/85 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors cursor-pointer"
+            className={`pointer-events-auto ${
+              compactHud ? 'min-w-[44px] min-h-[44px] px-1.5' : 'min-w-[40px] min-h-[40px] px-2'
+            } bg-[#0B0E11]/85 hover:bg-[#141920] border border-zinc-700 rounded-sm text-zinc-100 flex items-center justify-center transition-colors cursor-pointer`}
           >
             <Pause className="w-3.5 h-3.5" />
           </button>
@@ -1476,6 +1503,9 @@ export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndR
     canOpenFieldSwap: Boolean(onOpenFieldSwap),
     activeTacticalHint,
   });
+
+  const tacticalKitOpen = useUIStore((s) => s.tacticalKitOpen);
+  const tacticalOverviewOpen = useUIStore((s) => s.tacticalOverviewOpen);
 
   const slotPositionClass = compactHud
     ? 'bottom-20'
@@ -1593,51 +1623,54 @@ export const HudBottomPromptsAndRadio = React.memo(function HudBottomPromptsAndR
         </div>
       )}
 
-      {activeRadioSubtitle ? (
-        <div
-          data-testid="hud-squad-radio-subtitle"
-          className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/92 border-l-2 border-y border-r rounded-xs text-zinc-100 shadow-lg ${
-            activeRadioSubtitle.priority === 'CRITICAL'
-              ? 'border-l-red-500 border-red-500/40'
-              : activeRadioSubtitle.priority === 'TACTICAL'
-                ? 'border-l-amber-400 border-zinc-700'
-                : 'border-l-cyan-400 border-zinc-800'
-          } ${
-            compactHud
-              ? 'bottom-[58px] w-[min(320px,54vw)] px-2.5 py-1 flex flex-col items-start gap-0.5 text-[10px]'
-              : 'bottom-24 max-w-md sm:max-w-xl px-3 py-1.5 flex items-center gap-2 text-xs'
-          }`}
-        >
-          <span className="inline-flex items-center gap-1.5 font-mono text-[9px] sm:text-[9.5px] uppercase font-bold text-amber-300 whitespace-nowrap shrink-0">
-            <Radio
-              className={`w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0 ${
-                activeRadioSubtitle.priority === 'CRITICAL'
-                  ? 'text-red-400'
-                  : activeRadioSubtitle.priority === 'TACTICAL'
-                    ? 'text-amber-400'
-                    : 'text-cyan-400'
-              }`}
-            />
-            [{activeRadioSubtitle.roleBadge}] {activeRadioSubtitle.callsign}
-            {!compactHud && ':'}
-          </span>
-          <span className={`text-left leading-snug ${compactHud ? 'line-clamp-2 text-zinc-200' : ''}`}>
-            {activeRadioSubtitle.text}
-          </span>
-        </div>
-      ) : (
-        subtitleText && (
+      {!(compactHud && (tacticalKitOpen || tacticalOverviewOpen)) &&
+        (activeRadioSubtitle ? (
           <div
-            data-testid="hud-tier2-radio-subtitle"
-            className={`absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/88 border border-zinc-800 px-3 py-1 rounded-sm flex items-center gap-2 text-[10px] sm:text-xs text-zinc-200 text-center ${
-              compactHud ? 'bottom-[68px] max-w-[320px]' : 'bottom-24 max-w-md sm:max-w-xl'
+            data-testid="hud-squad-radio-subtitle"
+            className={`absolute -translate-x-1/2 bg-[#0B0E11]/92 border-l-2 border-y border-r rounded-xs text-zinc-100 shadow-lg ${
+              activeRadioSubtitle.priority === 'CRITICAL'
+                ? 'border-l-red-500 border-red-500/40'
+                : activeRadioSubtitle.priority === 'TACTICAL'
+                  ? 'border-l-amber-400 border-zinc-700'
+                  : 'border-l-cyan-400 border-zinc-800'
+            } ${
+              compactHud
+                ? 'left-[43%] min-[780px]:left-1/2 bottom-[66px] w-[min(238px,38vw)] min-[780px]:w-[min(320px,46vw)] px-2 py-1 flex flex-col items-start gap-0.5 text-[9.5px]'
+                : 'left-1/2 bottom-24 max-w-md sm:max-w-xl px-3 py-1.5 flex items-center gap-2 text-xs'
             }`}
           >
-            <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-            <span>{subtitleText}</span>
+            <span className="inline-flex items-center gap-1.5 font-mono text-[9px] sm:text-[9.5px] uppercase font-bold text-amber-300 whitespace-nowrap shrink-0">
+              <Radio
+                className={`w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0 ${
+                  activeRadioSubtitle.priority === 'CRITICAL'
+                    ? 'text-red-400'
+                    : activeRadioSubtitle.priority === 'TACTICAL'
+                      ? 'text-amber-400'
+                      : 'text-cyan-400'
+                }`}
+              />
+              [{activeRadioSubtitle.roleBadge}] {activeRadioSubtitle.callsign}
+              {!compactHud && ':'}
+            </span>
+            <span className={`text-left leading-snug ${compactHud ? 'line-clamp-2 text-zinc-200' : ''}`}>
+              {activeRadioSubtitle.text}
+            </span>
           </div>
-        )
-      )}
+        ) : (
+          subtitleText && (
+            <div
+              data-testid="hud-tier2-radio-subtitle"
+              className={`absolute -translate-x-1/2 bg-[#0B0E11]/88 border border-zinc-800 px-2.5 py-1 rounded-sm flex items-center gap-1.5 text-[9.5px] sm:text-xs text-zinc-200 text-left ${
+                compactHud
+                  ? 'left-[43%] min-[780px]:left-1/2 bottom-[66px] max-w-[min(238px,38vw)] min-[780px]:max-w-[min(320px,46vw)]'
+                  : 'left-1/2 bottom-24 max-w-md sm:max-w-xl text-center'
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className={compactHud ? 'line-clamp-2' : ''}>{subtitleText}</span>
+            </div>
+          )
+        ))}
     </>
   );
 });

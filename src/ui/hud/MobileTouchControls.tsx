@@ -27,6 +27,7 @@ import { ExtendedInputAction, InputManager } from '@/src/engine/InputManager';
 import { HudSnapshot } from '@/src/schemas/events.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
+import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { SquadCommandSource, SquadOrderType } from '@/src/gameplay/squad/SquadIntentRouter';
 import {
@@ -89,7 +90,28 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
   const [autoSprintEngaged, setAutoSprintEngaged] = useState(false);
   const [adsToggled, setAdsToggled] = useState(false);
   const adsToggledRef = useRef(false);
-  const [tacticalOpen, setTacticalOpen] = useState(false);
+  const [tacticalOpen, setTacticalOpenState] = useState(false);
+  const tacticalOverviewOpen = useUIStore((s) => s.tacticalOverviewOpen);
+
+  const setTacticalOpen = useCallback((nextOrUpdater: boolean | ((prev: boolean) => boolean)) => {
+    setTacticalOpenState((prev) => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      uiStore.getState().setTacticalKitOpen(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (tacticalOverviewOpen) {
+      setTacticalOpenState(false);
+    }
+  }, [tacticalOverviewOpen]);
+
+  useEffect(() => {
+    return () => {
+      uiStore.getState().setTacticalKitOpen(false);
+    };
+  }, []);
 
   useEffect(() => {
     inputManagerRef.current = inputManager;
@@ -1637,9 +1659,9 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                   bottom: `${weaponBarRect.height + 8}px`,
                   touchAction: 'none',
                 }}
-                className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-[#0B0E11]/95 border border-white/15 rounded-md p-2 flex flex-col gap-2 shadow-2xl w-[256px]"
+                className="pointer-events-auto absolute left-[46%] md:left-1/2 -translate-x-1/2 bg-[#0B0E11]/95 border border-white/15 rounded-md p-2 flex flex-col gap-1.5 shadow-2xl w-[min(284px,calc(100vw-24px))] md:w-[344px] max-h-[calc(100dvh-134px)] overflow-y-auto"
               >
-                <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-1">
+                <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-1 shrink-0">
                   <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
                     Kit &amp; Ordnance
                   </span>
@@ -1650,19 +1672,19 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                       e.stopPropagation();
                       setTacticalOpen(false);
                     }}
-                    className="min-w-[32px] min-h-[32px] flex items-center justify-center text-zinc-400 hover:text-white"
+                    className="min-w-[32px] min-h-[28px] flex items-center justify-center text-zinc-400 hover:text-white"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-nowrap overflow-x-auto gap-1 shrink-0 pb-0.5">
                   <button
                     type="button"
                     data-testid="touch-btn-firemode"
                     aria-label="Cycle Fire Mode"
                     onPointerDown={(e) => fireTapAction(e, 'fireMode')}
-                    className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] font-bold uppercase text-zinc-200"
+                    className="touch-none touch-none-surface min-w-[44px] min-h-[38px] px-2.5 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] font-bold uppercase text-zinc-200 shrink-0"
                   >
                     {hud.fireMode}
                   </button>
@@ -1677,7 +1699,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                           fireTapAction(e, hud.ordnance && hud.ordnance.c4Deployed > 0 ? 'c4Detonate' : 'c4');
                           setTacticalOpen(false);
                         }}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-amber-500/50 rounded-sm font-mono text-[10px] font-bold text-amber-300"
+                        className="touch-none touch-none-surface min-w-[44px] min-h-[38px] px-2.5 bg-[#141920] border border-amber-500/50 rounded-sm font-mono text-[10px] font-bold text-amber-300 whitespace-nowrap shrink-0"
                       >
                         {hud.ordnance.c4Deployed > 0 ? 'DET C4' : `C4 (${hud.ordnance.c4Inventory})`}
                       </button>
@@ -1689,7 +1711,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                           fireTapAction(e, 'bombStrike');
                           setTacticalOpen(false);
                         }}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-[#141920] border border-cyan-500/50 rounded-sm font-mono text-[10px] font-bold text-cyan-300 flex items-center gap-1"
+                        className="touch-none touch-none-surface min-w-[44px] min-h-[38px] px-2.5 bg-[#141920] border border-cyan-500/50 rounded-sm font-mono text-[10px] font-bold text-cyan-300 flex items-center gap-1 whitespace-nowrap shrink-0"
                       >
                         <Bomb className="w-3.5 h-3.5" />
                         <span>{hud.ordnance.selectedBombShort}</span>
@@ -1699,7 +1721,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                         data-testid="touch-btn-cycle-bomb"
                         aria-label="Cycle Bomb Type"
                         onPointerDown={(e) => fireTapAction(e, 'cycleBomb')}
-                        className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] text-zinc-300"
+                        className="touch-none touch-none-surface min-w-[44px] min-h-[38px] px-2 bg-[#141920] border border-zinc-700 rounded-sm font-mono text-[10px] text-zinc-300 whitespace-nowrap shrink-0"
                       >
                         TYPE
                       </button>
@@ -1714,7 +1736,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                               fireTapAction(e, 'strategicNuke');
                               setTacticalOpen(false);
                             }}
-                            className="touch-none touch-none-surface min-w-[44px] min-h-[44px] px-2.5 bg-red-950/90 border border-red-500 rounded-sm font-mono text-[10px] font-bold text-red-200"
+                            className="touch-none touch-none-surface min-w-[44px] min-h-[38px] px-2.5 bg-red-950/90 border border-red-500 rounded-sm font-mono text-[10px] font-bold text-red-200 whitespace-nowrap shrink-0"
                           >
                             TRIDENT
                           </button>
@@ -1736,7 +1758,7 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                           inputManager?.queueWeaponSlot(w.slot);
                           setTacticalOpen(false);
                         }}
-                        className={`touch-none touch-none-surface min-h-[38px] px-1.5 rounded-sm border font-mono text-[9px] font-bold uppercase truncate ${
+                        className={`touch-none touch-none-surface min-h-[34px] px-1.5 rounded-sm border font-mono text-[9px] font-bold uppercase truncate ${
                           active
                             ? 'bg-amber-500/25 border-amber-400 text-amber-200'
                             : 'bg-[#141920] border-zinc-800 text-zinc-300'
@@ -1816,10 +1838,10 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                   inputManager?.cycleWeapon(1);
                 }}
                 style={{ height: `${weaponBarRect.height}px`, touchAction: 'none' }}
-                className="pointer-events-auto touch-none touch-none-surface min-w-[68px] min-h-[44px] px-2.5 bg-[#0B0E11]/80 border border-white/20 rounded-full font-mono text-[10px] font-bold uppercase text-zinc-100 flex items-center justify-center gap-1"
+                className="pointer-events-auto touch-none touch-none-surface min-w-[74px] min-h-[44px] px-2 bg-[#0B0E11]/80 border border-white/20 rounded-full font-mono text-[9.5px] font-bold uppercase text-zinc-100 flex items-center justify-center gap-1"
               >
                 <Repeat className="w-3 h-3 text-amber-400 shrink-0" />
-                <span className="truncate max-w-[58px]">{hud.weaponName}</span>
+                <span className="truncate max-w-[72px]">{hud.weaponName}</span>
               </button>
 
               <button
@@ -1829,7 +1851,13 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                 aria-expanded={tacticalOpen}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  setTacticalOpen((v) => !v);
+                  setTacticalOpen((v) => {
+                    const next = !v;
+                    if (next) {
+                      uiStore.getState().setTacticalOverviewOpen(false);
+                    }
+                    return next;
+                  });
                 }}
                 style={{
                   width: `${weaponBarRect.height}px`,

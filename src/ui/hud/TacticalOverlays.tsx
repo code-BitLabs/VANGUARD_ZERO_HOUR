@@ -2,6 +2,7 @@ import React from 'react';
 import { X } from 'lucide-react';
 import type { HudSnapshot } from '@/src/schemas/events.schema';
 import type { gameSessionStore } from '@/src/stores/gameSessionStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import type { getMissionVisualProfile } from '@/src/world/VisualBible';
 
 type ObjectiveItem = HudSnapshot['objectives'][number];
@@ -25,10 +26,13 @@ export function TacticalOverviewDrawer({
   formatObjectiveDistance,
   onClose,
 }: TacticalOverviewDrawerProps) {
+  const viewport = useViewportMode();
+  const isTouchLayout = viewport.isCoarsePointer || viewport.isCompactLandscape;
+
   return (
     <div
       data-testid="hud-tactical-overview-drawer"
-      className="fixed top-14 right-4 z-35 w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-140px)] overflow-y-auto bg-[#0B0E11]/95 border border-cyan-500/60 rounded-sm shadow-2xl p-3.5 space-y-3 pointer-events-auto"
+      className="fixed top-14 [@media(max-height:500px)]:top-12 right-4 [@media(max-height:500px)]:right-2 z-35 w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-140px)] [@media(max-height:500px)]:max-h-[calc(100dvh-116px)] overflow-y-auto bg-[#0B0E11]/95 border border-cyan-500/60 rounded-sm shadow-2xl p-3.5 [@media(max-height:500px)]:p-2.5 space-y-3 [@media(max-height:500px)]:space-y-2 pointer-events-auto"
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
@@ -49,9 +53,9 @@ export function TacticalOverviewDrawer({
             type="button"
             data-testid="close-tactical-overview"
             onClick={onClose}
-            className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xs font-mono text-[10px] text-zinc-300 flex items-center gap-1 cursor-pointer"
+            className="min-h-[34px] px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-xs font-mono text-[10px] text-zinc-300 flex items-center gap-1 cursor-pointer shrink-0"
           >
-            <X className="w-3 h-3" /> [TAB]
+            <X className="w-3.5 h-3.5" /> {isTouchLayout ? 'Close' : '[TAB]'}
           </button>
         )}
       </div>
@@ -102,9 +106,11 @@ export function TacticalOverviewDrawer({
         </div>
       </div>
 
-      <div className="pt-2 border-t border-zinc-800 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+      <div className="pt-2 border-t border-zinc-800 flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-400">
         <span>RADAR: LOS / ACOUSTIC / RECON / STALE</span>
-        <span className="text-cyan-300">[TAB] Toggle Overview &amp; Cursor</span>
+        <span className="text-cyan-300">
+          {isTouchLayout ? 'Tap Close or Intel icon to dismiss' : '[TAB] Toggle Overview & Cursor'}
+        </span>
       </div>
     </div>
   );
