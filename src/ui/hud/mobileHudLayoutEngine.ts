@@ -419,10 +419,10 @@ export function computeMobileHudLayout(
   const vw = Math.max(320, Math.round(viewport.width || 844));
   const vh = Math.max(240, Math.round(viewport.height || 390));
 
-  const safeLeft = Math.max(10, Math.round(viewport.safeLeft ?? 12));
-  const safeRight = Math.max(10, Math.round(viewport.safeRight ?? 12));
+  const safeLeft = Math.max(12, Math.round(viewport.safeLeft ?? 12));
+  const safeRight = Math.max(12, Math.round(viewport.safeRight ?? 12));
   const safeTop = Math.max(8, Math.round(viewport.safeTop ?? 8));
-  const safeBottom = Math.max(10, Math.round(viewport.safeBottom ?? 10));
+  const safeBottom = Math.max(14, Math.round(viewport.safeBottom ?? 14));
 
   const safeBounds = {
     left: safeLeft,
@@ -431,7 +431,8 @@ export function computeMobileHudLayout(
     bottom: vh - safeBottom,
   };
 
-  const heightCompactFactor = clamp(vh / 390, 0.8, 1.08);
+  const isShortViewport = vh <= 360;
+  const heightCompactFactor = clamp(vh / 390, 0.78, 1.08);
   const topHudKeepOutBottomPx = Math.round(safeTop + clamp(vh * 0.14, 44, 58));
 
   const activeMap = resolveActiveControlMap(input);
@@ -440,28 +441,32 @@ export function computeMobileHudLayout(
   const grenadeCount = options.grenadeCount ?? 2;
   const c4DeployedCount = options.c4DeployedCount ?? 0;
 
+  const fireRightMinHitbox = isShortViewport ? 54 : 56;
+  const adsMinHitbox = isShortViewport ? 44 : 46;
+  const secondaryMinHitbox = 44;
+
   const stickSize = Math.round(
-    clamp(116 * input.touchJoystickScale * activeMap.move_joystick.scale * heightCompactFactor, 96, 154)
+    clamp(116 * input.touchJoystickScale * activeMap.move_joystick.scale * heightCompactFactor, isShortViewport ? 92 : 96, 154)
   );
   const fireLeftSize = Math.round(
     clamp(
       70 * input.touchButtonScale * input.touchFireButtonScale * activeMap.fire_left.scale * heightCompactFactor,
-      56,
+      fireRightMinHitbox,
       104
     )
   );
   const fireRightSize = Math.round(
     clamp(
       72 * input.touchButtonScale * input.touchFireButtonScale * activeMap.fire_right.scale * heightCompactFactor,
-      56,
+      fireRightMinHitbox,
       108
     )
   );
   const adsSize = Math.round(
-    clamp(50 * input.touchButtonScale * activeMap.ads.scale * heightCompactFactor, 46, 74)
+    clamp(50 * input.touchButtonScale * activeMap.ads.scale * heightCompactFactor, adsMinHitbox, 74)
   );
   const secondarySize = (nodeScale: number) =>
-    Math.round(clamp(45 * input.touchButtonScale * nodeScale * heightCompactFactor, 44, 64));
+    Math.round(clamp(45 * input.touchButtonScale * nodeScale * heightCompactFactor, secondaryMinHitbox, 64));
 
   // Bottom-center tactical bar includes Weapon Switch + 1-Tap RPG + Kit + optional Grenade/C4
   const extraItemsCount = (grenadeCount > 0 ? 1 : 0) + (c4DeployedCount > 0 ? 1 : 0);
@@ -489,9 +494,27 @@ export function computeMobileHudLayout(
   ): ComputedTouchControlRect => {
     const meta = CONTROL_METADATA[id];
     const node = activeMap[id];
-    const rawCx = node.x * vw + extraOffsetX;
-    const rawCy = node.y * vh + extraOffsetY;
+    let rawCx = node.x * vw + extraOffsetX;
+    let rawCy = node.y * vh + extraOffsetY;
     const minTop = id === 'fire_left' ? safeBounds.top : Math.max(safeBounds.top, topHudKeepOutBottomPx);
+
+    const effectiveMinHitbox =
+      id === 'ads'
+        ? adsMinHitbox
+        : id === 'fire_left' || id === 'fire_right'
+          ? fireRightMinHitbox
+          : id === 'jump' || id === 'crouch' || id === 'reload'
+            ? secondaryMinHitbox
+            : meta.minHitboxPx;
+
+    const finalW = Math.max(effectiveMinHitbox, width);
+    const finalH = Math.max(effectiveMinHitbox, height);
+
+    if (id === 'weapon_bar') {
+      // Keep weapon bar safely clear of the Android bottom gesture bar
+      const maxCy = safeBounds.bottom - finalH / 2 - 2;
+      rawCy = Math.min(rawCy, maxCy);
+    }
 
     const rect: ComputedTouchControlRect = {
       id,
@@ -501,11 +524,11 @@ export function computeMobileHudLayout(
       anchor: meta.anchor,
       visible,
       zIndex: meta.zIndex,
-      minHitboxPx: meta.minHitboxPx,
+      minHitboxPx: effectiveMinHitbox,
       priority: meta.priority,
       normalized: { ...node },
-      width: Math.max(meta.minHitboxPx, width),
-      height: Math.max(meta.minHitboxPx, height),
+      width: finalW,
+      height: finalH,
       left: 0,
       top: 0,
       right: 0,
@@ -592,7 +615,7 @@ export function computeMobileHudLayout(
     }
   }
 
-  const minGapPx = 8;
+  const minGapPx = isShortViewport ? 6 : 8;
   let collisionsResolved = 0;
 
   for (let iter = 0; iter < 18; iter++) {
@@ -704,10 +727,10 @@ export function computeMobileVehicleHudLayout(
   const vw = Math.max(320, Math.round(viewport.width || 844));
   const vh = Math.max(240, Math.round(viewport.height || 390));
 
-  const safeLeft = Math.max(10, Math.round(viewport.safeLeft ?? 12));
-  const safeRight = Math.max(10, Math.round(viewport.safeRight ?? 12));
+  const safeLeft = Math.max(12, Math.round(viewport.safeLeft ?? 12));
+  const safeRight = Math.max(12, Math.round(viewport.safeRight ?? 12));
   const safeTop = Math.max(8, Math.round(viewport.safeTop ?? 8));
-  const safeBottom = Math.max(10, Math.round(viewport.safeBottom ?? 10));
+  const safeBottom = Math.max(14, Math.round(viewport.safeBottom ?? 14));
 
   const safeBounds = {
     left: safeLeft,
@@ -716,6 +739,7 @@ export function computeMobileVehicleHudLayout(
     bottom: vh - safeBottom,
   };
 
+  const isShortViewport = vh <= 360;
   const heightCompactFactor = clamp(vh / 390, 0.78, 1.08);
   const topHudKeepOutBottomPx = Math.round(safeTop + clamp(vh * 0.14, 44, 58));
 
@@ -796,7 +820,7 @@ export function computeMobileVehicleHudLayout(
     }
   }
 
-  const minGapPx = 8;
+  const minGapPx = isShortViewport ? 6 : 8;
   let collisionsResolved = 0;
 
   for (let iter = 0; iter < 18; iter++) {

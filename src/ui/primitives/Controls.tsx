@@ -29,12 +29,12 @@ export function Slider({
       step={step}
       aria-label={ariaLabel}
       onValueChange={(arr) => onValueChange(arr[0] ?? value)}
-      className="relative flex items-center select-none touch-none w-full h-5 cursor-pointer"
+      className="relative flex items-center select-none touch-none w-full h-7 py-1 cursor-pointer"
     >
       <SliderPrimitive.Track className="bg-zinc-800 relative grow rounded-full h-1.5">
         <SliderPrimitive.Range className="absolute bg-amber-500 rounded-full h-full" />
       </SliderPrimitive.Track>
-      <SliderPrimitive.Thumb className="block w-4 h-4 bg-zinc-100 border-2 border-amber-500 rounded-full shadow hover:bg-amber-300 focus:outline-none" />
+      <SliderPrimitive.Thumb className="relative block w-4 h-4 [@media(pointer:coarse)]:w-5 [@media(pointer:coarse)]:h-5 bg-zinc-100 border-2 border-amber-500 rounded-full shadow hover:bg-amber-300 focus:outline-none after:absolute after:-inset-3 after:content-['']" />
     </SliderPrimitive.Root>
   );
 }
@@ -53,7 +53,7 @@ export function Switch({
       id={id}
       checked={checked}
       onCheckedChange={onCheckedChange}
-      className="w-10 h-5 bg-zinc-800 border border-zinc-700 rounded-full relative data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-400 transition-colors cursor-pointer"
+      className="w-10 h-5 bg-zinc-800 border border-zinc-700 rounded-full relative data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-400 transition-colors cursor-pointer after:absolute after:-inset-2.5 after:content-['']"
     >
       <SwitchPrimitive.Thumb className="block w-3.5 h-3.5 bg-white rounded-full transition-transform translate-x-0.5 data-[state=checked]:translate-x-5" />
     </SwitchPrimitive.Root>
@@ -75,7 +75,7 @@ export function Select({
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger
         aria-label={ariaLabel}
-        className="inline-flex items-center justify-between gap-2 bg-[#0B0E11] border border-zinc-700 hover:border-amber-500/60 px-3 py-1.5 text-xs font-medium text-zinc-100 rounded-sm min-w-[140px] cursor-pointer"
+        className="inline-flex items-center justify-between gap-2 bg-[#0B0E11] border border-zinc-700 hover:border-amber-500/60 px-3 py-2 sm:py-1.5 min-h-[38px] sm:min-h-[32px] text-xs font-medium text-zinc-100 rounded-sm min-w-[140px] cursor-pointer"
       >
         <SelectPrimitive.Value />
         <SelectPrimitive.Icon>
@@ -83,13 +83,13 @@ export function Select({
         </SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
-        <SelectPrimitive.Content className="z-50 bg-[#1B222C] border border-zinc-700 rounded-sm shadow-xl overflow-hidden">
+        <SelectPrimitive.Content className="z-50 bg-[#1B222C] border border-zinc-700 rounded-sm shadow-xl overflow-hidden max-h-60 overflow-y-auto">
           <SelectPrimitive.Viewport className="p-1">
             {options.map((o) => (
               <SelectPrimitive.Item
                 key={o.value}
                 value={o.value}
-                className="flex items-center justify-between px-3 py-1.5 text-xs text-zinc-200 rounded-sm cursor-pointer outline-none data-[highlighted]:bg-amber-500 data-[highlighted]:text-zinc-950"
+                className="flex items-center justify-between px-3 py-2 sm:py-1.5 min-h-[36px] sm:min-h-[30px] text-xs text-zinc-200 rounded-sm cursor-pointer outline-none data-[highlighted]:bg-amber-500 data-[highlighted]:text-zinc-950"
               >
                 <SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
                 <SelectPrimitive.ItemIndicator>

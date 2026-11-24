@@ -171,14 +171,32 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
     () =>
       computeMobileHudLayout(
         inputSettings,
-        { width: viewport.width, height: viewport.height },
+        {
+          width: viewport.width,
+          height: viewport.height,
+          safeTop: viewport.safeTop,
+          safeBottom: viewport.safeBottom,
+          safeLeft: viewport.safeLeft,
+          safeRight: viewport.safeRight,
+        },
         {
           inVehicle: hud.inVehicle,
           grenadeCount: hud.grenades,
           c4DeployedCount,
         }
       ),
-    [inputSettings, viewport.width, viewport.height, hud.inVehicle, hud.grenades, c4DeployedCount]
+    [
+      inputSettings,
+      viewport.width,
+      viewport.height,
+      viewport.safeTop,
+      viewport.safeBottom,
+      viewport.safeLeft,
+      viewport.safeRight,
+      hud.inVehicle,
+      hud.grenades,
+      c4DeployedCount,
+    ]
   );
 
   const vehicleLayout = useMemo(
@@ -186,8 +204,20 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
       computeMobileVehicleHudLayout(inputSettings, {
         width: viewport.width,
         height: viewport.height,
+        safeTop: viewport.safeTop,
+        safeBottom: viewport.safeBottom,
+        safeLeft: viewport.safeLeft,
+        safeRight: viewport.safeRight,
       }),
-    [inputSettings, viewport.width, viewport.height]
+    [
+      inputSettings,
+      viewport.width,
+      viewport.height,
+      viewport.safeTop,
+      viewport.safeBottom,
+      viewport.safeLeft,
+      viewport.safeRight,
+    ]
   );
 
   const squadStripRect = useMemo(() => computeMobileSquadStripRect(layout), [layout]);
@@ -1653,14 +1683,28 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
             }}
           >
             {tacticalOpen && (
-              <div
-                data-testid="touch-tactical-drawer"
-                style={{
-                  bottom: `${weaponBarRect.height + 8}px`,
-                  touchAction: 'none',
-                }}
-                className="pointer-events-auto absolute left-[46%] md:left-1/2 -translate-x-1/2 bg-[#0B0E11]/95 border border-white/15 rounded-md p-2 flex flex-col gap-1.5 shadow-2xl w-[min(284px,calc(100vw-24px))] md:w-[344px] max-h-[calc(100dvh-134px)] overflow-y-auto"
-              >
+              <>
+                <div
+                  data-testid="touch-tactical-drawer-backdrop"
+                  aria-hidden="true"
+                  className="fixed inset-0 z-24 pointer-events-auto bg-black/25"
+                  style={{ touchAction: 'none' }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    setTacticalOpen(false);
+                  }}
+                />
+                <div
+                  data-testid="touch-tactical-drawer"
+                  style={{
+                    bottom: `${weaponBarRect.height + 8}px`,
+                    touchAction: 'none',
+                    zIndex: 25,
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onPointerUp={(e) => e.stopPropagation()}
+                  className="pointer-events-auto absolute left-[46%] md:left-1/2 -translate-x-1/2 bg-[#0B0E11]/95 border border-white/15 rounded-md p-2 flex flex-col gap-1.5 shadow-2xl w-[min(284px,calc(100vw-24px))] md:w-[344px] max-h-[calc(100dvh-134px)] overflow-y-auto"
+                >
                 <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-1 shrink-0">
                   <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
                     Kit &amp; Ordnance
@@ -1770,7 +1814,8 @@ export const MobileTouchControls = React.memo(function MobileTouchControls({
                   })}
                 </div>
               </div>
-            )}
+            </>
+          )}
 
             <div className="pointer-events-none flex items-center justify-center gap-1 w-full h-full">
               {hud.ordnance && hud.ordnance.c4Deployed > 0 && (

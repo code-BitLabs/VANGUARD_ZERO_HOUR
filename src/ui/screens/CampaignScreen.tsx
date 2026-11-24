@@ -4,6 +4,8 @@ import {
   ArrowRight,
   Check,
   FileText,
+  Maximize2,
+  Minimize2,
   Play,
   Wrench,
 } from 'lucide-react';
@@ -15,6 +17,8 @@ import { WeaponId } from '@/src/schemas/weapon.schema';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
 import { useUIStore } from '@/src/stores/uiStore';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { useFullscreen } from '@/src/utils/fullscreen';
 import { Button } from '@/src/ui/primitives/Button';
 import { AttachmentWorkbenchDrawer } from '@/src/ui/screens/campaign/AttachmentWorkbenchDrawer';
 import {
@@ -54,6 +58,8 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
 
   const save = useProgressionStore((s) => s.save);
   const setScreen = useUIStore((s) => s.setScreen);
+  const viewport = useViewportMode();
+  const { isFullscreen, isSupported, toggleFullscreen, requestFullscreen } = useFullscreen();
 
   const [activeStep, setActiveStep] = useState<CampaignStep>(1);
   const [secondaryDrawerTab, setSecondaryDrawerTab] = useState<SecondaryDrawerTab | null>(null);
@@ -110,6 +116,9 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
   };
 
   const handleDeployNow = () => {
+    if (viewport.isCoarsePointer && isSupported && !isFullscreen) {
+      void requestFullscreen();
+    }
     confirmDeploymentMode(activeMode, selectedMissionId);
     markMissionBriefingSeen(mission.missionKey, mission.briefingVersion);
     onDeploy(mission.id, difficulty, activeMode);
@@ -185,6 +194,27 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
             <Wrench className="w-3.5 h-3.5 text-cyan-400" />
             <span className="hidden md:inline">Full Armory</span>
           </button>
+
+          {isSupported && (
+            <button
+              type="button"
+              data-testid="header-toggle-fullscreen"
+              aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              onClick={() => {
+                onUiClick();
+                void toggleFullscreen();
+              }}
+              className="min-h-[44px] sm:min-h-[36px] [@media(max-height:520px)]:min-h-[34px] min-w-[40px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 hover:text-white inline-flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5 text-zinc-300 hover:text-amber-400" />
+              )}
+              <span className="hidden md:inline">{isFullscreen ? 'Windowed' : 'Fullscreen'}</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -239,7 +269,13 @@ export function CampaignScreen({ onDeploy, onUiClick }: CampaignScreenProps) {
       </nav>
 
       {/* Main Step Workspace */}
-      <main className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4 [@media(max-height:520px)]:py-2">
+      <main
+        className={
+          viewport.isCompactLandscape
+            ? 'flex-1 min-h-0 overflow-y-auto px-3 py-1'
+            : 'flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-3 sm:py-4'
+        }
+      >
         <div className="max-w-7xl mx-auto">
           {activeStep === 1 && (
             <StepMissionSelect

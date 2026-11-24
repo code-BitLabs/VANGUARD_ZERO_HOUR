@@ -12,6 +12,7 @@ import { progressionStore, useProgressionStore } from '@/src/stores/progressionS
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
 import { resolveTouchControlsVisible, useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { isFullscreenActive, requestAppFullscreen } from '@/src/utils/fullscreen';
 import { ErrorBoundary } from '@/src/ui/primitives/ErrorBoundary';
 import { ToastAndRecoveryLayer } from '@/src/ui/screens/ToastAndRecoveryLayer';
 import { TitleScreen } from '@/src/ui/screens/TitleScreen';
@@ -92,10 +93,7 @@ export default function App() {
   const viewport = useViewportMode();
   const [portraitGateDismissed, setPortraitGateDismissed] = useState(false);
   const touchControlsVisible = resolveTouchControlsVisible(touchMode, touchHudOverride, viewport);
-  const screenRequiresLandscape =
-    screen === 'loading' || screen === 'playing' || screen === 'paused';
-  const effectivePortraitBlocked =
-    screenRequiresLandscape && viewport.shouldBlockPortrait && !portraitGateDismissed;
+  const effectivePortraitBlocked = viewport.shouldBlockPortrait && !portraitGateDismissed;
 
   useEffect(() => {
     if (!viewport.shouldBlockPortrait && portraitGateDismissed) {
@@ -125,6 +123,10 @@ export default function App() {
       mountedEngine?.resize();
     };
     window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    document.addEventListener('fullscreenchange', onResize);
+    document.addEventListener('webkitfullscreenchange', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
 
     if (progressionStore.getState().recoveredFromCorruption) {
       uiStore
@@ -189,6 +191,10 @@ export default function App() {
         window.clearTimeout(idleTimerId);
       }
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+      document.removeEventListener('fullscreenchange', onResize);
+      document.removeEventListener('webkitfullscreenchange', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
       setInputManager(null);
       mountedEngine?.dispose();
       engineRef.current = null;
@@ -228,6 +234,10 @@ export default function App() {
 
   const handleDeploy = useCallback(
     (missionId: number, diff: Difficulty, weaponId?: WeaponId, mode?: DeploymentMode) => {
+      // Seamlessly attempt user-gesture fullscreen on mobile/touch devices upon starting deployment
+      if (viewport.isCoarsePointer && !isFullscreenActive()) {
+        void requestAppFullscreen();
+      }
       const selection = missionSelectionStore.getState();
       if (selection.selectedMissionId !== missionId) {
         selection.setSelectedMission(missionId);
@@ -473,17 +483,23 @@ export default function App() {
               }}
             >
               <div className="max-w-sm w-full bg-[#141920] border border-amber-500/70 p-5 sm:p-6 rounded-sm space-y-3 shadow-2xl">
-                <Smartphone className="w-10 h-10 text-amber-400 mx-auto rotate-90" />
+                <Smartphone className="w-12 h-12 text-amber-400 mx-auto transition-transform duration-500 rotate-90 animate-pulse" />
                 <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-amber-500">
-                  Landscape Combat Required
+                  {screen === 'playing' || screen === 'paused'
+                    ? 'Landscape Combat Required'
+                    : 'Tactical Landscape Mode Required'}
                 </p>
                 <h2 className="font-display text-2xl font-bold uppercase text-white">
                   Rotate Device to Landscape
                 </h2>
                 <p className="text-xs text-zinc-300 leading-relaxed">
-                  {screen === 'loading'
+                  {screen === 'playing'
+                    ? 'Combat is paused while in portrait orientation. Rotate your phone sideways to resume twin-stick tactical controls.'
+                    : screen === 'loading'
                     ? 'Operation deployment uses twin-stick landscape tactical controls. Rotate your phone sideways to enter combat.'
-                    : 'Combat is paused while in portrait orientation. Rotate your phone sideways to resume twin-stick tactical controls.'}
+                    : screen === 'paused'
+                    ? 'Mission paused. Rotate your phone sideways to access tactical commands and resume combat.'
+                    : 'VANGUARD: ZERO HOUR is a landscape tactical experience. Rotate your phone sideways to access Command HQ, operations, armory, and tactical combat.'}
                 </p>
                 <div className="pt-1 flex flex-col gap-2">
                   {!viewport.isCoarsePointer && (
@@ -493,23 +509,25 @@ export default function App() {
                       onClick={() => setPortraitGateDismissed(true)}
                       className="w-full min-h-[44px] px-4 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display text-xs font-bold uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
                     >
-                      Continue in Narrow Preview
+                      Continue in Narrow Window
                     </button>
                   )}
-                  <button
-                    type="button"
-                    data-testid="portrait-gate-escape-btn"
-                    onClick={() => {
-                      if (screen === 'loading') {
-                        engineRef.current?.cancelLoad();
-                      } else {
-                        handleAbort();
-                      }
-                    }}
-                    className="w-full min-h-[44px] px-4 py-2 bg-[#0B0E11] hover:bg-zinc-900 border border-zinc-700 text-zinc-200 font-mono text-xs uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
-                  >
-                    {screen === 'loading' ? 'Cancel Deployment' : 'Return to HQ (Portrait Safe)'}
-                  </button>
+                  {(screen === 'loading' || screen === 'playing' || screen === 'paused') && (
+                    <button
+                      type="button"
+                      data-testid="portrait-gate-escape-btn"
+                      onClick={() => {
+                        if (screen === 'loading') {
+                          engineRef.current?.cancelLoad();
+                        } else {
+                          handleAbort();
+                        }
+                      }}
+                      className="w-full min-h-[44px] px-4 py-2 bg-[#0B0E11] hover:bg-zinc-900 border border-zinc-700 text-zinc-200 font-mono text-xs uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
+                    >
+                      {screen === 'loading' ? 'Cancel Deployment' : 'Abort to Command HQ'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

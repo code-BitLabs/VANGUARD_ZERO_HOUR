@@ -9,6 +9,8 @@ import {
   Zap,
   Volume2,
   VolumeX,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import theaterDesertImg from '@/src/assets/images/theater_desert_convoy_1795162698073.webp';
 import theaterNightImg from '@/src/assets/images/theater_night_foundry_1795162697888.webp';
@@ -20,6 +22,7 @@ import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
 import { uiStore } from '@/src/stores/uiStore';
 import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
+import { useFullscreen } from '@/src/utils/fullscreen';
 import { Button } from '@/src/ui/primitives/Button';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
 
@@ -49,6 +52,7 @@ export function TitleScreen({
   );
   const seenBriefings = useMissionSelectionStore((s) => s.seenMissionBriefings);
   const viewport = useViewportMode();
+  const { isFullscreen, isSupported, toggleFullscreen, requestFullscreen } = useFullscreen();
   const isTouchOrCompact =
     viewport.isCoarsePointer || viewport.isCompactLandscape || viewport.isPortrait;
   const selectedMission = getMissionById(selectedMissionId);
@@ -58,6 +62,9 @@ export function TitleScreen({
 
   const nav = (screen: 'campaign' | 'armory' | 'howToPlay') => {
     onUiClick();
+    if (screen === 'campaign' && viewport.isCoarsePointer && isSupported && !isFullscreen) {
+      void requestFullscreen();
+    }
     uiStore.getState().setScreen(screen);
   };
 
@@ -135,6 +142,27 @@ export function TitleScreen({
               <Volume2 className="w-4 h-4 text-[var(--vg-text-secondary)]" />
             )}
           </Button>
+
+          {isSupported && (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="title-toggle-fullscreen"
+              aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              className="min-h-[44px] min-w-[44px] [@media(max-height:460px)]:min-h-[40px] [@media(max-height:460px)]:min-w-[40px] px-2.5"
+              onClick={() => {
+                onUiClick();
+                void toggleFullscreen();
+              }}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-4 h-4 text-amber-400" />
+              ) : (
+                <Maximize2 className="w-4 h-4 text-[var(--vg-text-secondary)] hover:text-amber-400" />
+              )}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -168,10 +196,9 @@ export function TitleScreen({
           </div>
         </div>
 
-        <p className="text-xs sm:text-sm lg:text-base text-[var(--vg-text-secondary)] leading-relaxed max-w-lg mb-4 sm:mb-6 [@media(max-height:460px)]:mb-1.5 [@media(max-height:460px)]:text-xs [@media(max-height:460px)]:leading-snug [@media(max-height:410px)]:line-clamp-2">
-          Five tactical single-player operations across warzone cities, desert convoys, river valleys,
-          and industrial foundries. Deploy Solo or lead a Fireteam, command armored vehicles, and
-          customize your arsenal.
+        <p className="text-xs sm:text-sm lg:text-base text-[var(--vg-text-secondary)] leading-relaxed max-w-lg mb-4 sm:mb-6 [@media(max-height:460px)]:mb-1.5 [@media(max-height:460px)]:text-xs [@media(max-height:460px)]:leading-snug">
+          Five single-player operations across warzone cities, desert bases, and industrial foundries.
+          Deploy Solo or lead a tactical Fireteam with customizable weapons and vehicles.
         </p>
 
         <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-2.5 [@media(max-height:460px)]:flex-row [@media(max-height:460px)]:gap-2 mb-2.5 sm:mb-3 [@media(max-height:460px)]:mb-1.5">
@@ -190,6 +217,9 @@ export function TitleScreen({
               data-testid="quick-deploy-btn"
               onClick={() => {
                 onUiClick();
+                if (viewport.isCoarsePointer && isSupported && !isFullscreen) {
+                  void requestFullscreen();
+                }
                 onQuickDeploy();
               }}
               className="w-full sm:w-auto [@media(max-height:460px)]:w-auto min-h-[46px] [@media(max-height:460px)]:min-h-[44px]"
@@ -254,9 +284,9 @@ export function TitleScreen({
           </span>
         )}
         <span className={isTouchOrCompact ? 'text-[var(--vg-text-secondary)]' : ''}>
-          {viewport.isPortrait
-            ? 'PORTRAIT HQ READY · COMBAT DEPLOYS IN LANDSCAPE TWIN-STICK MODE'
-            : 'TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · 1-TAP ORDNANCE'}
+          {isTouchOrCompact || viewport.isCoarsePointer
+            ? 'TOUCH: LEFT STICK MOVE · RIGHT DRAG AIM · 1-TAP ORDNANCE'
+            : 'TACTICAL COMBAT READY · 60-120 HZ LOW-LATENCY INPUT PIPELINE'}
         </span>
       </div>
     </div>

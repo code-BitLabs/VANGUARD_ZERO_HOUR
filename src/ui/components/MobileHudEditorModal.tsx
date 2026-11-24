@@ -253,7 +253,7 @@ export function MobileControlLayoutPreview({
         ref={containerRef}
         style={{
           opacity: previewMode === 'vehicle' ? input.touchVehicleButtonOpacity : input.touchButtonOpacity,
-          touchAction: 'none',
+          touchAction: 'pan-y',
         }}
         onPointerMove={(e) => {
           if (!draggingInfantryId && !draggingVehicleId) return;
@@ -351,6 +351,18 @@ export function MobileControlLayoutPreview({
                     }
                     setDraggingInfantryId(ctrl.id);
                   }}
+                  onPointerUp={(e) => {
+                    try {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch {}
+                    setDraggingInfantryId(null);
+                  }}
+                  onPointerCancel={(e) => {
+                    try {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch {}
+                    setDraggingInfantryId(null);
+                  }}
                   style={{
                     left: `${leftPct}%`,
                     top: `${topPct}%`,
@@ -402,6 +414,18 @@ export function MobileControlLayoutPreview({
                     }
                     setDraggingVehicleId(ctrl.id);
                   }}
+                  onPointerUp={(e) => {
+                    try {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch {}
+                    setDraggingVehicleId(null);
+                  }}
+                  onPointerCancel={(e) => {
+                    try {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    } catch {}
+                    setDraggingVehicleId(null);
+                  }}
                   style={{
                     left: `${leftPct}%`,
                     top: `${topPct}%`,
@@ -439,15 +463,34 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
   const [draggingVehId, setDraggingVehId] = useState<VehicleTouchControlId | null>(null);
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
 
+  // Clear dragging state if viewport orientation shifts or window resizes
+  React.useEffect(() => {
+    if (viewport.isPortrait) {
+      setDraggingId(null);
+      setDraggingVehId(null);
+    }
+  }, [viewport.isPortrait, viewport.width, viewport.height]);
+
   const layout = computeMobileHudLayout(
     input,
-    { width: viewport.width, height: viewport.height },
+    {
+      width: viewport.width,
+      height: viewport.height,
+      safeTop: viewport.safeTop,
+      safeBottom: viewport.safeBottom,
+      safeLeft: viewport.safeLeft,
+      safeRight: viewport.safeRight,
+    },
     { inVehicle: false, grenadeCount: 2, c4DeployedCount: 0 }
   );
 
   const vehicleLayout = computeMobileVehicleHudLayout(input, {
     width: viewport.width,
     height: viewport.height,
+    safeTop: viewport.safeTop,
+    safeBottom: viewport.safeBottom,
+    safeLeft: viewport.safeLeft,
+    safeRight: viewport.safeRight,
   });
 
   const activeMap = resolveActiveControlMap(input);
@@ -834,14 +877,25 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
               </>
             )}
 
-            {/* Selected Control Scale Slider */}
-            <div className="flex items-center gap-1.5 bg-[#141920] border border-zinc-800 px-2 py-0.5 rounded-xs">
-              <span className="font-mono text-[9.5px] sm:text-[10px] text-amber-300 uppercase whitespace-nowrap">
+            {/* Selected Control Scale Controls */}
+            <div className="flex items-center gap-1 bg-[#141920] border border-zinc-800 px-1.5 py-0.5 rounded-xs">
+              <span className="font-mono text-[9px] sm:text-[10px] text-amber-300 uppercase whitespace-nowrap px-0.5">
                 {editorMode === 'infantry'
                   ? `${selectedRect.shortLabel} (${Math.round(selectedNode.scale * 100)}%)`
                   : `${selectedVehRect.shortLabel} (${Math.round(selectedVehNode.scale * 100)}%)`}
               </span>
-              <div className="w-16 sm:w-24">
+              <button
+                type="button"
+                aria-label="Decrease Control Size"
+                onClick={() => {
+                  const currentScale = editorMode === 'infantry' ? selectedNode.scale : selectedVehNode.scale;
+                  updateSelectedScale(Math.max(0.75, currentScale - 0.05));
+                }}
+                className="w-5 h-5 rounded-xs bg-zinc-800 hover:bg-zinc-700 active:bg-amber-500 active:text-zinc-950 text-zinc-200 font-mono text-[11px] font-bold flex items-center justify-center cursor-pointer"
+              >
+                -
+              </button>
+              <div className="w-14 sm:w-20">
                 <Slider
                   aria-label="Selected Control Size"
                   value={editorMode === 'infantry' ? selectedNode.scale : selectedVehNode.scale}
@@ -851,6 +905,17 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
                   onValueChange={updateSelectedScale}
                 />
               </div>
+              <button
+                type="button"
+                aria-label="Increase Control Size"
+                onClick={() => {
+                  const currentScale = editorMode === 'infantry' ? selectedNode.scale : selectedVehNode.scale;
+                  updateSelectedScale(Math.min(1.45, currentScale + 0.05));
+                }}
+                className="w-5 h-5 rounded-xs bg-zinc-800 hover:bg-zinc-700 active:bg-amber-500 active:text-zinc-950 text-zinc-200 font-mono text-[11px] font-bold flex items-center justify-center cursor-pointer"
+              >
+                +
+              </button>
             </div>
 
             {/* Collision Validation Badge */}
@@ -918,6 +983,18 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
                   setSelectedId(ctrl.id);
                   setDraggingId(ctrl.id);
                 }}
+                onPointerUp={(e) => {
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {}
+                  setDraggingId(null);
+                }}
+                onPointerCancel={(e) => {
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {}
+                  setDraggingId(null);
+                }}
                 style={{
                   left: `${ctrl.left}px`,
                   top: `${ctrl.top}px`,
@@ -971,6 +1048,18 @@ export function MobileHudEditorModal({ onClose }: { onClose: () => void }) {
                   }
                   setSelectedVehId(ctrl.id);
                   setDraggingVehId(ctrl.id);
+                }}
+                onPointerUp={(e) => {
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {}
+                  setDraggingVehId(null);
+                }}
+                onPointerCancel={(e) => {
+                  try {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  } catch {}
+                  setDraggingVehId(null);
                 }}
                 style={{
                   left: `${ctrl.left}px`,

@@ -34,6 +34,8 @@ export function TacticalOverviewDrawer({
       data-testid="hud-tactical-overview-drawer"
       className="fixed top-14 [@media(max-height:500px)]:top-12 right-4 [@media(max-height:500px)]:right-2 z-35 w-[min(420px,calc(100vw-24px))] max-h-[calc(100dvh-140px)] [@media(max-height:500px)]:max-h-[calc(100dvh-116px)] overflow-y-auto bg-[#0B0E11]/95 border border-cyan-500/60 rounded-sm shadow-2xl p-3.5 [@media(max-height:500px)]:p-2.5 space-y-3 [@media(max-height:500px)]:space-y-2 pointer-events-auto"
       onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-start justify-between gap-2 border-b border-zinc-800 pb-2">
@@ -136,6 +138,8 @@ export function DownedActionOverlay({
       data-testid="hud-downed-overlay"
       className="fixed inset-0 z-40 bg-red-950/75 flex items-center justify-center p-4 pointer-events-auto"
       onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="max-w-lg w-full bg-[#0B0E11]/95 border-2 border-red-500 p-4 sm:p-5 rounded-sm shadow-2xl space-y-3">

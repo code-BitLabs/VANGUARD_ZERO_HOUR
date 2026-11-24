@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Award, BookOpen, GitBranch, MonitorCheck, Play, RotateCcw, Settings, Users, XCircle } from 'lucide-react';
+import { Award, BookOpen, GitBranch, Maximize2, Minimize2, MonitorCheck, Play, RotateCcw, Settings, Users, XCircle } from 'lucide-react';
 import { TACTICAL_CHALLENGES } from '@/src/data/challenges';
 import { ACHIEVEMENT_DEFINITIONS, getRankForXp } from '@/src/data/ranks';
 import { getMissionById } from '@/src/data/missions';
@@ -9,67 +9,102 @@ import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useProgressionStore } from '@/src/stores/progressionStore';
 import { uiStore } from '@/src/stores/uiStore';
+import { useFullscreen } from '@/src/utils/fullscreen';
 import { Button } from '@/src/ui/primitives/Button';
 import { Card, CardContent } from '@/src/ui/primitives/Card';
 import { ProgressBar } from '@/src/ui/primitives/Controls';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { HardwareQaModal } from './HardwareQaModal';
 
 export function LoadingOverlay({ onCancel }: { onCancel: () => void }) {
   const progress = useGameSessionStore((s) => s.loadProgress);
   const selectedMissionId = useMissionSelectionStore((s) => s.selectedMissionId);
   const mission = getMissionById(selectedMissionId);
+  const viewport = useViewportMode();
+  const isCompactLandscape = viewport.isCompactLandscape;
 
   return (
     <div
       className="fixed inset-0 z-30 bg-[#0B0E11] flex items-center justify-center overflow-y-auto"
       style={{
-        paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
-        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        paddingTop: 'max(8px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))',
         paddingLeft: 'max(14px, env(safe-area-inset-left, 0px))',
         paddingRight: 'max(14px, env(safe-area-inset-right, 0px))',
       }}
     >
-      <div className="max-w-xl w-full bg-[#141920] border border-zinc-800 p-4 sm:p-6 [@media(max-height:480px)]:p-3 rounded-sm shadow-2xl my-auto">
-        <p className="font-mono text-[10px] sm:text-[11px] uppercase tracking-[0.24em] text-amber-500">
-          Deploying Operation // {mission.codeName}
-        </p>
-        <h2 className="font-display text-xl sm:text-2xl [@media(max-height:480px)]:text-lg font-bold uppercase text-white mt-0.5">
+      <div
+        className={
+          isCompactLandscape
+            ? 'max-w-lg w-full bg-[#141920] border border-zinc-800 p-2.5 sm:p-3 rounded-sm shadow-2xl my-auto max-h-[94dvh] overflow-y-auto'
+            : 'max-w-xl w-full bg-[#141920] border border-zinc-800 p-4 sm:p-6 rounded-sm shadow-2xl my-auto max-h-[94dvh] overflow-y-auto'
+        }
+      >
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-mono text-[9px] sm:text-[11px] uppercase tracking-[0.2em] text-amber-500">
+            Deploying Operation // {mission.codeName}
+          </p>
+          <span className="font-mono text-[9px] text-zinc-400 uppercase">
+            OP 0{mission.id}
+          </span>
+        </div>
+        <h2
+          className={
+            isCompactLandscape
+              ? 'font-display text-base font-bold uppercase text-white mt-0.5'
+              : 'font-display text-xl sm:text-2xl font-bold uppercase text-white mt-0.5'
+          }
+        >
           {mission.title}
         </h2>
-        <p className="text-xs text-zinc-300 mt-1.5 [@media(max-height:480px)]:mt-1 leading-relaxed [@media(max-height:480px)]:line-clamp-2">
+        <p
+          className={
+            isCompactLandscape
+              ? 'text-[11px] text-zinc-300 mt-0.5 leading-snug line-clamp-1'
+              : 'text-xs text-zinc-300 mt-1.5 leading-relaxed'
+          }
+        >
           {mission.briefing}
         </p>
 
-        <div className="mt-3 [@media(max-height:480px)]:mt-2 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 [@media(max-height:480px)]:p-2 rounded-sm space-y-1.5 [@media(max-height:480px)]:space-y-1">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
+        <div
+          className={
+            isCompactLandscape
+              ? 'mt-1.5 bg-[#0B0E11] border border-zinc-800/90 p-2 rounded-sm space-y-1'
+              : 'mt-3 bg-[#0B0E11] border border-zinc-800/90 p-2.5 sm:p-3 rounded-sm space-y-1.5'
+          }
+        >
+          <div className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-amber-400">
             Staged Tactical Objectives ({mission.objectives.length} Stages)
           </div>
           {mission.objectives.map((obj, idx) => (
-            <div key={obj.id} className="text-xs text-zinc-200 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <span className="font-mono text-[10px] text-cyan-400 block [@media(max-height:480px)]:inline [@media(max-height:480px)]:mr-1.5">
+            <div key={obj.id} className="text-xs text-zinc-200 flex items-center justify-between gap-2">
+              <div className="min-w-0 flex items-center gap-1.5 truncate">
+                <span className="font-mono text-[9px] text-cyan-400 shrink-0">
                   {obj.stageTitle || `STAGE ${idx + 1}`}
                 </span>
-                <span className="font-medium text-white">{obj.title}</span>
-                <span className="block [@media(max-height:480px)]:hidden text-[11px] text-zinc-400">
-                  {obj.description}
-                </span>
+                <span className="font-medium text-white truncate text-[11px]">{obj.title}</span>
               </div>
-              <span className="font-mono text-[10px] text-amber-400 shrink-0">0/{obj.targetCount}</span>
+              <span className="font-mono text-[9.5px] text-amber-400 shrink-0">0/{obj.targetCount}</span>
             </div>
           ))}
         </div>
 
-        <div className="mt-4 [@media(max-height:480px)]:mt-2.5">
+        <div className={isCompactLandscape ? 'mt-2' : 'mt-4'}>
           <div className="flex justify-between font-mono text-xs text-zinc-300 mb-1">
-            <span className="truncate pr-2">{progress.currentAsset}</span>
-            <span className="tabular-nums text-amber-400 shrink-0">{progress.percent}%</span>
+            <span className="truncate pr-2 text-[10.5px]">{progress.currentAsset}</span>
+            <span className="tabular-nums text-amber-400 shrink-0 text-xs">{progress.percent}%</span>
           </div>
-          <ProgressBar value={progress.percent} className="h-2" />
+          <ProgressBar value={progress.percent} className="h-1.5 sm:h-2" />
         </div>
-        <div className="mt-4 [@media(max-height:480px)]:mt-2.5 flex justify-end">
-          <Button variant="outline" size="sm" className="min-h-[44px] [@media(max-height:480px)]:min-h-[38px]" onClick={onCancel}>
-            <XCircle className="w-4 h-4" /> Cancel Deployment
+        <div className={isCompactLandscape ? 'mt-2 flex justify-end' : 'mt-4 flex justify-end'}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={isCompactLandscape ? 'min-h-[30px] py-0.5 px-3 text-xs' : 'min-h-[44px]'}
+            onClick={onCancel}
+          >
+            <XCircle className="w-3.5 h-3.5" /> Cancel Deployment
           </Button>
         </div>
       </div>
@@ -92,6 +127,7 @@ export function PauseOverlay({
 }) {
   const hud = useGameSessionStore((s) => s.hud);
   const [qaOpen, setQaOpen] = useState(false);
+  const { isFullscreen, isSupported, toggleFullscreen } = useFullscreen();
   const activeObj = hud.objectives.find((o) => !o.completed && o.status === 'active') ?? hud.objectives[0];
 
   return (
@@ -139,6 +175,26 @@ export function PauseOverlay({
             {onRestartMission && (
               <Button className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs" variant="outline" onClick={onRestartMission}>
                 <RotateCcw className="w-4 h-4 shrink-0" /> Restart Mission
+              </Button>
+            )}
+            {isSupported && (
+              <Button
+                className="w-full min-h-[44px] [@media(max-height:460px)]:min-h-[38px] [@media(max-height:460px)]:px-2 [@media(max-height:460px)]:text-xs"
+                variant="outline"
+                data-testid="pause-toggle-fullscreen"
+                onClick={() => void toggleFullscreen()}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>Exit Fullscreen</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-4 h-4 shrink-0 text-cyan-400" />
+                    <span>Fullscreen</span>
+                  </>
+                )}
               </Button>
             )}
             <Button

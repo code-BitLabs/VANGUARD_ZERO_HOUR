@@ -46,6 +46,7 @@ import {
 } from '@/src/stores/progressionStore';
 import { SecondaryDrawerTab } from '@/src/ui/screens/campaign/CampaignSecondaryDrawers';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
+import { useViewportMode } from '@/src/ui/hooks/useViewportMode';
 import { Button } from '@/src/ui/primitives/Button';
 
 interface StepConfigureOperationProps {
@@ -96,6 +97,8 @@ export function StepConfigureOperation({
   const expediteOperatorRecovery = useProgressionStore((s) => s.expediteOperatorRecovery);
   const difficulty = useMissionSelectionStore((s) => s.difficulty);
   const replayMode = useMissionSelectionStore((s) => s.replayMode);
+  const viewport = useViewportMode();
+  const isCompactLandscape = viewport.isCompactLandscape;
 
   const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
 
@@ -195,14 +198,18 @@ export function StepConfigureOperation({
       <div
         key={slotKey}
         data-testid={`loadout-slot-${slotKey}`}
-        className="bg-[#141920] border border-zinc-800 rounded-sm p-3.5 flex flex-col justify-between gap-3"
+        className={
+          isCompactLandscape
+            ? 'bg-[#141920] border border-zinc-800 rounded-sm p-2.5 flex flex-col justify-between gap-1.5'
+            : 'bg-[#141920] border border-zinc-800 rounded-sm p-3.5 flex flex-col justify-between gap-3'
+        }
       >
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start justify-between gap-1.5">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+            <div className="font-mono text-[9px] uppercase tracking-wider text-zinc-400">
               {slotLabel}
             </div>
-            <div className="font-display text-base font-bold uppercase text-white mt-0.5">
+            <div className="font-display text-sm sm:text-base font-bold uppercase text-white mt-0.5">
               {weapon.name}
             </div>
           </div>
@@ -215,23 +222,33 @@ export function StepConfigureOperation({
               onUiClick();
               onOpenWorkbench(selectedWeaponId, slotLabel);
             }}
-            className="min-h-[44px] sm:min-h-[36px] shrink-0"
+            className={
+              isCompactLandscape
+                ? 'min-h-[30px] sm:min-h-[32px] px-2 py-0.5 text-[9.5px] sm:text-[10px] shrink-0'
+                : 'min-h-[44px] sm:min-h-[36px] shrink-0'
+            }
           >
-            <Wrench className="w-3.5 h-3.5 mr-1.5" />
+            <Wrench className="w-3 h-3 mr-1" />
             Edit Build
           </Button>
         </div>
 
-        <div className="bg-[#0B0E11] border border-zinc-800/80 rounded-xs px-3 py-2 flex items-center justify-between gap-3">
-          <div className="w-24 h-10 flex items-center justify-center shrink-0">
+        <div
+          className={
+            isCompactLandscape
+              ? 'bg-[#0B0E11] border border-zinc-800/80 rounded-xs px-2 py-1 flex items-center justify-between gap-2'
+              : 'bg-[#0B0E11] border border-zinc-800/80 rounded-xs px-3 py-2 flex items-center justify-between gap-3'
+          }
+        >
+          <div className={isCompactLandscape ? 'w-16 h-7 flex items-center justify-center shrink-0' : 'w-24 h-10 flex items-center justify-center shrink-0'}>
             <WeaponSilhouette weaponId={selectedWeaponId} className="w-full h-full" />
           </div>
-          <div className="flex-1 min-w-0 font-mono text-[10.5px] text-zinc-400 tabular-nums space-y-0.5 text-right">
+          <div className="flex-1 min-w-0 font-mono text-[9.5px] sm:text-[10px] text-zinc-400 tabular-nums space-y-0.5 text-right">
             <div>
               DMG <span className="text-zinc-200">{weapon.damage}</span> · MAG{' '}
               <span className="text-zinc-200">{weapon.magazineSize}</span>
             </div>
-            <div className="truncate text-zinc-400">
+            <div className="truncate text-zinc-400 text-[9px]">
               {attachmentNames.length > 0
                 ? `${attachmentNames.length} mod${attachmentNames.length > 1 ? 's' : ''}: ${attachmentNames.slice(0, 2).join(', ')}${attachmentNames.length > 2 ? '…' : ''}`
                 : 'Factory iron build'}
@@ -240,7 +257,7 @@ export function StepConfigureOperation({
         </div>
 
         {/* Weapon Choice Selector */}
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Select ${slotLabel} weapon`}>
+        <div className="flex flex-wrap gap-1" role="group" aria-label={`Select ${slotLabel} weapon`}>
           {candidates.map((candId) => {
             const cand = WEAPON_BY_ID[candId];
             const isSelected = candId === selectedWeaponId;
@@ -254,11 +271,19 @@ export function StepConfigureOperation({
                   onUiClick();
                   onSelectWeapon(candId);
                 }}
-                className={`min-h-[44px] sm:min-h-[34px] px-2.5 py-1.5 rounded-xs border font-mono text-[10.5px] uppercase transition-colors motion-reduce:transition-none cursor-pointer ${
-                  isSelected
-                    ? 'bg-amber-500/15 border-amber-400 text-amber-200 font-bold'
-                    : 'bg-[#0B0E11] border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
-                }`}
+                className={
+                  isCompactLandscape
+                    ? `min-h-[30px] px-2 py-0.5 rounded-xs border font-mono text-[9.5px] uppercase transition-colors motion-reduce:transition-none cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-500/15 border-amber-400 text-amber-200 font-bold'
+                          : 'bg-[#0B0E11] border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                      }`
+                    : `min-h-[44px] sm:min-h-[34px] px-2.5 py-1.5 rounded-xs border font-mono text-[10.5px] uppercase transition-colors motion-reduce:transition-none cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-500/15 border-amber-400 text-amber-200 font-bold'
+                          : 'bg-[#0B0E11] border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'
+                      }`
+                }
               >
                 {cand.name}
               </button>
@@ -270,15 +295,30 @@ export function StepConfigureOperation({
   };
 
   return (
-    <div data-testid="campaign-step-configure" className="space-y-5">
+    <div
+      data-testid="campaign-step-configure"
+      className={isCompactLandscape ? 'space-y-3' : 'space-y-5'}
+    >
       {/* Step Header + Quick Secondary Drawers Strip */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-3 border-b border-zinc-800 pb-3">
+      <div
+        className={
+          isCompactLandscape
+            ? 'flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 border-b border-zinc-800 pb-2'
+            : 'flex flex-col lg:flex-row lg:items-end justify-between gap-3 border-b border-zinc-800 pb-3'
+        }
+      >
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-400">
+          <div className="font-mono text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-amber-400">
             Step 3 of 4 · {mission.codeName} ·{' '}
             {deploymentMode === 'solo' ? 'Solo Operator' : 'Fireteam Squad'}
           </div>
-          <h2 className="font-display text-xl sm:text-2xl font-bold uppercase text-white mt-0.5">
+          <h2
+            className={
+              isCompactLandscape
+                ? 'font-display text-sm sm:text-base font-bold uppercase text-white mt-0.5'
+                : 'font-display text-xl sm:text-2xl [@media(max-height:480px)]:text-base font-bold uppercase text-white mt-0.5'
+            }
+          >
             {deploymentMode === 'solo'
               ? 'Configure Solo Loadout & Preparation'
               : 'Configure Fireteam & Commander Loadout'}
@@ -286,7 +326,7 @@ export function StepConfigureOperation({
         </div>
 
         {/* Progressive-Disclosure Secondary Reference Buttons */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
           <button
             type="button"
             data-testid="open-drawer-rules"
@@ -294,9 +334,13 @@ export function StepConfigureOperation({
               onUiClick();
               onOpenSecondaryDrawer('rules');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-200 inline-flex items-center gap-1.5 cursor-pointer"
+            className={
+              isCompactLandscape
+                ? 'min-h-[30px] sm:min-h-[32px] px-2 py-0.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[9.5px] uppercase text-zinc-200 inline-flex items-center gap-1 cursor-pointer'
+                : 'min-h-[44px] sm:min-h-[36px] [@media(max-height:480px)]:min-h-[32px] px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-200 inline-flex items-center gap-1.5 cursor-pointer'
+            }
           >
-            <Sliders className="w-3.5 h-3.5 text-amber-400" />
+            <Sliders className="w-3 h-3 text-amber-400" />
             Rules: {DIFFICULTY_LABEL[difficulty] ?? difficulty}
             {replayMode !== 'canonical' ? ` · ${replayMode === 'clean_replay' ? 'Clean' : 'Replay'}` : ''}
             {activeModifiersCount > 0 ? ` · +${activeModifiersCount}` : ''}
@@ -309,9 +353,13 @@ export function StepConfigureOperation({
               onUiClick();
               onOpenSecondaryDrawer('intel');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer"
+            className={
+              isCompactLandscape
+                ? 'min-h-[30px] sm:min-h-[32px] px-2 py-0.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[9.5px] uppercase text-zinc-300 inline-flex items-center gap-1 cursor-pointer'
+                : 'min-h-[44px] sm:min-h-[36px] [@media(max-height:480px)]:min-h-[32px] px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer'
+            }
           >
-            <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+            <BookOpen className="w-3 h-3 text-cyan-400" />
             Intel
           </button>
 
@@ -322,9 +370,13 @@ export function StepConfigureOperation({
               onUiClick();
               onOpenSecondaryDrawer('performance');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer"
+            className={
+              isCompactLandscape
+                ? 'min-h-[30px] sm:min-h-[32px] px-2 py-0.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[9.5px] uppercase text-zinc-300 inline-flex items-center gap-1 cursor-pointer'
+                : 'min-h-[44px] sm:min-h-[36px] [@media(max-height:480px)]:min-h-[32px] px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer'
+            }
           >
-            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+            <Trophy className="w-3 h-3 text-amber-400" />
             Performance
           </button>
 
@@ -335,9 +387,13 @@ export function StepConfigureOperation({
               onUiClick();
               onOpenSecondaryDrawer('controls');
             }}
-            className="min-h-[44px] sm:min-h-[36px] px-2.5 py-1.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer"
+            className={
+              isCompactLandscape
+                ? 'min-h-[30px] sm:min-h-[32px] px-2 py-0.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[9.5px] uppercase text-zinc-300 inline-flex items-center gap-1 cursor-pointer'
+                : 'min-h-[44px] sm:min-h-[36px] [@media(max-height:480px)]:min-h-[32px] px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-zinc-600 font-mono text-[10.5px] uppercase text-zinc-300 inline-flex items-center gap-1.5 cursor-pointer'
+            }
           >
-            <Gamepad2 className="w-3.5 h-3.5 text-zinc-400" />
+            <Gamepad2 className="w-3 h-3 text-zinc-400" />
             Controls
           </button>
         </div>
@@ -348,30 +404,44 @@ export function StepConfigureOperation({
         <section
           data-testid="fireteam-roster-section"
           aria-label="Fireteam Roster and Tactics"
-          className="bg-[#11161D] border border-zinc-800 rounded-sm p-4 space-y-4"
+          className={
+            isCompactLandscape
+              ? 'bg-[#11161D] border border-zinc-800 rounded-sm p-2.5 space-y-2'
+              : 'bg-[#11161D] border border-zinc-800 rounded-sm p-4 space-y-4'
+          }
         >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+          <div
+            className={
+              isCompactLandscape
+                ? 'flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 border-b border-zinc-800/80 pb-2'
+                : 'flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3'
+            }
+          >
             <div className="flex items-center gap-2">
               <Users className="w-4 h-4 text-cyan-400 shrink-0" />
               <div>
-                <h3 className="font-display text-base font-bold uppercase text-white leading-tight">
+                <h3 className="font-display text-sm sm:text-base font-bold uppercase text-white leading-tight">
                   Fireteam Roster & Tactics
                 </h3>
-                <p className="font-mono text-[10.5px] text-zinc-400">
+                <p className="font-mono text-[9.5px] sm:text-[10.5px] text-zinc-400">
                   Select up to 3 active specialists ({loadout.squadIds.length}/3 assigned) and starting formation.
                 </p>
               </div>
             </div>
 
             {/* Editable Squad Composition Presets */}
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1">
               {SQUAD_COMPOSITION_PRESETS.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
                   data-testid={`squad-preset-${preset.id}`}
                   onClick={() => handleApplySquadPreset(preset.id)}
-                  className="min-h-[44px] sm:min-h-[32px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-cyan-400/70 font-mono text-[10px] uppercase text-zinc-300 hover:text-white cursor-pointer"
+                  className={
+                    isCompactLandscape
+                      ? 'min-h-[28px] px-2 py-0.5 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-cyan-400/70 font-mono text-[9px] uppercase text-zinc-300 hover:text-white cursor-pointer'
+                      : 'min-h-[44px] sm:min-h-[32px] px-2.5 py-1 rounded-xs bg-[#0B0E11] border border-zinc-800 hover:border-cyan-400/70 font-mono text-[10px] uppercase text-zinc-300 hover:text-white cursor-pointer'
+                  }
                   title={preset.tagline}
                 >
                   {preset.name}
@@ -381,13 +451,19 @@ export function StepConfigureOperation({
           </div>
 
           {presetFeedback && (
-            <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xs px-3 py-2 font-mono text-[11px] text-cyan-200">
+            <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xs px-2.5 py-1.5 font-mono text-[10.5px] text-cyan-200">
               {presetFeedback}
             </div>
           )}
 
           {/* 5 Specialist Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+          <div
+            className={
+              isCompactLandscape
+                ? 'grid grid-cols-2 sm:grid-cols-5 gap-1.5'
+                : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5'
+            }
+          >
             {save.squadRoster.map((op) => {
               const flyweight = SQUAD_ARCHETYPE_FLYWEIGHTS[op.role];
               const isSelected = selectedSquadSet.has(op.id);
@@ -400,7 +476,9 @@ export function StepConfigureOperation({
                 <div
                   key={op.id}
                   data-testid={`roster-operator-${op.id}`}
-                  className={`rounded-sm border p-3 flex flex-col justify-between gap-2.5 transition-colors motion-reduce:transition-none ${
+                  className={`rounded-sm border ${
+                    isCompactLandscape ? 'p-2 gap-1.5' : 'p-3 gap-2.5'
+                  } flex flex-col justify-between transition-colors motion-reduce:transition-none ${
                     isSelected && isActive
                       ? 'bg-[#141E28] border-cyan-400'
                       : isActive
@@ -408,13 +486,13 @@ export function StepConfigureOperation({
                         : 'bg-[#0E1217] border-zinc-800/70 opacity-85'
                   }`}
                 >
-                  <div className="space-y-1.5">
+                  <div className={isCompactLandscape ? 'space-y-1' : 'space-y-1.5'}>
                     <div className="flex items-center justify-between gap-1">
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-cyan-300">
+                      <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-wider text-cyan-300">
                         {flyweight.shortBadge}
                       </span>
                       <span
-                        className={`font-mono text-[9.5px] uppercase px-1.5 py-0.5 rounded-xs ${
+                        className={`font-mono text-[8.5px] sm:text-[9px] uppercase px-1 py-0.5 rounded-xs ${
                           isActive
                             ? 'bg-emerald-500/15 text-emerald-300'
                             : isRecovering
@@ -422,27 +500,27 @@ export function StepConfigureOperation({
                               : 'bg-red-500/15 text-red-300'
                         }`}
                       >
-                        {isActive ? 'Active' : isRecovering ? 'HQ Recovery' : 'KIA'}
+                        {isActive ? 'Active' : isRecovering ? 'HQ Rec' : 'KIA'}
                       </span>
                     </div>
 
-                    <div className="font-display text-sm font-bold uppercase text-white leading-tight">
+                    <div className="font-display text-xs sm:text-sm font-bold uppercase text-white leading-tight">
                       {op.callsign}
                     </div>
-                    <div className="font-mono text-[10px] text-zinc-400">
+                    <div className="font-mono text-[9px] text-zinc-400">
                       {flyweight.roleLabel}
                     </div>
-                    <p className="text-[11px] text-zinc-400 leading-snug line-clamp-2">
+                    <p className="text-[10px] text-zinc-400 leading-tight line-clamp-1 hidden sm:block">
                       {flyweight.summary}
                     </p>
                   </div>
 
                   {/* Recovery Progress Bar OR Toggle Button */}
                   {isRecovering && recovery ? (
-                    <div className="space-y-1.5 pt-2 border-t border-zinc-800">
-                      <div className="flex items-center justify-between font-mono text-[10px] text-amber-300 tabular-nums">
-                        <span>{recovery.progressPct}% Ready</span>
-                        <span>{recovery.remainingOps} op / {Math.ceil(recovery.remainingSec / 60)}m</span>
+                    <div className="space-y-1 pt-1.5 border-t border-zinc-800">
+                      <div className="flex items-center justify-between font-mono text-[9px] text-amber-300 tabular-nums">
+                        <span>{recovery.progressPct}%</span>
+                        <span>{recovery.remainingOps} op</span>
                       </div>
                       <div className="h-1.5 w-full bg-zinc-900 rounded-xs overflow-hidden">
                         <div
@@ -458,14 +536,14 @@ export function StepConfigureOperation({
                           onUiClick();
                           expediteOperatorRecovery(op.id);
                         }}
-                        className="w-full min-h-[44px] sm:min-h-[32px] px-2 py-1 rounded-xs bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[10px] uppercase text-amber-200 cursor-pointer"
+                        className="w-full min-h-[30px] sm:min-h-[32px] px-1.5 py-0.5 rounded-xs bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed font-mono text-[9px] uppercase text-amber-200 cursor-pointer"
                       >
                         Expedite ({EXPEDITE_RECOVERY_REQ_COST} REQ)
                       </button>
                     </div>
                   ) : isKia ? (
-                    <div className="pt-2 border-t border-zinc-800 font-mono text-[10px] text-red-300">
-                      Lost in Ironman · Reserve replaces slot
+                    <div className="pt-1.5 border-t border-zinc-800 font-mono text-[9px] text-red-300">
+                      Lost · Reserve replaces
                     </div>
                   ) : (
                     <button
@@ -473,7 +551,7 @@ export function StepConfigureOperation({
                       data-testid={`toggle-operator-${op.id}`}
                       aria-pressed={isSelected}
                       onClick={() => handleToggleOperator(op.id)}
-                      className={`w-full min-h-[44px] sm:min-h-[34px] px-2.5 py-1.5 rounded-xs border font-mono text-[10.5px] uppercase font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors motion-reduce:transition-none ${
+                      className={`w-full min-h-[32px] sm:min-h-[34px] px-2 py-1 rounded-xs border font-mono text-[9.5px] sm:text-[10.5px] uppercase font-bold inline-flex items-center justify-center gap-1 cursor-pointer transition-colors motion-reduce:transition-none ${
                         isSelected
                           ? 'bg-cyan-400 text-zinc-950 border-cyan-300'
                           : 'bg-[#0B0E11] text-zinc-300 border-zinc-700 hover:border-zinc-500'
@@ -481,7 +559,7 @@ export function StepConfigureOperation({
                     >
                       {isSelected ? (
                         <>
-                          <Check className="w-3.5 h-3.5" /> Assigned
+                          <Check className="w-3 h-3" /> Assigned
                         </>
                       ) : (
                         'Assign'
@@ -497,32 +575,36 @@ export function StepConfigureOperation({
           {resolvedFireteam.reserveCount > 0 && (
             <div
               data-testid="fireteam-reserve-notice"
-              className="bg-amber-500/10 border border-amber-500/35 rounded-xs px-3 py-2 flex items-start gap-2 text-xs text-amber-200"
+              className="bg-amber-500/10 border border-amber-500/35 rounded-xs px-2.5 py-1.5 flex items-start gap-1.5 text-[11px] text-amber-200"
             >
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-mono font-bold uppercase text-[10.5px]">
+                <span className="font-mono font-bold uppercase text-[9.5px]">
                   Tactical Reserve Active:
                 </span>{' '}
                 {resolvedFireteam.reserveCount} reserve specialist
-                {resolvedFireteam.reserveCount > 1 ? 's' : ''} will backfill unavailable/unassigned slots so your 3-operator fireteam deploys at full strength.
+                {resolvedFireteam.reserveCount > 1 ? 's' : ''} will backfill unassigned slots.
               </div>
             </div>
           )}
 
           {/* Initial Starting Formation Selector */}
-          <div className="pt-2 border-t border-zinc-800/80 space-y-2">
+          <div className="pt-1.5 border-t border-zinc-800/80 space-y-1.5">
             <div className="flex items-center justify-between gap-2">
-              <div className="font-mono text-[10.5px] uppercase tracking-wider text-zinc-300">
+              <div className="font-mono text-[9.5px] sm:text-[10.5px] uppercase tracking-wider text-zinc-300">
                 Initial Starting Formation
               </div>
-              <div className="font-mono text-[10px] text-zinc-500">
-                Change anytime in-mission via [Q] or F-keys
+              <div className="font-mono text-[9px] text-zinc-500">
+                Change in-mission via [Q]
               </div>
             </div>
 
             <div
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"
+              className={
+                isCompactLandscape
+                  ? 'grid grid-cols-2 sm:grid-cols-4 gap-1.5'
+                  : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2'
+              }
               role="group"
               aria-label="Initial squad formation"
             >
@@ -538,17 +620,17 @@ export function StepConfigureOperation({
                       onUiClick();
                       updateMissionLoadout({ initialFormation: fmt.id as InitialFormation });
                     }}
-                    className={`min-h-[44px] text-left p-2.5 rounded-xs border transition-colors motion-reduce:transition-none cursor-pointer ${
+                    className={`min-h-[36px] sm:min-h-[40px] text-left p-1.5 sm:p-2 rounded-xs border transition-colors motion-reduce:transition-none cursor-pointer ${
                       isSelected
                         ? 'bg-[#141E28] border-cyan-400 text-white'
                         : 'bg-[#0B0E11] border-zinc-800 text-zinc-300 hover:border-zinc-600'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-1">
-                      <span className="font-display text-xs font-bold uppercase">{fmt.label}</span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
+                      <span className="font-display text-[11px] sm:text-xs font-bold uppercase">{fmt.label}</span>
+                      {isSelected && <Check className="w-3 h-3 text-cyan-400" />}
                     </div>
-                    <div className="text-[11px] text-zinc-400 mt-1 leading-snug">
+                    <div className="text-[10px] text-zinc-400 mt-0.5 leading-tight line-clamp-1">
                       {fmt.implication}
                     </div>
                   </button>
@@ -561,52 +643,56 @@ export function StepConfigureOperation({
         <section
           data-testid="solo-preparation-section"
           aria-label="Solo Tactical Preparation"
-          className="bg-[#11161D] border border-amber-500/35 rounded-sm p-4 space-y-3"
+          className={
+            isCompactLandscape
+              ? 'bg-[#11161D] border border-amber-500/35 rounded-sm p-2.5 space-y-2'
+              : 'bg-[#11161D] border border-amber-500/35 rounded-sm p-4 space-y-3'
+          }
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2">
             <div className="flex items-center gap-2">
               <User className="w-4 h-4 text-amber-400 shrink-0" />
               <div>
-                <h3 className="font-display text-base font-bold uppercase text-white leading-tight">
+                <h3 className="font-display text-sm sm:text-base font-bold uppercase text-white leading-tight">
                   Solo Tactical Preparation
                 </h3>
-                <p className="font-mono text-[10.5px] text-zinc-400">
+                <p className="font-mono text-[9.5px] sm:text-[10.5px] text-zinc-400">
                   Adaptive Solo Encounter Director active · Full enemy lethality preserved.
                 </p>
               </div>
             </div>
-            <span className="font-mono text-[10px] uppercase text-amber-300">
+            <span className="font-mono text-[9.5px] uppercase text-amber-300">
               Single-Player · Zero AI Companions
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-3 space-y-1">
-              <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase text-amber-400">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 sm:gap-3">
+            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-2 sm:p-3 space-y-0.5">
+              <div className="flex items-center gap-1.5 font-mono text-[9.5px] uppercase text-amber-400">
                 <HeartPulse className="w-3.5 h-3.5" />
                 Emergency Self-Recovery
               </div>
-              <div className="text-xs text-zinc-200 leading-snug">
+              <div className="text-[11px] text-zinc-200 leading-snug">
                 {soloPrep.traumaCharges} Trauma Self-Revive charge per operation ([F] while downed, 45s cooldown).
               </div>
             </div>
 
-            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-3 space-y-1">
-              <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase text-amber-400">
+            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-2 sm:p-3 space-y-0.5">
+              <div className="flex items-center gap-1.5 font-mono text-[9.5px] uppercase text-amber-400">
                 <Package className="w-3.5 h-3.5" />
                 Finite Cover Caches
               </div>
-              <div className="text-xs text-zinc-200 leading-snug">
+              <div className="text-[11px] text-zinc-200 leading-snug">
                 {soloPrep.soloBonusCaches} finite Solo resupply caches staged along flanking lanes for {mission.title}.
               </div>
             </div>
 
-            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-3 space-y-1">
-              <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase text-amber-400">
+            <div className="bg-[#0B0E11] border border-zinc-800 rounded-xs p-2 sm:p-3 space-y-0.5">
+              <div className="flex items-center gap-1.5 font-mono text-[9.5px] uppercase text-amber-400">
                 <Shield className="w-3.5 h-3.5" />
                 Encounter Pacing
               </div>
-              <div className="text-xs text-zinc-200 leading-snug">
+              <div className="text-[11px] text-zinc-200 leading-snug">
                 {soloPrep.pacingSummary}
               </div>
             </div>
@@ -618,16 +704,16 @@ export function StepConfigureOperation({
       <section
         data-testid="commander-loadout-section"
         aria-label="Commander Loadout"
-        className="space-y-3"
+        className={isCompactLandscape ? 'space-y-2' : 'space-y-3'}
       >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
           <div className="flex items-center gap-2">
             <Crosshair className="w-4 h-4 text-amber-400 shrink-0" />
             <div>
-              <h3 className="font-display text-base font-bold uppercase text-white leading-tight">
+              <h3 className="font-display text-sm sm:text-base font-bold uppercase text-white leading-tight">
                 Commander Loadout
               </h3>
-              <p className="font-mono text-[10.5px] text-zinc-400">
+              <p className="font-mono text-[9.5px] sm:text-[10.5px] text-zinc-400">
                 {deploymentMode === 'solo'
                   ? `Recommended Solo kit: ${soloPrep.recommendedPrimaryRole} — ${soloPrep.tacticalBrief}`
                   : missionRec?.summary ?? 'Configure Primary, Secondary, Heavy, and Tactical Equipment.'}
@@ -636,14 +722,18 @@ export function StepConfigureOperation({
           </div>
 
           {/* Non-blocking Role Kit Presets */}
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1">
             {DEFAULT_ROLE_LOADOUT_PRESETS.map((preset) => (
               <button
                 key={preset.id}
                 type="button"
                 data-testid={`loadout-preset-${preset.id}`}
                 onClick={() => handleApplyRoleLoadoutPreset(preset.id)}
-                className="min-h-[44px] sm:min-h-[32px] px-2.5 py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-amber-400/70 font-mono text-[10px] uppercase text-zinc-300 hover:text-white cursor-pointer"
+                className={
+                  isCompactLandscape
+                    ? 'min-h-[28px] px-2 py-0.5 rounded-xs bg-[#141920] border border-zinc-800 hover:border-amber-400/70 font-mono text-[9px] uppercase text-zinc-300 hover:text-white cursor-pointer'
+                    : 'min-h-[44px] sm:min-h-[32px] px-2.5 py-1 rounded-xs bg-[#141920] border border-zinc-800 hover:border-amber-400/70 font-mono text-[10px] uppercase text-zinc-300 hover:text-white cursor-pointer'
+                }
               >
                 {preset.name}
               </button>
@@ -652,7 +742,13 @@ export function StepConfigureOperation({
         </div>
 
         {/* 3 Weapon Slots */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div
+          className={
+            isCompactLandscape
+              ? 'grid grid-cols-1 sm:grid-cols-3 gap-2'
+              : 'grid grid-cols-1 lg:grid-cols-3 gap-3'
+          }
+        >
           {renderWeaponSlotCard(
             'primary',
             'Primary Weapon',
@@ -677,18 +773,28 @@ export function StepConfigureOperation({
         </div>
 
         {/* 4th Slot: Tactical Equipment */}
-        <div className="bg-[#141920] border border-zinc-800 rounded-sm p-3.5 space-y-2.5">
+        <div
+          className={
+            isCompactLandscape
+              ? 'bg-[#141920] border border-zinc-800 rounded-sm p-2.5 space-y-1.5'
+              : 'bg-[#141920] border border-zinc-800 rounded-sm p-3.5 space-y-2.5'
+          }
+        >
           <div className="flex items-center justify-between gap-2">
-            <div className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+            <div className="font-mono text-[9.5px] uppercase tracking-wider text-zinc-400">
               Tactical Equipment
             </div>
-            <div className="font-mono text-[10.5px] text-amber-300">
+            <div className="font-mono text-[10px] text-amber-300">
               {TACTICAL_EQUIPMENT_CATALOG[loadout.tacticalEquipment]?.name}
             </div>
           </div>
 
           <div
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"
+            className={
+              isCompactLandscape
+                ? 'grid grid-cols-2 sm:grid-cols-4 gap-1.5'
+                : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2'
+            }
             role="group"
             aria-label="Select tactical equipment"
           >
@@ -705,17 +811,17 @@ export function StepConfigureOperation({
                     onUiClick();
                     updateMissionLoadout({ tacticalEquipment: eqId });
                   }}
-                  className={`min-h-[44px] text-left p-2.5 rounded-xs border transition-colors motion-reduce:transition-none cursor-pointer ${
+                  className={`min-h-[36px] sm:min-h-[40px] text-left p-1.5 sm:p-2 rounded-xs border transition-colors motion-reduce:transition-none cursor-pointer ${
                     isSelected
                       ? 'bg-amber-500/15 border-amber-400 text-white'
                       : 'bg-[#0B0E11] border-zinc-800 text-zinc-300 hover:border-zinc-600'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-1">
-                    <span className="font-display text-xs font-bold uppercase">{eq.shortName}</span>
-                    {isSelected && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                    <span className="font-display text-[11px] sm:text-xs font-bold uppercase">{eq.shortName}</span>
+                    {isSelected && <Check className="w-3 h-3 text-amber-400" />}
                   </div>
-                  <p className="text-[11px] text-zinc-400 mt-1 leading-snug">{eq.description}</p>
+                  <p className="text-[10px] text-zinc-400 mt-0.5 leading-tight line-clamp-1">{eq.description}</p>
                 </button>
               );
             })}

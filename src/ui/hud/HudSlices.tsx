@@ -10,6 +10,8 @@ import {
   Gamepad2,
   Heart,
   Layers,
+  Maximize2,
+  Minimize2,
   Pause,
   Radio,
   RefreshCw,
@@ -27,6 +29,7 @@ import { useGameSessionStore } from '@/src/stores/gameSessionStore';
 import { useMissionSelectionStore } from '@/src/stores/missionSelectionStore';
 import { useSettingsStore } from '@/src/stores/settingsStore';
 import { uiStore, useUIStore } from '@/src/stores/uiStore';
+import { useFullscreen } from '@/src/utils/fullscreen';
 import { WeaponSilhouette } from '@/src/ui/components/WeaponSilhouette';
 import { getMissionVisualProfile } from '@/src/world/VisualBible';
 type MissionVisualProfile = ReturnType<typeof getMissionVisualProfile>;
@@ -1294,6 +1297,7 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
   const setCombatDebugOpen = useUIStore((s) => s.setCombatDebugOpen);
   const setCombatDebugCollapsed = useUIStore((s) => s.setCombatDebugCollapsed);
   const toggleTacticalOverview = useUIStore((s) => s.toggleTacticalOverview);
+  const { isFullscreen, isSupported, toggleFullscreen } = useFullscreen();
 
   return (
     <div
@@ -1376,6 +1380,32 @@ export const HudTopRightCluster = React.memo(function HudTopRightCluster({
           <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
           {!compactHud && <span className="hidden xl:inline">TOUCH</span>}
         </button>
+
+        {isSupported && (
+          <button
+            type="button"
+            data-testid="hud-fullscreen-btn"
+            aria-label={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void toggleFullscreen();
+            }}
+            className={`pointer-events-auto ${
+              compactHud ? 'min-w-[44px] min-h-[44px] px-1.5' : 'min-w-[40px] min-h-[40px] px-2'
+            } bg-[#0B0E11]/85 hover:bg-[#141920] border ${
+              isFullscreen ? 'border-amber-500/60 text-amber-300' : 'border-zinc-700 text-zinc-300'
+            } rounded-sm flex items-center justify-center transition-colors cursor-pointer`}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="w-3.5 h-3.5" />
+            ) : (
+              <Maximize2 className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
 
         {onPause && (
           <button
